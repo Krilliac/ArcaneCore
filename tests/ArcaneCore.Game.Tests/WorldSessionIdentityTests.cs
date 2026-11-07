@@ -73,6 +73,67 @@ public sealed class WorldSessionIdentityTests
         Assert.False(world.IsOnline(player.Guid));
     }
 
+    [Fact]
+    public void ASaveIsPendingWork_UntilTheQueueSettlesIt()
+    {
+        var saves = new DeferringSaveQueue();
+        using var world = new WorldRuntime(new WorldRuntimeOptions(), saves, NullLogger<WorldRuntime>.Instance);
+        var player = TestWorld.CreatePlayer(1, 0, 0, new FakeSession());
+        world.AddPlayer(player);
+
+        world.SavePlayer(player);
+
+        Assert.Equal(1, world.PendingWork.Count);
+        Assert.StartsWith("save of character ", Assert.Single(world.PendingWork.Names()), StringComparison.Ordinal);
+        saves.SettleAll();
+        Assert.Equal(0, world.PendingWork.Count);
+    }
+
+    [Fact]
+    public void ASaveTheQueueRefusesToTake_DoesNotLeavePendingWorkBehind()
+    {
+        var saves = new DeferringSaveQueue { ThrowOnEnqueue = true };
+        using var world = new WorldRuntime(new WorldRuntimeOptions(), saves, NullLogger<WorldRuntime>.Instance);
+        var player = TestWorld.CreatePlayer(1, 0, 0, new FakeSession());
+        world.AddPlayer(player);
+
+        Assert.Throws<InvalidOperationException>(() => world.SavePlayer(player));
+
+        Assert.Equal(0, world.PendingWork.Count);
+    }
+
+    [Fact]
+    public void AQueueWithoutACompletionSignal_SettlesAtOnce_SoNothingStaysPending()
+    {
+        var saves = new RecordingSaveQueue();
+        using WorldRuntime world = TestWorld.CreateRuntime(saves);
+        var player = TestWorld.CreatePlayer(1, 0, 0, new FakeSession());
+        world.AddPlayer(player);
+
+        world.SavePlayer(player);
+
+        Assert.Single(saves.Saved);
+        Assert.Equal(0, world.PendingWork.Count);
+    }
+
+    private sealed class DeferringSaveQueue : ICharacterSaveQueue
+    {
+        private readonly List<Action> _settle = [];
+        public bool ThrowOnEnqueue { get; init; }
+        public void Enqueue(CharacterState state) => throw new InvalidOperationException("plain Enqueue is not used by the world any more");
+        public void Enqueue(CharacterState state, Action onSettled)
+        {
+            if (ThrowOnEnqueue) throw new InvalidOperationException("queue closed");
+            _settle.Add(onSettled);
+        }
+
+        public void SettleAll()
+        {
+            foreach (Action settle in _settle) settle();
+            _settle.Clear();
+        }
+    }
+
     private sealed class ObservingSaveQueue : ICharacterSaveQueue
     {
         public Action? Observe { get; set; }

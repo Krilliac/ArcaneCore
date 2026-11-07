@@ -832,7 +832,7 @@ public sealed class WorldHost(
         return false;
     }
 
-    /// <summary>Starts recording this worker's heartbeat on its ownership row every <see cref="CharacterFencingOptions.HeartbeatSeconds"/> (Worker scope only). A heartbeat the row refuses means the shard was reclaimed or reaped: the save queue goes terminal and the host stops.</summary>
+    /// <summary>Starts recording this worker's heartbeat in its <c>character_ownership_heartbeat</c> row every <see cref="CharacterFencingOptions.HeartbeatSeconds"/> (Worker scope only). A heartbeat the row refuses means the shard was reclaimed or reaped: the save queue goes terminal and the host stops.</summary>
     private void StartHeartbeat(CharacterOwnershipToken token)
     {
         // Not synchronised: start, promote and stop are sequenced by the host lifecycle (StopHeartbeatAsync does its exchange only after both have returned).

@@ -21,7 +21,7 @@ which ends in the same buffs and states.
 ## Gaps
 
 - Capture-point template values come from the loaded `gameobject_template` (type 29); without them the fallback above is used.
-- Only the Silithyst maximum is persisted (vmangos keeps it as a saved variable); the gathered counters reset to 0 after every restart, as in vmangos.
+- `SaveAsync` writes the Silithyst maximum and also the two gathered counters, but only the maximum is read back on start (vmangos keeps it as a saved variable); the gathered counters reset to 0 after every restart, as in vmangos, so the stored counters are never read.
 - Eastwall squad formation, the Spirit of Victory's waypoint path and the curing shrine's spawned-by-default flag are not modelled.
 - MaNGOS Zero awards 189 honor per tower capture; vmangos leaves the credit to the buffer's 30882 pulse, which is followed here.
 - Silithus's `SetSilithusPVPEventCompleted` game-event hook is commented out in vmangos and not implemented.

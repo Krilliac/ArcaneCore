@@ -50,7 +50,7 @@ public sealed class CharacterFencingOptions
 
     public const int DefaultHeartbeatSeconds = 10;
 
-    /// <summary>With Scope=Worker, how often the worker records that it is alive on its ownership row, in seconds (1 to 60). A reap only ever fires on a heartbeat older than ReapAfterSeconds.</summary>
+    /// <summary>With Scope=Worker, how often the worker records that it is alive on its heartbeat row, in seconds (1 to 60). A reap only ever fires on a heartbeat older than ReapAfterSeconds.</summary>
     public int HeartbeatSeconds { get; set; } = DefaultHeartbeatSeconds;
 
     public const int DefaultReapAfterSeconds = 150;

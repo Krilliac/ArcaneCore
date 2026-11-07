@@ -73,7 +73,7 @@ public sealed partial class WorldRuntime
 
             try
             {
-                _saveQueue.Enqueue(player.CreateSnapshot(now));
+                EnqueueSave(player.CreateSnapshot(now));
                 queued++;
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)

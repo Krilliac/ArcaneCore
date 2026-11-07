@@ -167,7 +167,7 @@ public sealed partial class WorldRuntime : IDisposable
     {
         if (!player.IsQuestSettlementPending && _online.TryGetValue(player.Guid, out Player? current) && ReferenceEquals(current, player))
         {
-            _saveQueue.Enqueue(player.CreateSnapshot(NowMs));
+            EnqueueSave(player.CreateSnapshot(NowMs));
         }
     }
 
@@ -548,7 +548,7 @@ public sealed partial class WorldRuntime : IDisposable
         player.Map?.RemovePlayer(player);
         if (!player.IsQuestSettlementPending)
         {
-            _saveQueue.Enqueue(player.CreateSnapshot(NowMs));
+            EnqueueSave(player.CreateSnapshot(NowMs));
         }
         // Publish offline only after the final snapshot is queued: login's save barrier
         // must never overtake this old session's last write.
@@ -937,7 +937,7 @@ public sealed partial class WorldRuntime : IDisposable
             {
                 try
                 {
-                    _saveQueue.Enqueue(player.CreateSnapshot(now));
+                    EnqueueSave(player.CreateSnapshot(now));
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {

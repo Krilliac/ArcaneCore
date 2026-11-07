@@ -105,6 +105,39 @@ public sealed class WorldWriterGuardLossTests
     }
 
     [Fact]
+    public void ALostLock_PausesBothLanes_ARetakeResumesThem_AndAConflictAfterALossSuppressesForGood()
+    {
+        using var ledger = new LedgerCleanup();
+        (WorldWriterGuard guard, _, _, _, ShutdownDrain drain) = Guard();
+        using (guard)
+        {
+            Assert.Null(drain.Saves.Refuse());
+
+            guard.OnLockLost("PostgreSQL advisory lock 1: the lock connection failed");
+            Assert.True(drain.Saves.IsPaused);
+            Assert.True(drain.Features.IsPaused);
+            Assert.Contains("paused", drain.Saves.Refuse()!.Message, StringComparison.Ordinal); // a paused lane refuses every attempt, stopping or not
+            Assert.NotNull(drain.Features.Refuse());
+            Assert.Null(drain.Saves.SuppressedReason); // a pause is not a suppression
+
+            guard.OnLockRecovered("PostgreSQL advisory lock 1");
+            Assert.False(drain.Saves.IsPaused);
+            Assert.False(drain.Features.IsPaused);
+            Assert.Null(drain.Saves.Refuse());
+            Assert.Null(drain.Features.Refuse());
+
+            guard.OnLockLost("PostgreSQL advisory lock 1: the lock connection failed");
+            guard.OnLockConflict("PostgreSQL advisory lock 1");
+            Assert.NotNull(drain.Saves.SuppressedReason);
+            Assert.NotNull(drain.Features.SuppressedReason);
+            Assert.False(drain.Saves.IsPaused); // the suppression outranks the pause
+            Assert.Contains("suppressed", drain.Saves.Refuse()!.Message, StringComparison.Ordinal);
+            drain.Saves.Resume();
+            Assert.NotNull(drain.Saves.Refuse()); // nothing undoes a suppression
+        }
+    }
+
+    [Fact]
     public void ABlockedRetake_IsLoggedAsAScrubbedWarning()
     {
         (WorldWriterGuard guard, CapturingLoggerProvider log, _, _, _) = Guard();

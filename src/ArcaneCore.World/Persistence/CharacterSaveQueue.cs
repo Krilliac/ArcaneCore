@@ -170,29 +170,38 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
         }
     }
 
-    public void Enqueue(CharacterState state)
+    public void Enqueue(CharacterState state) => EnqueueCore(state, null);
+
+    /// <inheritdoc cref="ICharacterSaveQueue.Enqueue(CharacterState, Action)"/>
+    public void Enqueue(CharacterState state, Action onSettled)
+    {
+        ArgumentNullException.ThrowIfNull(onSettled);
+        EnqueueCore(state, onSettled);
+    }
+
+    private void EnqueueCore(CharacterState state, Action? onSettled)
     {
         ArgumentNullException.ThrowIfNull(state);
         CharacterState copy = Copy(state);
         bool quarantined = false;
         bool closed = false;
         bool announceQuarantine = false;
+        bool skipped = false;
         lock (_gate)
         {
             ThrowIfTerminalLocked();
             if (_allRetired)
             {
-                return; // the whole world moved: skipped, as a retired character's snapshot is
+                skipped = true; // the whole world moved: skipped, as a retired character's snapshot is
             }
-
-            if (_quarantined.Contains(state.Id))
+            else if (_quarantined.Contains(state.Id))
             {
                 quarantined = true;
                 announceQuarantine = _quarantineAnnounced.Add(state.Id); // the periodic save re-enqueues every few seconds: tell the staff once per quarantine
             }
             else if (_held.Contains(state.Id))
             {
-                return;
+                skipped = true;
             }
             else if (_stopped)
             {
@@ -203,12 +212,20 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
             {
                 Slot slot = GetSlot(state.Id);
                 PutState(slot, copy);
+                if (onSettled is not null) (slot.Settled ??= []).Add(onSettled);
                 AddHint(slot, priority: false);
             }
         }
 
+        if (skipped)
+        {
+            onSettled?.Invoke(); // nothing will be written; the callback only releases a handle and never throws
+            return;
+        }
+
         if (quarantined || closed)
         {
+            onSettled?.Invoke();
             if (quarantined)
             {
                 if (announceQuarantine)
@@ -588,7 +605,13 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
             lock (_gate)
             {
                 long now = Stopwatch.GetTimestamp();
-                if (!_stopped && _busyUntil > now)
+                if (!_stopped && _drain.IsPaused)
+                {
+                    // The characters database writer lock is lost and nobody knows yet whether another world took it (WorldWriterGuard): nothing is picked, snapshots keep waiting (the newest wins)
+                    // and are written once the lane resumes. Shutdown ignores the pause: its writes are refused by the lane, retained, and named by the stop's final report (TakeRetained skips them once stopped, so the consumer ends).
+                    pauseTicks = Stopwatch.Frequency;
+                }
+                else if (!_stopped && _busyUntil > now)
                 {
                     // A write just failed because another connection holds the database: starting another write now would wait out
                     // the whole write bound for nothing. Shutdown ignores the pause (it retries inline and must not sit idle). A
@@ -741,6 +764,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
     {
         CharacterState? state;
         Waiter[] waiters;
+        Action[] settled;
         lock (_gate)
         {
             state = slot.State;
@@ -748,6 +772,8 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
             slot.InFlightTicks = state is null ? Stopwatch.GetTimestamp() : slot.FirstTicks;
             waiters = [.. slot.Waiters];
             slot.Waiters.Clear();
+            settled = slot.Settled is { Count: > 0 } ? [.. slot.Settled] : [];
+            slot.Settled?.Clear();
             slot.InFlight = true;
             Refresh(slot);
         }
@@ -857,6 +883,8 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
             }
         }
 
+        RunSettled(settled); // the write attempt is over, whatever its outcome: a retained snapshot is retried later without holding anyone
+
         if (deferred && error is null)
         {
             return;
@@ -881,6 +909,22 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
             else
             {
                 waiter.Done.TrySetResult();
+            }
+        }
+    }
+
+    /// <summary>Run the settle callbacks of <see cref="ICharacterSaveQueue.Enqueue(CharacterState, Action)"/>; one that throws must not stop the consumer or the rest.</summary>
+    private void RunSettled(IReadOnlyList<Action> callbacks)
+    {
+        foreach (Action callback in callbacks)
+        {
+            try
+            {
+                callback();
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                _logger.LogFault("writequeue.character-settled", ex, "a character save settle callback failed");
             }
         }
     }
@@ -946,7 +990,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
             {
                 lock (_gate)
                 {
-                    _failed[state.Id] = new FailedSave(state, refused);
+                    _failed[state.Id] = new FailedSave(state, refused, Deferred: _drain.IsPaused); // a pause ends: the consumer retries a paused refusal once the lane resumes
                     DropRetainedIfRetiredLocked(state.Id);
                 }
 
@@ -1204,6 +1248,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
     private void EnterTerminalFailure(CharacterState? current, Exception failure)
     {
         List<Waiter> waiters = [];
+        List<Action> settled = [];
         bool publish;
         lock (_gate)
         {
@@ -1222,6 +1267,12 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
                     slot.State = null;
                 }
 
+                if (slot.Settled is { Count: > 0 })
+                {
+                    settled.AddRange(slot.Settled);
+                    slot.Settled.Clear();
+                }
+
                 waiters.AddRange(slot.Waiters);
                 slot.Waiters.Clear();
                 slot.NormalHint = false;
@@ -1232,6 +1283,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
             _normalHints.Clear();
         }
 
+        RunSettled(settled);
         foreach (Waiter waiter in waiters)
         {
             waiter.Registration.Dispose();
@@ -1267,6 +1319,12 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
         foreach ((int id, FailedSave failed) in _failed)
         {
             if (!failed.Deferred || failed.Terminal || IsClosedLocked(id))
+            {
+                continue;
+            }
+
+            // Once stopped, a retry the lane refuses again (a pause-refused snapshot) or that can never change (terminal failure) would be picked forever: the stop's final pass names it instead.
+            if (_stopped && (_terminalFailure is not null || failed.Failure is StopDrainExhaustedException))
             {
                 continue;
             }
@@ -1625,5 +1683,8 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
         public bool Active;
         public bool NormalHint;
         public bool PriorityHint;
+
+        /// <summary>Callbacks of the snapshots merged into <see cref="State"/> (<see cref="ICharacterSaveQueue.Enqueue(CharacterState, Action)"/>); run when its write attempt ends.</summary>
+        public List<Action>? Settled;
     }
 }
