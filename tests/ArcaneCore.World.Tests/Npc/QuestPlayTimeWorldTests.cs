@@ -18,16 +18,24 @@ namespace ArcaneCore.World.Tests.Npc;
 /// </summary>
 public sealed class QuestPlayTimeWorldTests
 {
+    /// <summary>
+    /// The host also gets (empty) item content: a reward turn-in is refused outright while the player's inventory is not loaded
+    /// (<c>QuestNpcServices.TryPrepareReward</c> needs <c>Inventory.IsLoaded</c> and its guid allocator), which would refuse before
+    /// any play-time rule is reached. The quest itself rewards no item, so no template is needed.
+    /// </summary>
     private static WorldTestHost Start(QuestInteractionFixture fixture)
     {
         QuestInteractionTestServices.Current.Value = fixture;
-        try
+        using (new Items.ItemTestContent().Use())
         {
-            return WorldTestHost.Start();
-        }
-        finally
-        {
-            QuestInteractionTestServices.Current.Value = null;
+            try
+            {
+                return WorldTestHost.Start();
+            }
+            finally
+            {
+                QuestInteractionTestServices.Current.Value = null;
+            }
         }
     }
 
