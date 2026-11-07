@@ -153,11 +153,13 @@ public sealed partial class NaxxramasInstance
                 if (GetSingleCreatureFromStorage(15928) is { IsAlive: true } thaddius)
                 {
                     ShockThaddius(thaddius);
-                    // His flags come off in his own Aggro (boss_thaddius.cpp:117-123), when he actually engages.
+                    // His flags come off in his own Aggro (boss_thaddius.cpp:117-123), when he actually engages: at this call he still
+                    // carries them, so the pull needs SetInCombatWithZone(false), same as boss_thaddius.cpp's Lightning Visual spell
+                    // effect this call is idempotent with.
                     // ArcaneCore only: cmangos soft-locks here when nobody is alive (Creature.cpp:2382-2400 yields no target and he never
                     // fights). With no living player the encounter fails instead (the Fail handler keeps him flagged); precedent
                     // FrostwyrmBossAIs.StartPhaseTwo (Kel'Thuzad), which fails when SetInCombatWithZone finds nobody.
-                    if (thaddius.System?.SetInCombatWithZone(thaddius) == 0) SetData(Thaddius, EncounterState.Fail);
+                    if (thaddius.System?.SetInCombatWithZone(thaddius, checkAttackability: false) == 0) SetData(Thaddius, EncounterState.Fail);
                 }
             }
         }
