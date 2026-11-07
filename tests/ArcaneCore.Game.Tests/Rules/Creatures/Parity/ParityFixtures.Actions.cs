@@ -61,6 +61,28 @@ internal static partial class ParityFixtures
             ],
         };
 
+        // ACTION_T_SET_SPELL_SET (60) with a real list: a hit on the creature switches it to the list, which casts its spell on the victim every second
+        // (the cast is in the effect log of both sides); the evade hook sets list 0, after which no cast follows.
+        yield return new ParityScenario
+        {
+            Name = "set-spell-list-switches-the-casting-list",
+            Rows =
+            [
+                Row(128, 4, a1: Act(60, (int)ParityScenario.ListId)),
+                Row(129, 7, a1: Act(60, 0)),
+            ],
+            SpellLists = [new CreatureSpellList(ParityScenario.ListId, "parity", 0, 0, [new CreatureSpellListEntry(1, ParityScenario.ListSpell, CreatureSpellListFlags.None, CreatureSpellListTargets.Current, 0, 100, 0, 200, 200, 1000, 1000)])],
+            Steps =
+            [
+                Pull(),
+                Wait(500),
+                Step("again", c => c.Stimulus("aggro", ai => ai.OnAggro(c.Player))),
+                Wait(2500),
+                Step("evade", c => c.Stimulus("evade", ai => ai.OnEvade())),
+                Wait(2500),
+            ],
+        };
+
         yield return new ParityScenario
         {
             Name = "flee-evade-die-despawn",

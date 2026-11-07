@@ -401,7 +401,8 @@ internal sealed class PlayerbotSummons
         bool offered = target?.PendingSummon is { } pending && pending.Summoner == player.Guid && pending.ExpiresAtMs >= now;
         if (offered)
         {
-            if (job.Kind == SummonKind.Ritual && job.Cast is not null) StopRitual(session, player, job.Cast.SpellId);
+            // A refused stop leaves the channel running: the job stays (the bot holds still) and the next think tries again. This branch returns before the time-bound check below, so what ends a job that never gets through is the offer expiring or DropStale (then Abandon), not the job's own limit.
+            if (job.Kind == SummonKind.Ritual && job.Cast is not null && !StopRitual(session, player, job.Cast.SpellId)) return true;
             return End(player);
         }
 
@@ -584,23 +585,27 @@ internal sealed class PlayerbotSummons
     }
 
     /// <summary>
-    /// Ends the summoner's own ritual cast. The ritual is a channel. This repo's <see cref="SpellSystem.CancelCast"/> leaves a channel alone (pinned by
-    /// SpellSeamTests), and CMSG_CANCEL_CHANNELLING is the packet a client sends to stop one (vmangos HandleCancelChanneling, SpellHandler.cpp:446-459), so a
-    /// channel still running is stopped with that, and only a cast still being prepared gets CMSG_CANCEL_CAST. Left running it would keep the warlock "casting" with its portal gone and bar it from any further
-    /// summon until the channel runs out. The job ends right after this and nothing retries, so the packet is sent unbudgeted (like the stop of a walk):
+    /// Ends the summoner's own ritual cast. The ritual is a channel. CMSG_CANCEL_CHANNELLING is the packet a client sends to stop one (vmangos
+    /// HandleCancelChanneling, SpellHandler.cpp:446-459), so a channel still running is stopped with that, and only a cast still being prepared gets
+    /// CMSG_CANCEL_CAST (which would stop a channel as well, SpellCaster.cpp:2078-2080). Left running it would keep the warlock "casting" with its portal
+    /// gone and bar it from any further summon until the channel runs out. Fail and Abandon end the job right after this and ignore a false result (the channel then runs out by itself); only the offered branch of DriveSummoner keeps the job and retries. The packet is sent unbudgeted (like the stop of a walk):
     /// a bot visited with no action left in the tick's shared budget must not be left channelling.
+    /// <para>
+    /// False only when the packet was refused (the session is not in the world, a quest settlement is pending, it is being kicked): the cast is
+    /// still running then and a caller that can try again on a later think does. True when the packet went out, or when there was no such cast to stop.
+    /// </para>
     /// </summary>
-    internal static void StopRitual(WorldSession session, Player summoner, uint spellId)
+    internal static bool StopRitual(WorldSession session, Player summoner, uint spellId)
     {
         if (session.Services.GetService<SpellFeature>()?.System is not { } spells
-            || spells.GetState(summoner.Guid)?.CurrentCast is not { } cast || cast.Spell.Id != spellId) return;
+            || spells.GetState(summoner.Guid)?.CurrentCast is not { } cast || cast.Spell.Id != spellId) return true;
         WorldOpcode opcode;
         if (cast.State == SpellCastState.Preparing) opcode = WorldOpcode.CmsgCancelCast;
         else if (cast.State == SpellCastState.Casting) opcode = WorldOpcode.CmsgCancelChannelling;
-        else return;
+        else return true;
         ManagedActionBudget? budget = session.ManagedBudget;
         session.ManagedBudget = null;
-        try { session.TryManagedAction(opcode, BitConverter.GetBytes(spellId)); }
+        try { return session.TryManagedAction(opcode, BitConverter.GetBytes(spellId)); }
         finally { session.ManagedBudget = budget; }
     }
 

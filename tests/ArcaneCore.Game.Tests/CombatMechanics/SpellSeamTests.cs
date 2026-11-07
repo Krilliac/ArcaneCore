@@ -474,7 +474,7 @@ public sealed class SpellSeamTests
     }
 
     [Fact]
-    public void CancelCast_CancelsQueuedMeleeSpell_AndNotAChannel()
+    public void CancelCast_CancelsQueuedMeleeSpell_AndAChannel()
     {
         using var kit = Kit();
         (Player caster, _, Player target) = Duel(kit);
@@ -487,7 +487,8 @@ public sealed class SpellSeamTests
         kit.System.CancelCast(caster, 0);
 
         Assert.Null(state.MeleeCast);
-        Assert.Equal(SpellCastState.Casting, state.CurrentCast!.State);   // CMSG_CANCEL_CAST does not stop a channel
+        // vmangos InterruptNonMeleeSpells interrupts the channeled slot even when delayed (SpellCaster.cpp:2078-2080), so CMSG_CANCEL_CAST stops a channel.
+        Assert.Null(state.CurrentCast);
     }
 
     [Fact]

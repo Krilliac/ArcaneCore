@@ -319,15 +319,16 @@ public sealed partial class SpellSystem
 
     /// <summary>
     /// CMSG_CANCEL_CAST (vmangos HandleCancelCastOpcode → InterruptNonMeleeSpells(false, spellId)):
-    /// interrupt the cast in progress when it is <paramref name="spellId"/> (0 = any). Channels are
-    /// not interrupted by this packet (withDelayed = false keeps vmangos' channel slot). A queued next-swing
+    /// interrupt the cast in progress when it is <paramref name="spellId"/> (0 = any). A channel is interrupted
+    /// too: vmangos' InterruptNonMeleeSpells interrupts the channeled slot "even if delayed" (SpellCaster.cpp:2078-2080),
+    /// <c>withDelayed = false</c> only keeps a delayed generic cast (a projectile in flight). A queued next-swing
     /// spell is cancelled as well, whatever <paramref name="spellId"/> is (SpellHandler.cpp:329-330 has no id
     /// filter on <c>InterruptSpell(CURRENT_MELEE_SPELL)</c>); this method is the only owner of that behaviour.
     /// </summary>
     public void CancelCast(Unit caster, uint spellId)
     {
         ArgumentNullException.ThrowIfNull(caster);
-        if (GetState(caster.Guid)?.CurrentCast is { State: SpellCastState.Preparing } cast
+        if (GetState(caster.Guid)?.CurrentCast is { State: SpellCastState.Preparing or SpellCastState.Casting } cast
             && (spellId == 0 || cast.Spell.Id == spellId))
         {
             Cancel(cast);

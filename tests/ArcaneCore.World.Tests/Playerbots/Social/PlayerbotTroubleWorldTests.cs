@@ -149,9 +149,11 @@ public sealed class PlayerbotTroubleWorldTests
         // War Mode on, an idle bot attacks a flagged enemy on sight (5 yd at the least): the pet's owner stands well beyond it, so only the help lane
         // can draw the bot in, never the bot's own think starting a fight with the owner between the switch and the scan.
         await HelpTestKit.StandAsync(world, "Troublebot", ("Troubleorc", 40f));
-        await world.Host.OnWorldAsync(() => world.Options.Pvp.Initiate.RadiusYards = PlayerbotPvpInitiateOptions.MinRadiusYards);
         await world.Host.OnWorldAsync(() =>
         {
+            // The radius is written in the same world-thread call that flags the owner (and makes the mob a pet), so no tick runs between the
+            // switch and the flag: the bot can only see a flagged enemy once the radius already keeps the 40 yard owner out of its reach.
+            world.Options.Pvp.Initiate.RadiusYards = PlayerbotPvpInitiateOptions.MinRadiusYards;
             Player self = HelpTestKit.Online(world, "Troublebot");
             Player vic = HelpTestKit.Online(world, "Troublevic");
             Player enemy = HelpTestKit.Online(world, "Troubleorc");

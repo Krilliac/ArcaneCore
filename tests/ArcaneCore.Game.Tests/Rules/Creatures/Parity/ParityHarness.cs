@@ -47,6 +47,12 @@ internal sealed class ParityScenario
     /// <summary>A passive friendly creature standing next to the fixture (the target of the friendly-search events).</summary>
     public const uint FriendEntry = 990_004;
 
+    /// <summary>The spell list id the SET_SPELL_SET scenario switches to.</summary>
+    public const uint ListId = 990_100;
+
+    /// <summary>The spell that list casts.</summary>
+    public const uint ListSpell = 990_101;
+
     public required string Name { get; init; }
 
     public required IReadOnlyList<CreatureAiEvent> Rows { get; init; }
@@ -56,6 +62,9 @@ internal sealed class ParityScenario
     public IReadOnlyList<BroadcastText> Broadcast { get; init; } = [];
 
     public IReadOnlyList<CreatureAiSummon> Summons { get; init; } = [];
+
+    /// <summary>The creature spell lists the scenario's SET_SPELL_SET rows can switch to (empty: none).</summary>
+    public IReadOnlyList<CreatureSpellList> SpellLists { get; init; } = [];
 
     public required IReadOnlyList<ParityStep> Steps { get; init; }
 
@@ -266,6 +275,14 @@ internal sealed class ParityCaster : ICreatureSpellCaster
 
     public bool Casting { get; set; }
 
+    /// <summary>The spells a creature spell list may pick (a list skips a spell the caster does not know).</summary>
+    public Dictionary<uint, SpellInfo> Known { get; } = new()
+    {
+        [ParityScenario.ListSpell] = new SpellInfo { Id = ParityScenario.ListSpell, Range = new SpellRange(0f, 100f) },
+    };
+
+    public SpellInfo? FindSpell(uint spellId) => Known.GetValueOrDefault(spellId);
+
     public HashSet<(Unit, uint)> Auras { get; } = [];
 
     public event Action<Unit, Unit, SpellInfo>? SpellHit;
@@ -370,7 +387,7 @@ internal static class ParityRunner
     }
 
     public static CreatureAiContent Content(ParityScenario scenario)
-        => new(scenario.Rows, scenario.Texts, new BroadcastTextCatalog(scenario.Broadcast), scenario.Summons);
+        => new(scenario.Rows, scenario.Texts, new BroadcastTextCatalog(scenario.Broadcast), scenario.Summons) { SpellLists = new CreatureSpellListCatalog(scenario.SpellLists) };
 
     public static EventAiConversion Convert(ParityScenario scenario) => EventAiRuleConverter.Convert(Content(scenario));
 

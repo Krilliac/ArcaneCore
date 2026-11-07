@@ -31,7 +31,7 @@ namespace ArcaneCore.World.Tests.Playerbots.Groups;
 public sealed class PlayerbotSummonWorldTests
 {
     private const byte Human = 1, Warlock = 9, Warrior = 1;
-    private const uint RitualSpell = 990698, RitualEffectSpell = 990720, SoulShard = 6265, StoneEntry = 178828, StoneSpawn = 990030;
+    private const uint RitualSpell = 990698, PreparedSpell = 990699, PreparedCastTimeRow = 990, RitualEffectSpell = 990720, SoulShard = 6265, StoneEntry = 178828, StoneSpawn = 990030;
     private static readonly Vector3 Camp = new(StartX, StartY, StartZ);
     private static readonly Vector3 FarCamp = new(StartX + 300f, StartY, StartZ);
 
@@ -52,10 +52,16 @@ public sealed class PlayerbotSummonWorldTests
                 },
                 new SpellTemplateRow
                 {
+                    Id = PreparedSpell, SpellName = "Slow Ritual", RangeIndex = 1, CastingTimeIndex = PreparedCastTimeRow,
+                    Effect1 = 3, EffectImplicitTargetA1 = 1, EffectBaseDice1 = 1, EffectDieSides1 = 1,
+                },
+                new SpellTemplateRow
+                {
                     Id = RitualEffectSpell, SpellName = "Ritual of Summoning Effect", RangeIndex = 1,
                     Effect1 = 85, EffectImplicitTargetA1 = 25, EffectBaseDice1 = 1, EffectDieSides1 = 1,
                 },
             ],
+            CastTimes = [.. duel.CastTimes, new SpellCastTimeRow { Id = PreparedCastTimeRow, CastTime = 5000, MinCastTime = 5000 }],
             Radii = [.. duel.Radii, new SpellRadiusRow { Id = 50, Radius = 2.0f }],
         }));
     }
@@ -172,7 +178,7 @@ public sealed class PlayerbotSummonWorldTests
         Assert.True(arrived, await world.TraceAsync());
         Assert.Equal(1, world.Bots.Summons.Started);
         Assert.True(world.Bots.Summons.Accepted >= 1, "the far member never answered a summon request"); // the bot answers within the tick the request lands in, so no tick boundary sees the pending request
-        Assert.True(helpers >= 2, $"{helpers} bots helped at the portal"); // the request itself proves the server counted all three participants (the portal template asks for three)
+        Assert.Equal(2, helpers); // the portal asks for three participants: the warlock and exactly two helpers (the request itself proves the server counted all three)
         Assert.Equal(2u, await world.OnWorldAsync(() => world.Player(warlock.Id).Inventory.GetItemCount(SoulShard)));
     }
 
@@ -290,16 +296,151 @@ public sealed class PlayerbotSummonWorldTests
         Assert.True(await world.RunUntilAsync(180_000, () => state() == SpellCastState.Casting), await world.TraceAsync());
 
         // The think that ends a summon may have nothing left of the tick's shared budget; the channel must still end, or the warlock stays "casting" and cannot summon again.
-        SpellCastState? after = await world.OnWorldAsync(() =>
+        (SpellCastState? after, bool sent, bool budgetKept) = await world.OnWorldAsync(() =>
         {
             WorldSession session = world.Session(warlock.Id);
             ManagedActionBudget? saved = session.ManagedBudget;
-            session.ManagedBudget = new ManagedActionBudget(0);
-            try { PlayerbotSummons.StopRitual(session, world.Player(warlock.Id), RitualSpell); }
+            var spent = new ManagedActionBudget(0);
+            session.ManagedBudget = spent;
+            bool sentStop;
+            bool kept;
+            try
+            {
+                sentStop = PlayerbotSummons.StopRitual(session, world.Player(warlock.Id), RitualSpell);
+                kept = ReferenceEquals(session.ManagedBudget, spent); // the spent budget is put back, not dropped: the rest of the tick stays refused
+            }
             finally { session.ManagedBudget = saved; }
-            return state();
+
+            return (state(), sentStop, kept);
         });
-        Assert.NotEqual(SpellCastState.Casting, after);
+        Assert.True(sent, "the stop packet was refused");
+        Assert.True(budgetKept, "StopRitual did not restore the session's action budget");
+        Assert.Null(after);
+    }
+
+    [Fact]
+    public async Task StoppingARitualStillBeingPrepared_CancelsTheCast_WithCancelCast()
+    {
+        await using GroupTestWorld world = await StartAsync();
+        var warlock = await BotAsync(world, "Summonlockf", Warlock, Camp);
+        SpellSystem spells = world.World.Services.GetRequiredService<SpellFeature>().System;
+
+        (SpellCastState? before, bool sent, SpellCastState? after) = await world.OnWorldAsync(() =>
+        {
+            Player player = world.Player(warlock.Id);
+            Assert.Equal(SpellCastResult.CastOk, spells.CastSpell(player, PreparedSpell, SpellCastTargets.ForSelf(), triggered: false));
+            SpellCastState? preparing = spells.GetState(player.Guid)?.CurrentCast?.State;
+            bool sentStop = PlayerbotSummons.StopRitual(world.Session(warlock.Id), player, PreparedSpell);
+            return (preparing, sentStop, spells.GetState(player.Guid)?.CurrentCast?.State);
+        });
+
+        Assert.Equal(SpellCastState.Preparing, before); // a 5 s cast bar: the test proves nothing if it had already gone off
+        Assert.True(sent, "the cancel packet was refused");
+        Assert.Null(after);
+    }
+
+    /// <summary>
+    /// One think of the summons seam for a bot through <paramref name="probe"/>, a summons table of its own: the world's own table has the option
+    /// switched off (the test's configure) so the bots' real thinks never start a job, and the option is on only inside this call (world thread).
+    /// </summary>
+    private static bool ProbeDrive(GroupTestWorld world, PlayerbotSummons probe, Guid botId, PlayerbotGroupState? groupState)
+    {
+        PlayerbotSummonOptions summon = world.Options.Summon;
+        summon.Enabled = true;
+        try { return probe.Drive(world.Session(botId), world.Player(botId), world.Options, groupState, 100); }
+        finally { summon.Enabled = false; }
+    }
+
+    /// <summary>
+    /// The state of the bot-led group the bot is in decides whether it may start a summon (PlayerbotSummons.TryStart): only Gathering, Travelling and
+    /// Regrouping do (the members are walking or waiting, a summon is the way to bring a far one over); every other state refuses. The same warlock,
+    /// helpers and far member are driven for 20 s in each case, so the refusal is the state's and not the setup's (the Gathering, Travelling and
+    /// Regrouping cases prove the setup starts a job).
+    /// </summary>
+    [Theory]
+    [InlineData("Gathering", true)]
+    [InlineData("Travelling", true)]
+    [InlineData("Regrouping", true)]
+    [InlineData("Forming", false)]
+    [InlineData("Entering", false)]
+    [InlineData("Engaging", false)]
+    [InlineData("Wiped", false)]
+    [InlineData("Leaving", false)]
+    [InlineData("Disbanding", false)]
+    public async Task ABotInABotLedGroup_StartsASummon_OnlyInTheGatheringTravellingAndRegroupingStates(string stateName, bool starts)
+    {
+        var groupState = Enum.Parse<PlayerbotGroupState>(stateName);
+        await using GroupTestWorld world = await StartAsync(options => options.Summon.Enabled = false);
+        var warlock = await BotAsync(world, "Gatelock", Warlock, Camp, ritual: true, shards: 3);
+        var helperOne = await BotAsync(world, "Gatehelpa", Warrior, Camp + new Vector3(4f, 4f, 0f));
+        var helperTwo = await BotAsync(world, "Gatehelpb", Warrior, Camp + new Vector3(-4f, 4f, 0f));
+        await using WorldTestClient player = await world.World.EnterWorldAsync("GATEREAL", "Gatereal", AccountSecurity.Player);
+        await GroupAsync(world, "Gatereal", warlock, helperOne, helperTwo);
+        await PlaceRealAsync(world, "Gatereal", FarCamp);
+
+        var probe = new PlayerbotSummons();
+        for (int step = 0; step < 8; step++)
+        {
+            await world.OnWorldAsync(() => ProbeDrive(world, probe, warlock.Id, groupState));
+            await world.RunAsync(2_500); // under FarStaleMs (6 s) and over EvalGapMs (2 s): the far debounce (10 s) builds up and every think evaluates
+        }
+
+        int started = await world.OnWorldAsync(() => probe.Started);
+        Assert.Equal(starts ? 1 : 0, started);
+    }
+
+    /// <summary>
+    /// A stop the world refuses (a quest settlement is pending on the warlock, so TryManagedAction says no) leaves the channel running: StopRitual says
+    /// false, the offered summoner's job stays (the bot holds still) and the next think tries again; once the settlement clears the same think stops the
+    /// channel and ends the job. Deleting the stop's result check would end the job with the channel still running.
+    /// </summary>
+    [Fact]
+    public async Task ARefusedStop_KeepsTheJob_AndTheNextThinkAfterTheSettlementStopsTheChannelAndEndsIt()
+    {
+        await using GroupTestWorld world = await StartAsync(options => options.Summon.Enabled = false);
+        var warlock = await BotAsync(world, "Refuselock", Warlock, Camp, ritual: true, shards: 3);
+        var helperOne = await BotAsync(world, "Refusehelpa", Warrior, Camp + new Vector3(4f, 4f, 0f));
+        var helperTwo = await BotAsync(world, "Refusehelpb", Warrior, Camp + new Vector3(-4f, 4f, 0f));
+        await using WorldTestClient player = await world.World.EnterWorldAsync("REFUSEREAL", "Refusereal", AccountSecurity.Player);
+        await GroupAsync(world, "Refusereal", warlock, helperOne, helperTwo);
+        await PlaceRealAsync(world, "Refusereal", FarCamp);
+
+        SpellSystem spells = world.World.Services.GetRequiredService<SpellFeature>().System;
+        Func<SpellCastState?> state = () => spells.GetState(world.Player(warlock.Id).Guid)?.CurrentCast is { } cast && cast.Spell.Id == RitualSpell ? cast.State : null;
+        var probe = new PlayerbotSummons();
+        Assert.True(await world.RunUntilAsync(180_000, () =>
+        {
+            ProbeDrive(world, probe, warlock.Id, PlayerbotGroupState.Gathering);
+            return probe.JobOf(world.Player(warlock.Id).Guid)?.Cast is { Stage: TravelCastStage.Casting } && state() == SpellCastState.Casting;
+        }), await world.TraceAsync());
+
+        // The member's offer is out (the portal's request); the settlement makes the world refuse the warlock's stop.
+        Guid operation = Guid.NewGuid();
+        (bool heldOne, bool heldTwo, bool jobKept, SpellCastState? whilePending) = await world.OnWorldAsync(() =>
+        {
+            Player caster = world.Player(warlock.Id);
+            Real(world, "Refusereal").PendingSummon = new PendingSummon(caster.Guid, caster.MapId, caster.X, caster.Y, caster.Z, (long)world.World.Host.World.NowMs + 60_000);
+            Assert.True(caster.BeginQuestSettlement(operation));
+            Assert.False(PlayerbotSummons.StopRitual(world.Session(warlock.Id), caster, RitualSpell));
+            bool first = ProbeDrive(world, probe, warlock.Id, PlayerbotGroupState.Gathering);
+            bool second = ProbeDrive(world, probe, warlock.Id, PlayerbotGroupState.Gathering); // the next think: still refused, still held
+            return (first, second, probe.JobOf(caster.Guid) is not null, state());
+        });
+        Assert.True(heldOne, "the bot let go of the job while its stop was refused");
+        Assert.True(heldTwo, "the bot let go of the job on the next think while its stop was still refused");
+        Assert.True(jobKept, "the job ended while the channel was still running");
+        Assert.Equal(SpellCastState.Casting, whilePending);
+
+        (bool heldAfter, bool jobLeft, SpellCastState? afterwards) = await world.OnWorldAsync(() =>
+        {
+            Player caster = world.Player(warlock.Id);
+            Assert.True(caster.EndQuestSettlement(operation));
+            bool held = ProbeDrive(world, probe, warlock.Id, PlayerbotGroupState.Gathering);
+            return (held, probe.JobOf(caster.Guid) is not null, state());
+        });
+        Assert.False(heldAfter);
+        Assert.False(jobLeft, "the job stayed after the stop went out");
+        Assert.Null(afterwards);
     }
 
     [Fact]
