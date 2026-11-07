@@ -35,7 +35,8 @@ public interface IUnitSpellQueries
     bool ExcludesCaster(uint spellId) => false;
 
     /// <summary>
-    /// cmangos Unit::InterruptSpell(<paramref name="currentSpellType"/>) (SCRIPT_COMMAND_INTERRUPT_SPELL, DBScripts/ScriptMgr.cpp:2983-2991):
+    /// cmangos Unit::InterruptSpell(<paramref name="currentSpellType"/>) as the DB script command INTERRUPT_SPELL (47) calls it
+    /// (DBScripts/ScriptMgr.cpp:2983-2991):
     /// cancel the unit's spell of that slot (CurrentSpellTypes: 0 melee, 1 generic, 2 auto-repeat, 3 channeled). False when the slot held nothing.
     /// </summary>
     bool InterruptSpell(Unit unit, uint currentSpellType) => false;
