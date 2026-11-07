@@ -150,6 +150,37 @@ public sealed class GroupAuthorityTests
     }
 
     [Fact]
+    public void Closing_a_loaded_table_after_its_last_write_refuses_every_later_command()
+    {
+        GroupAuthority authority = AuthorityWithGroup(out Group group);
+        authority.Execute("worker-a", Loot(LootMethod.RoundRobin)); // a loaded table, no hold
+
+        Assert.Equal(0, authority.CloseTable());
+        Assert.Equal(0, authority.CloseTable()); // idempotent
+
+        Assert.False(authority.TryExecute("worker-a", Loot(LootMethod.FreeForAll)));
+        authority.Execute("worker-a", Loot(LootMethod.FreeForAll));
+        authority.HoldForReload();
+        Assert.Equal(0, authority.ReleaseHeldCommands());
+
+        Assert.Equal(LootMethod.RoundRobin, group.LootMethod);
+        Assert.Equal(1, authority.CommandsRefusedAfterClose);
+    }
+
+    [Fact]
+    public void Closing_a_table_with_commands_still_held_returns_how_many_were_lost()
+    {
+        GroupAuthority authority = AuthorityWithGroup(out Group group);
+        authority.HoldForReload();
+        authority.Execute("worker-a", Loot(LootMethod.FreeForAll));
+
+        Assert.Equal(1, authority.CloseTable());
+
+        Assert.Equal(0, authority.HeldCommandCount);
+        Assert.Equal(LootMethod.GroupLoot, group.LootMethod);
+    }
+
+    [Fact]
     public void Closing_a_table_that_is_not_held_changes_nothing()
     {
         GroupAuthority authority = AuthorityWithGroup(out Group group);

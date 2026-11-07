@@ -210,13 +210,13 @@ public sealed class AuctionBotFeatureTests
         var gate = new HeldAuctionSnapshot();
         await using var fixture = await Fixture.CreateAsync(persist: true, keeper: keeper, wrapStore: gate.Wrap,
             extra: new() { ["AuctionHouseBot:SellChance"] = "0", ["AuctionHouseBot:BuyChance"] = "0" });
+        gate.HoldNextFullRead(); // armed before the lease is taken: a timer that finds it held then cannot start an unheld read first
         for (int i = 0; i < 4; i++)
         {
             time.Advance(TimeSpan.FromSeconds(10));
         }
 
         Assert.True(keeper.Holds(EconomyScope));
-        gate.HoldNextFullRead();
         Assert.False(await fixture.OnWorld(fixture.Economy.EnsureAuctionCacheCurrent));
         AuctionSnapshot read = await gate.Taken.WaitAsync(Fixture.Budget);
         Assert.DoesNotContain(read.Auctions, a => a.Id == 90); // the snapshot is taken and misses the listing, which does not exist yet
@@ -242,6 +242,40 @@ public sealed class AuctionBotFeatureTests
     }
 
     [Fact]
+    public async Task A_failed_takeover_snapshot_is_not_read_again_before_its_backoff_and_is_read_once_it_has_passed()
+    {
+        (ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper keeper, ArcaneCore.World.Tests.Cluster.Social.ManualTimeProvider time) = await DormantWorkerKeeperAsync();
+        await using var keeperScope = keeper;
+        var gate = new HeldAuctionSnapshot();
+        var clock = new ManualClock(DateTimeOffset.UtcNow);
+        await using var fixture = await Fixture.CreateAsync(persist: true, keeper: keeper, clock: clock, wrapStore: gate.Wrap,
+            extra: new() { ["AuctionHouseBot:SellChance"] = "0", ["AuctionHouseBot:BuyChance"] = "0" });
+        int baseline = gate.FullReadAttempts; // Attach has already done its own full read through the wrapped store
+        gate.FailNextFullRead();
+        for (int i = 0; i < 4; i++)
+        {
+            time.Advance(TimeSpan.FromSeconds(10));
+        }
+
+        Assert.True(keeper.Holds(EconomyScope));
+        Assert.False(await fixture.OnWorld(fixture.Economy.EnsureAuctionCacheCurrent)); // starts the read, which fails
+        await fixture.WaitUntilAsync(() => fixture.Economy.AuctionRefreshNotBeforeMs > 0); // the failure has been applied on the world thread
+        Assert.Equal(baseline + 1, gate.FullReadAttempts);
+
+        // Inside the backoff nothing starts: not on this call, and not on the next ones either.
+        for (int i = 0; i < 3; i++)
+        {
+            Assert.False(await fixture.OnWorld(() => fixture.Economy.EnsureAuctionCacheCurrent() || fixture.Economy.AuctionRefreshInFlight));
+        }
+
+        Assert.Equal(baseline + 1, gate.FullReadAttempts);
+
+        clock.Advance(TimeSpan.FromSeconds(2));
+        await fixture.WaitUntilAsync(fixture.Economy.EnsureAuctionCacheCurrent); // the first call after the backoff starts the retry, a later one sees it applied
+        Assert.Equal(baseline + 2, gate.FullReadAttempts);
+    }
+
+    [Fact]
     public async Task Auction_busy_when_the_takeover_snapshot_read_starts_keeps_the_commit_that_finishes_during_the_read()
     {
         (ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper keeper, ArcaneCore.World.Tests.Cluster.Social.ManualTimeProvider time) = await DormantWorkerKeeperAsync();
@@ -249,14 +283,14 @@ public sealed class AuctionBotFeatureTests
         var gate = new HeldAuctionSnapshot();
         await using var fixture = await Fixture.CreateAsync(persist: true, keeper: keeper, wrapStore: gate.Wrap,
             extra: new() { ["AuctionHouseBot:SellChance"] = "0", ["AuctionHouseBot:BuyChance"] = "0" });
+        gate.HoldNextFullRead(); // armed before the lease is taken, as above
+        gate.HoldNextCommit();
         for (int i = 0; i < 4; i++)
         {
             time.Advance(TimeSpan.FromSeconds(10));
         }
 
         Assert.True(keeper.Holds(EconomyScope));
-        gate.HoldNextFullRead();
-        gate.HoldNextCommit();
 
         // One world-thread turn: the bid starts first, so the auction is busy when the read starts and the bid's change is not noted as made during the read.
         var bid = new TaskCompletionSource<EconomyOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -992,6 +1026,8 @@ public sealed class AuctionBotFeatureTests
         private int _holdRead;
         private int _holdCommit;
         private int _fullReads;
+        private int _failRead;
+        private int _readAttempts;
 
         public Task<AuctionSnapshot> Taken => _taken.Task;
 
@@ -999,6 +1035,12 @@ public sealed class AuctionBotFeatureTests
         public int FullReads => Volatile.Read(ref _fullReads);
 
         public void HoldNextFullRead() => Volatile.Write(ref _holdRead, 1);
+
+        /// <summary>The next full auction read throws instead of returning a snapshot.</summary>
+        public void FailNextFullRead() => Volatile.Write(ref _failRead, 1);
+
+        /// <summary>Every full auction read started since the store was wrapped, failed or not, including the one the economy feature makes when it attaches; tests take a baseline after the fixture is created.</summary>
+        public int FullReadAttempts => Volatile.Read(ref _readAttempts);
 
         public void HoldNextCommit() => Volatile.Write(ref _holdCommit, 1);
 
@@ -1012,6 +1054,15 @@ public sealed class AuctionBotFeatureTests
         {
             public async Task<AuctionSnapshot> GetAuctionSnapshotAsync(AuctionSnapshotFilter filter, CancellationToken cancellationToken = default)
             {
+                if (filter.AuctionId is null)
+                {
+                    Interlocked.Increment(ref owner._readAttempts);
+                    if (Interlocked.Exchange(ref owner._failRead, 0) == 1)
+                    {
+                        throw new InvalidOperationException("the takeover snapshot read failed (test)");
+                    }
+                }
+
                 AuctionSnapshot snapshot = await inner.GetAuctionSnapshotAsync(filter, cancellationToken);
                 if (filter.AuctionId is not null)
                 {

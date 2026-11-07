@@ -131,7 +131,7 @@ public sealed class RealmAuthorityLeaseKeeper : IAsyncDisposable, IRealmLeaseFen
     }
 
     /// <summary>
-    /// Whether this node is the live holder of <paramref name="scope"/>: it took the lease at start, has not given it back, and has not lost it (a lost lease keeps its old token in
+    /// Whether this node is the live holder of <paramref name="scope"/>: it took the lease at start, has not given it back, has not lost it, and the lease's expiry has not passed on this node's clock (a lost lease keeps its old token in
     /// <see cref="TokenFor"/> and <see cref="FenceFor"/>, but the node is no longer the holder). The answer behind <see cref="LeaseFencedWrite.RequireHeld"/> and <see cref="LeaseFencedWrite.IsHolder"/>: realm sweeps and every
     /// write with no commit-time check of the lease row refuse on it. Stores that verify the row at commit (<see cref="LeaseFencedWrite.RequireFence"/>) ask <see cref="FenceFor"/> instead and let the commit fence decide.
     /// Cheap; safe from any thread.
@@ -140,7 +140,8 @@ public sealed class RealmAuthorityLeaseKeeper : IAsyncDisposable, IRealmLeaseFen
     {
         lock (_gate)
         {
-            return !_lost && !_released && _held.ContainsKey(scope);
+            // A lease whose expiry has passed is not held, even if the renewal tick has not run yet to notice (a stalled process, a starved timer thread): the store may already have granted it to another node. Renewals move the expiry forward and the tick marks the loss before the deadline, so this only decides in that gap.
+            return !_lost && !_released && _held.TryGetValue(scope, out Held? held) && _time.GetUtcNow() < held.ExpiresAtUtc;
         }
     }
 

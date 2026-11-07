@@ -167,7 +167,7 @@ public sealed class EconomyNotifyRouter(IRealmPresenceDirectory directory)
 /// </summary>
 public sealed class EconomyNotifyClient(Func<byte[], CancellationToken, Task<byte[]>> send)
 {
-    /// <summary>A client that sends over the peer link to the node holding the Economy lease.</summary>
+    /// <summary>A client that sends over <paramref name="link"/>. The shared peer locator reaches only the Social holder (<see cref="PeerLinkClient"/>), so this reaches the Economy holder only on a link the caller aimed at it; it has no production caller.</summary>
     public static EconomyNotifyClient OverPeerLink(PeerLinkClient link)
     {
         ArgumentNullException.ThrowIfNull(link);

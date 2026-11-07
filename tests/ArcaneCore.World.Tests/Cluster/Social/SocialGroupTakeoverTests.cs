@@ -267,15 +267,37 @@ public sealed class SocialGroupTakeoverTests
         Assert.True(rig.Persistence.AuthorityLoaded);
         Assert.True(rig.Holder.Groups.HeldCommandCount > 0, "the world stopped with no backlog left, so this test proves nothing");
 
+        // A peer command that reaches the table while the final write is being queued and drained must be refused: the table is closed before the write's snapshot, so the snapshot is the boundary and no acked command is outside it.
+        var attemptsDuringFinalWrite = new List<bool>();
+        rig.Rows.OnSave = _ =>
+        {
+            bool applied = rig.Holder.Groups.TryExecute("worker-c", invite);
+            lock (attemptsDuringFinalWrite)
+            {
+                attemptsDuringFinalWrite.Add(applied);
+            }
+        };
+
         await rig.Persistence.StopAsync();
+
+        lock (attemptsDuringFinalWrite)
+        {
+            Assert.NotEmpty(attemptsDuringFinalWrite); // the backlog changed the group, so the final write saved it
+            Assert.All(attemptsDuringFinalWrite, applied => Assert.False(applied));
+        }
 
         Assert.Equal(0, rig.Holder.Groups.HeldCommandCount);
         Assert.Equal(invites + 1, rig.Holder.Groups.PendingFor("worker-c"));
         Assert.Equal((byte)LootMethod.RoundRobin, Assert.Single(rig.Holder.Groups.Snapshots()).LootMethod);
         Assert.Equal((byte)LootMethod.RoundRobin, rig.Rows.Group(1)!.LootMethod); // the final write has it
 
-        rig.Holder.Groups.Execute("worker-c", invite); // a loaded table was not closed
-        Assert.Equal(0, rig.Holder.Groups.CommandsRefusedAfterClose);
+        // A loaded table is closed after the final write: a late peer command is refused, not acked into a table no write will cover.
+        int pendingAtStop = rig.Holder.Groups.PendingFor("worker-c");
+        Assert.False(rig.Holder.Groups.TryExecute("worker-c", invite));
+        rig.Holder.Groups.Execute("worker-c", invite);
+        Assert.Equal(1, rig.Holder.Groups.CommandsRefusedAfterClose);
+        Assert.Equal(pendingAtStop, rig.Holder.Groups.PendingFor("worker-c"));
+        Assert.Equal(0, rig.Holder.Groups.HeldCommandCount);
     }
 
     [Fact]
@@ -305,6 +327,40 @@ public sealed class SocialGroupTakeoverTests
         Assert.Equal([20, 21], rig.Rows.Group(1)!.Members.Select(m => m.CharacterId));
     }
 
+    [Fact]
+    public async Task A_command_held_across_a_failed_read_is_kept_and_runs_on_the_table_the_retry_installs()
+    {
+        await using Rig rig = await Rig.CreateAsync();
+        rig.StoreCharacters(20, 21);
+        rig.Rows.Seed(Group(1, 20, 21));
+        rig.Routing.Forward(ConvertToRaid(20)); // worker-b holds: it waits in the routing queue, and the table is held from attach on a node without the lease
+
+        rig.Characters.FailNextRead();
+        rig.Characters.HoldReads();
+        rig.BlockWorld(); // the first tick starts the read only after the backlog has reached the table
+        rig.TakeOver();
+        await rig.Routing.FlushAsync().WaitAsync(Budget);
+        Assert.Equal(1, rig.Holder.Groups.HeldCommandCount);
+        rig.ReleaseWorld();
+        await rig.Characters.ReadFailed.WaitAsync(Budget);
+        await rig.Characters.ReadHeld.WaitAsync(Budget); // the retry, held
+
+        // The failed read installed nothing and discarded nothing: the command is still waiting, and nothing ran or was written.
+        Assert.False(await rig.OnWorld(() => rig.Persistence.AuthorityLoaded));
+        Assert.Equal(1, rig.Holder.Groups.HeldCommandCount);
+        Assert.Empty(rig.Holder.Groups.Snapshots());
+        await rig.Persistence.Writes!.FlushAsync();
+        Assert.Equal(0, rig.Rows.Writes);
+
+        rig.Characters.ReleaseReads();
+        await rig.WaitUntilLoadedAsync();
+        await rig.Persistence.Writes!.FlushAsync();
+
+        Assert.Equal(0, rig.Holder.Groups.HeldCommandCount);
+        Assert.True(Assert.Single(rig.Holder.Groups.Snapshots()).IsRaid);
+        Assert.True(rig.Rows.Group(1)!.IsRaid);
+    }
+
     /// <summary>The group table as a worker reads it; a read can be held before it takes its rows, and writes are counted.</summary>
     private sealed class GroupRows : IGroupStore
     {
@@ -314,6 +370,9 @@ public sealed class SocialGroupTakeoverTests
         private int _writes;
 
         public int Writes => Volatile.Read(ref _writes);
+
+        /// <summary>Called, on the write queue's thread, as each group save starts.</summary>
+        public Action<GroupRecord>? OnSave { get; set; }
 
         public Task LoadEntered => _loadEntered.Task;
 
@@ -341,6 +400,7 @@ public sealed class SocialGroupTakeoverTests
         public Task SaveGroupAsync(GroupRecord group, CancellationToken cancellationToken = default)
         {
             Interlocked.Increment(ref _writes);
+            OnSave?.Invoke(group);
             return _rows.SaveGroupAsync(group, cancellationToken);
         }
 
@@ -502,8 +562,21 @@ public sealed class SocialGroupTakeoverTests
         /// <summary>Ends the parked world thread with no further tick: the stop is under way before it wakes, so the replay stays where it was.</summary>
         public async Task StopParkedWorldAsync()
         {
-            Task stopping = Task.Run(World.Stop);
-            await Task.Delay(100);
+            var started = new TaskCompletionSource<Thread>(TaskCreationOptions.RunContinuationsAsynchronously);
+            Task stopping = Task.Run(() =>
+            {
+                started.SetResult(Thread.CurrentThread);
+                World.Stop();
+            });
+            Thread stopper = await started.Task.WaitAsync(Budget);
+
+            // Stop sets the stop signal and then joins the parked world thread, so a stopper that is waiting has set the signal: the world thread ends after this tick instead of running another. No fixed delay.
+            using var timeout = new CancellationTokenSource(Budget);
+            while ((stopper.ThreadState & ThreadState.WaitSleepJoin) == 0)
+            {
+                await Task.Delay(1, timeout.Token);
+            }
+
             _parkGate.Set();
             await stopping.WaitAsync(Budget);
         }
