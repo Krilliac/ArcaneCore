@@ -54,6 +54,10 @@ public sealed class TicketClassifierTests
 
     [Theory]
     [InlineData("I am stuck in a wall", TicketCategory.Stuck)]
+    [InlineData("I am trapped in a house", TicketCategory.Stuck)]
+    [InlineData("my quest is stuck", TicketCategory.QuestBroken)]
+    [InlineData("the quest is stuck, I am trapped by the quest giver", TicketCategory.QuestBroken)]
+    [InlineData("stuck at the quest giver and I can't move", TicketCategory.Stuck)]
     [InlineData("I fell through the world", TicketCategory.Stuck)]
     [InlineData("i cant resurrect, no graveyard", TicketCategory.DeadCantRes)]
     [InlineData("the quest will not complete", TicketCategory.QuestBroken)]
@@ -73,8 +77,8 @@ public sealed class TicketClassifierTests
 
     private static TicketFacts Facts(
         bool online = true, bool alive = true, bool ghost = false, long dead = 0, long idle = 0, bool stale = false, bool blocked = false,
-        TicketSignal? signal = null, bool combat = false)
-        => new(online, 7, "Someone", 0, 0, 0, 0, alive, ghost, 20, dead, idle, stale || combat, stale, blocked, signal, null);
+        TicketSignal? signal = null, bool combat = false, bool duel = false)
+        => new(online, 7, "Someone", 0, 0, 0, 0, alive, ghost, 20, dead, idle, stale || combat || duel, stale, blocked, signal, null, duel);
 
     private static readonly TicketSignal Undermap = new("under-map", 0, "x");
 
@@ -127,6 +131,13 @@ public sealed class TicketClassifierTests
     [Fact]
     public void DeadCantRes_AGhostWithASignal_StillTakesTheGraveyardWay()
         => Assert.Equal(TicketAction.Revive, TicketPolicy.Decide(TicketCategory.DeadCantRes, Facts(alive: false, ghost: true, dead: 500, signal: Undermap), Options).Action);
+
+    [Fact]
+    public void Stuck_ADuel_IsNeverClearedAsStaleCombat_NorUnstuck()
+    {
+        Assert.Equal(TicketAction.Escalate, TicketPolicy.Decide(TicketCategory.Stuck, Facts(duel: true, stale: true, idle: 999), Options).Action);
+        Assert.Equal(TicketAction.Escalate, TicketPolicy.Decide(TicketCategory.Stuck, Facts(duel: true, idle: 999), Options).Action);
+    }
 
     [Fact]
     public void Stuck_InCombatOrADuel_IsNeverUnstuck_EvenWhenIdle()

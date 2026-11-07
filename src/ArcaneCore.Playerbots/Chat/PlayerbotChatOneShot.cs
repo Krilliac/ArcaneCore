@@ -11,8 +11,9 @@ internal sealed partial class PlayerbotChat
     /// <summary>
     /// Worker or any non-world thread: one model request that belongs to no bot conversation (the GM ticket assistant). The same
     /// guards as <see cref="AnswerAsync"/>: personal data is stripped from <paramref name="untrustedText"/> when that is on, the rest is
-    /// screened by the local filter (a flagged or unjudged text reaches no model), each provider's input moderation runs on the first chat line of it (255 characters, while the prompt carries
-    /// up to 500, so the rest is seen by the local filter only; a flagged text reaches no provider, a failed step skips that provider), provider budgets and cool-downs apply, and the request has the chat timeout.
+    /// screened by the local filter (a flagged or unjudged text reaches no model), the text is cut to one chat line (<see cref="PlayerbotChatPrompts.MaxLineLength"/> characters)
+    /// and that same cut is what each provider's input moderation sees and what the prompt carries (nothing is sent that was not moderated; a flagged text reaches no provider,
+    /// a failed step skips that provider), provider budgets and cool-downs apply, and the request has the chat timeout.
     /// With <paramref name="screenOutput"/> the reply is also stripped of personal data, cut to one chat line, moderated by the same
     /// provider step and screened by the local filter; a reply that fails any of these is not returned. Null when no provider answered.
     /// </summary>
@@ -40,7 +41,8 @@ internal sealed partial class PlayerbotChat
             }
         }
 
-        BotChatPrompt prompt = build(PlayerbotChatPrompts.Clean(outgoing, 500));
+        string sent = PlayerbotChatPrompts.Clean(outgoing, PlayerbotChatPrompts.MaxLineLength);
+        BotChatPrompt prompt = build(sent);
         int index = -1;
         foreach (PlayerbotChatProviderOptions provider in options.EffectiveProviders())
         {
@@ -61,7 +63,7 @@ internal sealed partial class PlayerbotChat
 
             if (screening && provider.Moderation != PlayerbotChatModerationKind.None)
             {
-                BotChatModeration moderation = await ModerateTextAsync(provider, key, outgoing, options).ConfigureAwait(false);
+                BotChatModeration moderation = await ModerateTextAsync(provider, key, sent, options).ConfigureAwait(false);
                 if (moderation.Verdict == BotChatModerationVerdict.Flagged)
                 {
                     return null;
@@ -116,6 +118,22 @@ internal sealed partial class PlayerbotChat
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Any thread: a short model-written text that is not a chat reply (the ticket assistant's summary) with personal data stripped when that is on, and null
+    /// when the local output screen flags it or cannot judge it in time. The summary is only ever shown to staff, so no provider moderation call is made for it.
+    /// </summary>
+    internal string? ScreenOneShotText(string text)
+    {
+        PlayerbotChatSafetyOptions safety = Options.Safety;
+        string clean = safety.StripPersonalData ? _safety.StripPersonalData(text) : text;
+        if (safety.Enabled && safety.ScreenOutput && _safety.ScreenOutput(clean) is { } verdict && (verdict.Flagged || verdict.TimedOut))
+        {
+            return null;
+        }
+
+        return clean;
     }
 
     private async Task<BotChatResult> RequestOnceAsync(

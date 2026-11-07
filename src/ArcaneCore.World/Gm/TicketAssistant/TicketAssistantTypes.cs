@@ -40,7 +40,8 @@ public sealed record TicketSignal(string Code, long AtUnix, string Detail);
 
 /// <summary>
 /// What the server knows about a ticket's author when it decides, read on the world thread. <see cref="DeadSeconds"/> and
-/// <see cref="IdleSeconds"/> are 0 when the state was first seen just now. <see cref="InCombat"/> is true for a fight and for a duel.
+/// <see cref="IdleSeconds"/> are 0 when the state was first seen just now. <see cref="InCombat"/> is true for a fight and for a duel
+/// (<see cref="InDuel"/> says it is the latter, which is never a stale combat).
 /// <see cref="PositionSignal"/> is a below-terrain report derived from the client's own movement packet, so it is context for a GM and never evidence for an action.
 /// </summary>
 public sealed record TicketFacts(
@@ -60,7 +61,8 @@ public sealed record TicketFacts(
     bool StaleCombat,
     bool Blocked,
     TicketSignal? PositionSignal,
-    string? QuestNote)
+    string? QuestNote,
+    bool InDuel = false)
 {
     /// <summary>A line for the GM note.</summary>
     public string Describe()
