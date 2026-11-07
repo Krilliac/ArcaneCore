@@ -8,7 +8,7 @@ namespace ArcaneCore.Data.World.Creatures;
 /// Translates the vmangos <c>conditions</c> row a <c>spell_script_target.conditionId</c> names into the self-contained term list stored in
 /// <see cref="SpellScriptTargetRow.TargetCondition"/> (read by <c>ScriptTargetCondition</c> in the game assembly, which documents the grammar).
 /// Condition ids are per database, and the types the rows use are vmangos types that do not exist in the cmangos numbering the
-/// <c>conditions</c> table holds (vmangos Conditions.h:101 HEALTH_PERCENT 41, :195 SOURCE_ENTRY 16, :217 OBJECT_IS_SPAWNED 48, :219
+/// <c>conditions</c> table holds (vmangos Conditions.h:101 SOURCE_ENTRY 16, :195 HEALTH_PERCENT 41, :217 OBJECT_IS_SPAWNED 48, :219
 /// OBJECT_LOOT_STATE 49, :248 OBJECT_GO_STATE 55; mangos-classic Conditions.h marks 16 and 41 unused), so an id is never copied. A condition
 /// translates when it is one of those five types, alone or under CONDITION_AND (-1, vmangos Conditions.cpp:162-175: every operand must hold, so
 /// the tree flattens to a list); the reverse flag (0x1) of a leaf becomes <c>!</c>. Anything else is refused with a reason: OR, NOT, a

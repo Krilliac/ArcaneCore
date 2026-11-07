@@ -5,6 +5,7 @@ using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Characters.Pets;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
+using OwnershipRefusal = ArcaneCore.Kernel.Characters.OwnershipRefusal;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.Game.Pets;
@@ -35,24 +36,6 @@ public sealed partial class SummonService
     /// </summary>
     public Func<bool>? WritesSealed { get; set; }
 
-    private static bool IsOwnershipRefusal(Exception? failure)
-    {
-        int depth = 0;
-        for (Exception? e = failure; e is not null && depth < 16; e = e.InnerException, depth++)
-        {
-            if (e is ArcaneCore.Kernel.Characters.CharacterOwnershipRejectedException)
-            {
-                return true;
-            }
-
-            if (e is AggregateException aggregate && aggregate.InnerExceptions.Any(IsOwnershipRefusal))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
     private readonly Lock _cacheGate = new();
     private readonly Dictionary<int, PersistentPetSnapshot> _cached = [];
     private readonly Dictionary<int, Task> _saveTails = [];
@@ -318,7 +301,7 @@ public sealed partial class SummonService
                     await DeleteOnceAsync(characterId).ConfigureAwait(false);
                     break;
                 }
-                catch (Exception ex) when (ex is not OutOfMemoryException && attempt < DeleteAttempts && !IsOwnershipRefusal(ex)) // a fence refusal is final, not transient
+                catch (Exception ex) when (ex is not OutOfMemoryException && attempt < DeleteAttempts && OwnershipRefusal.Find(ex) is null) // a fence refusal is final, not transient
                 {
                     _logger.LogFault(LogLevel.Warning, "pet.persistence", ex, "persistent hunter pet delete attempt {Attempt} failed for character {CharacterId}; retrying", attempt, characterId);
                     await Task.Delay(DeleteRetryDelay * attempt).ConfigureAwait(false);
@@ -332,7 +315,7 @@ public sealed partial class SummonService
         {
             // Unfiltered: the queue slot must complete for every exception, or every later write and barrier of this character waits forever.
             // Only the fault recording skips OutOfMemoryException.
-            if (ex is not OutOfMemoryException && IsOwnershipRefusal(ex))
+            if (ex is not OutOfMemoryException && OwnershipRefusal.Find(ex) is not null)
             {
                 if (WritesRetired?.Invoke(characterId) == true)
                 {
@@ -473,7 +456,7 @@ public sealed partial class SummonService
         {
             // Unfiltered: the queue slot must complete for every exception, or every later write and barrier of this character waits forever.
             // This is the one place a save failure is recorded and logged; the callers below only observe or propagate it.
-            if (ex is not OutOfMemoryException and not OperationCanceledException && IsOwnershipRefusal(ex))
+            if (ex is not OutOfMemoryException and not OperationCanceledException && OwnershipRefusal.Find(ex) is not null)
             {
                 if (WritesRetired?.Invoke(snapshot.CharacterId) == true)
                 {
@@ -578,7 +561,7 @@ public sealed partial class SummonService
             {
                 await FlushCharacterAsync(characterId).ConfigureAwait(false);
             }
-            catch (Exception ex) when (WritesSealed?.Invoke() == true && IsOwnershipRefusal(ex))
+            catch (Exception ex) when (WritesSealed?.Invoke() == true && OwnershipRefusal.Find(ex) is not null)
             {
                 // The handoff never decided (its retirement did not reach this process, for example with the gateway link down) and the fence refuses the write: after the takeover it can never
                 // be written, so the stop names it in a warning instead of failing on a write the new owner has superseded.

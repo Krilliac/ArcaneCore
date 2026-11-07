@@ -5,8 +5,8 @@ using Xunit;
 namespace ArcaneCore.Data.Tests;
 
 /// <summary>
-/// The vmangos <c>conditions</c> shapes that <c>spell_script_target.conditionId</c> uses (vmangos Conditions.h:101 HEALTH_PERCENT 41, :195
-/// SOURCE_ENTRY 16, :217 OBJECT_IS_SPAWNED 48, :219 OBJECT_LOOT_STATE 49, :248 OBJECT_GO_STATE 55, CONDITION_AND -1), translated to the
+/// The vmangos <c>conditions</c> shapes that <c>spell_script_target.conditionId</c> uses (vmangos Conditions.h:101 SOURCE_ENTRY 16, :195
+/// HEALTH_PERCENT 41, :217 OBJECT_IS_SPAWNED 48, :219 OBJECT_LOOT_STATE 49, :248 OBJECT_GO_STATE 55, CONDITION_AND -1), translated to the
 /// term list the game reads. Written for the integration gate; not run in the lane.
 /// </summary>
 public sealed class SpellScriptTargetConditionTranslatorTests

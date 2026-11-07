@@ -1087,7 +1087,7 @@ public sealed partial class GroupManager(SocialContext context)
     }
 
     /// <summary>
-    /// The party the invite and accept rules see (vmangos HandleGroupInviteOpcode, GroupHandler.cpp:90-96).
+    /// The party the invite rules see (the two Invite callers; vmangos HandleGroupInviteOpcode, GroupHandler.cpp:90-96).
     /// A battleground raid yields to the parked original group, which is null when there is none; a player with no current group has none
     /// (invites never fall back to an original group when there is no group at all).
     /// </summary>

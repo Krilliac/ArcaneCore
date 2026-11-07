@@ -175,7 +175,7 @@ into a throwaway configuration (the live root is never reloaded: a broken file w
 on the world thread, so every reader sees the new value on its next read.
 - Live: `UpdateCompressionThreshold`, `AutosaveIntervalMs`, `CharactersPerRealm`, `Motd`,
   `ListenRange*`, `AllowTwoSideChat`, `AllowTwoSideWhoList`, `LogoutDelayMs`, `InstantLogoutSecurity`,
-  `GmLevelInWhoList`, `PlayerCommands`, `World:Maps:GridUnload`, `World:Maps:GridCleanUpDelayMs`,
+  `GmLevelInWhoList`, `PlayerCommands`, `LimitPlayTime` (a session registered while it was off starts its play clock at its first in-world tick after the switch), `CompressMovementCount` (read at each relayed movement packet), `ExpectedSpamRecords`, `World:Maps:GridUnload`, `World:Maps:GridCleanUpDelayMs`,
   `World:Maps:VisibilityRelocationLowerLimit` (read by `Map.OnObjectMoved` at each move),
   `World:Maps:UpdateActiveCellsOnly` (read by each continent map update),
   `World:Maps:GridActivationDistance` (`GridContainer` reads the shared `MapOptions` at each use; grids

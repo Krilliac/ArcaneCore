@@ -54,6 +54,46 @@ public sealed class PersistentPetWorldTests
         });
     }
 
+    [Fact]
+    public async Task Feature_WiresThePetWriteFenceToTheRetirementRegistry()
+    {
+        // PersistentPetFeature.Attach: WritesRetired asks the registry under the pet queue's name (counting each drop there), WritesSealed follows its seal.
+        var registry = new ArcaneCore.World.Persistence.CharacterRetirementRegistry();
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services =>
+        {
+            services.AddSingleton<IPersistentPetStore>(new MemoryPetStore());
+            services.AddSingleton(registry);
+        });
+        var pets = host.WorldServices.GetRequiredService<ArcaneCore.World.Pets.PetsFeature>();
+        Func<int, bool> retired = Assert.IsAssignableFrom<Func<int, bool>>(pets.Service.WritesRetired);
+        Func<bool> sealedNow = Assert.IsAssignableFrom<Func<bool>>(pets.Service.WritesSealed);
+
+        Assert.False(retired(42));
+        Assert.Equal(0, registry.DroppedCount("SummonService"));
+        registry.Retire([42]);
+        Assert.True(retired(42));
+        Assert.False(retired(43));
+        Assert.Equal(1, registry.DroppedCount("SummonService"));
+
+        Assert.False(sealedNow());
+        registry.Seal();
+        Assert.True(sealedNow());
+        registry.Unseal();
+        Assert.False(sealedNow());
+    }
+
+    [Fact]
+    public async Task Feature_WithNoRetirementRegistry_LeavesTheFenceSeamsNull()
+    {
+        // The test host does not register a registry (AddWorldDaemon does), so nothing is ever retired or sealed.
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services =>
+            services.AddSingleton<IPersistentPetStore>(new MemoryPetStore()));
+        var pets = host.WorldServices.GetRequiredService<ArcaneCore.World.Pets.PetsFeature>();
+
+        Assert.Null(pets.Service.WritesRetired);
+        Assert.Null(pets.Service.WritesSealed);
+    }
+
     private static async Task WithScopeAsync(WorldTestHost host, Func<AsyncServiceScope, Task> body)
     {
         await using AsyncServiceScope scope = host.WorldServices.CreateAsyncScope();

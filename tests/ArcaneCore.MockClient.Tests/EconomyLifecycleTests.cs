@@ -58,6 +58,7 @@ public sealed class EconomyLifecycleTests
             Assert.Equal(0u, request.Participants[0].Before.Money);
             Assert.Equal(MailMoney, request.Participants[0].After.Money);
             Assert.Equal(1, economy.Settlements.PendingCount);
+            Assert.Equal(new[] { id }, economy.SettlingCharacters); // the persistence barrier's open-character list names the economy actor
             Assert.True(saves.IsHeld(id));
             Assert.True(saves.IsQuarantined(id));
             await AssertStoredAsync(server, id, money: 0, mailMoney: MailMoney, token);

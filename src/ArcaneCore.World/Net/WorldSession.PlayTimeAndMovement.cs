@@ -23,6 +23,9 @@ public sealed partial class WorldSession
 {
     private const uint MovementIntervalMs = 10_000;
 
+    // The three play-clock fields below are written by the registering thread (InheritPlayTime) and by the world thread (CheckPlayTime's first tick), and read by whichever
+    // thread registers a replacing session (PlayedSeconds), so every access holds _playTimeGate. No other lock is taken while it is held.
+    private readonly object _playTimeGate = new();
     private bool _playTimeStarted;
     private long _playTimeStartMs;          // game ElapsedMs when the clock started (registration, or the first in-world tick)
     private uint _previousPlayedSeconds;    // carried in from an earlier session of the account
@@ -42,13 +45,16 @@ public sealed partial class WorldSession
     /// </summary>
     internal uint PlayedSeconds(long elapsedMs)
     {
-        if (!_playTimeStarted)
+        lock (_playTimeGate)
         {
-            return 0;
-        }
+            if (!_playTimeStarted)
+            {
+                return 0;
+            }
 
-        long seconds = _previousPlayedSeconds + Math.Max(0L, elapsedMs - _playTimeStartMs) / 1000;
-        return (uint)Math.Min(seconds, uint.MaxValue);
+            long seconds = _previousPlayedSeconds + Math.Max(0L, elapsedMs - _playTimeStartMs) / 1000;
+            return (uint)Math.Min(seconds, uint.MaxValue);
+        }
     }
 
     /// <summary>
@@ -64,17 +70,24 @@ public sealed partial class WorldSession
         }
 
         long now = World.Clock.ElapsedMs;
-        _previousPlayedSeconds = replaced is not null ? replaced.PlayedSeconds(now) : history.TakeCarry(AccountId, now);
-        _playTimeStartMs = now;
-        _playTimeStarted = true;
+        uint carried = replaced is not null ? replaced.PlayedSeconds(now) : history.TakeCarry(AccountId, now); // the other session's gate is taken before this one's, never inside it
+        lock (_playTimeGate)
+        {
+            _previousPlayedSeconds = carried;
+            _playTimeStartMs = now;
+            _playTimeStarted = true;
+        }
     }
 
     /// <summary>Called by <see cref="SessionRegistry.Unregister"/> for the session that still held its account: remember the total for the next login.</summary>
     internal void RecordPlayTime(AccountPlayHistory history)
     {
-        if (!_playTimeStarted)
+        lock (_playTimeGate)
         {
-            return;
+            if (!_playTimeStarted)
+            {
+                return;
+            }
         }
 
         long now = World.Clock.ElapsedMs;
@@ -93,10 +106,13 @@ public sealed partial class WorldSession
         }
 
         long now = World.Clock.ElapsedMs;
-        if (!_playTimeStarted)
+        lock (_playTimeGate)
         {
-            _playTimeStarted = true;
-            _playTimeStartMs = now;
+            if (!_playTimeStarted)
+            {
+                _playTimeStarted = true;
+                _playTimeStartMs = now;
+            }
         }
 
         uint played = PlayedSeconds(now);

@@ -5,6 +5,7 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Items;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Items;
@@ -570,6 +571,137 @@ public sealed class PlayerbotSummonWorldTests
             world.Bots.Summons.Drive(world.Session(helperBot.Id), world.Player(helperBot.Id), world.Options, null, 100));
         Assert.False(held, "the helper still holds still for a job that is gone");
         Assert.False(await world.OnWorldAsync(() => world.Bots.Summons.IsHelper(helperGuid)));
+    }
+
+    [Fact]
+    public async Task AStaleRitualJob_EndsTheSummonersChannel_WhenAnotherThinkDropsIt()
+    {
+        await using GroupTestWorld world = await StartAsync();
+        var warlock = await BotAsync(world, "Abandonlocka", Warlock, Camp, ritual: true, shards: 3);
+        var helperOne = await BotAsync(world, "Abandonhelpa", Warrior, Camp + new Vector3(4f, 4f, 0f));
+        var helperTwo = await BotAsync(world, "Abandonhelpb", Warrior, Camp + new Vector3(-4f, 4f, 0f));
+        await using WorldTestClient player = await world.World.EnterWorldAsync("ABANDONSTALE", "Abandonstale", AccountSecurity.Player);
+        await GroupAsync(world, "Abandonstale", warlock, helperOne, helperTwo);
+        await PlaceRealAsync(world, "Abandonstale", FarCamp);
+
+        SpellSystem spells = world.World.Services.GetRequiredService<SpellFeature>().System;
+        Func<SpellCastState?> state = () => spells.GetState(world.Player(warlock.Id).Guid)?.CurrentCast is { } cast && cast.Spell.Id == RitualSpell ? cast.State : null;
+        Assert.True(await world.RunUntilAsync(180_000, () => state() == SpellCastState.Casting
+            && world.Bots.Summons.JobOf(world.Player(warlock.Id).Guid)?.Cast is { Stage: TravelCastStage.Casting }), await world.TraceAsync());
+
+        // Another bot's think drops the job past its bound (the summoner no longer reaches Drive): Abandon stops the channel through the summoner's own session.
+        (SpellCastState? after, int active) = await world.OnWorldAsync(() =>
+        {
+            SummonJob job = world.Bots.Summons.JobOf(world.Player(warlock.Id).Guid)!;
+            world.Bots.Summons.DropStale(world.Session(helperOne.Id), job.StartMs + PlayerbotSummons.RitualMaxMs + PlayerbotSummons.StaleGraceMs + 1);
+            return (state(), world.Bots.Summons.Active);
+        });
+
+        Assert.NotEqual(SpellCastState.Casting, after);
+        Assert.Equal(0, active);
+    }
+
+    [Fact]
+    public async Task SwitchingSummonsOff_EndsARunningRitualChannel_AndClearsTheJobs()
+    {
+        await using GroupTestWorld world = await StartAsync();
+        var warlock = await BotAsync(world, "Abandonlockb", Warlock, Camp, ritual: true, shards: 3);
+        var helperOne = await BotAsync(world, "Abandonhelpc", Warrior, Camp + new Vector3(4f, 4f, 0f));
+        var helperTwo = await BotAsync(world, "Abandonhelpd", Warrior, Camp + new Vector3(-4f, 4f, 0f));
+        await using WorldTestClient player = await world.World.EnterWorldAsync("ABANDONOFF", "Abandonoff", AccountSecurity.Player);
+        await GroupAsync(world, "Abandonoff", warlock, helperOne, helperTwo);
+        await PlaceRealAsync(world, "Abandonoff", FarCamp);
+
+        SpellSystem spells = world.World.Services.GetRequiredService<SpellFeature>().System;
+        Func<SpellCastState?> state = () => spells.GetState(world.Player(warlock.Id).Guid)?.CurrentCast is { } cast && cast.Spell.Id == RitualSpell ? cast.State : null;
+        Assert.True(await world.RunUntilAsync(180_000, () => state() == SpellCastState.Casting
+            && world.Bots.Summons.JobOf(world.Player(warlock.Id).Guid)?.Cast is { Stage: TravelCastStage.Casting }), await world.TraceAsync());
+
+        // The next think of any grouped bot finds the option off and clears the table (Clear abandons each job).
+        await world.OnWorldAsync(() =>
+        {
+            world.Options.Summon.Enabled = false;
+            return true;
+        });
+        Assert.True(await world.RunUntilAsync(10_000, () => world.Bots.Summons.Active == 0 && state() != SpellCastState.Casting), await world.TraceAsync());
+    }
+
+    /// <summary>Each helper counts its own clicks on the portal: both click, and neither goes past the twelve a job allows.</summary>
+    [Fact]
+    public async Task EachHelperAtThePortal_ClicksForItself_AtLeastOnce_AndNeverMoreThanTwelveTimes()
+    {
+        await using GroupTestWorld world = await StartAsync();
+        var warlock = await BotAsync(world, "Clicklock", Warlock, Camp, ritual: true, shards: 3);
+        var helperOne = await BotAsync(world, "Clickhelpa", Warrior, Camp + new Vector3(4f, 4f, 0f));
+        var helperTwo = await BotAsync(world, "Clickhelpb", Warrior, Camp + new Vector3(-4f, 4f, 0f));
+        var far = await BotAsync(world, "Clickfar", Warrior, FarCamp);
+        await using WorldTestClient anchor = await world.World.EnterWorldAsync("SUMMONANCHOR", "Summonanchor", AccountSecurity.Player);
+        await GroupAsync(world, "Summonanchor", warlock, helperOne, helperTwo, far);
+
+        Assert.True(await world.RunUntilAsync(180_000, () => world.Bots.Summons.Accepted >= 1), await world.TraceAsync());
+
+        (int one, int two) = await world.OnWorldAsync(() =>
+            (world.Bots.Summons.ClicksOf(world.Player(helperOne.Id).Guid), world.Bots.Summons.ClicksOf(world.Player(helperTwo.Id).Guid)));
+        Assert.InRange(one, 1, 12);
+        Assert.InRange(two, 1, 12);
+        Assert.Equal(0, await world.OnWorldAsync(() => world.Bots.Summons.ClicksOf(world.Player(far.Id).Guid))); // the target never helps
+    }
+
+    /// <summary>
+    /// The stone list of a map is scanned once and used for a minute (<c>StoneScanMs</c>): a stone that appears after the scan is not found until the
+    /// next one, and then it is, so the cache neither goes stale for good nor is rebuilt on every think.
+    /// </summary>
+    [Fact]
+    public async Task TheStoneListOfAMap_IsCachedForAMinute_ThenScannedAgain()
+    {
+        await using GroupTestWorld world = await StartAsync(options => options.Summon.MeetingStones = true, stone: false);
+        var userOne = await BotAsync(world, "Stonecachea", Warrior, Camp + new Vector3(6f, 3f, 0f));
+        var userTwo = await BotAsync(world, "Stonecacheb", Warrior, Camp + new Vector3(6f, -3f, 0f));
+        var far = await BotAsync(world, "Stonecachec", Warrior, FarCamp);
+        await using WorldTestClient anchor = await world.World.EnterWorldAsync("SUMMONANCHOR", "Summonanchor", AccountSecurity.Player);
+        await GroupAsync(world, "Summonanchor", userOne, userTwo, far);
+        Map map = await world.OnWorldAsync(() => world.Player(userOne.Id).Map!);
+
+        // The first think that looks for a stone scans the map: none there.
+        Assert.True(await world.RunUntilAsync(60_000, () => world.Bots.Summons.StonesCached(map) == 0), await world.TraceAsync());
+        await world.OnWorldAsync(() => map.FindUpdater<GameObjectMapSystem>()!.Summon(StoneEntry, Camp.X + 6f, Camp.Y, Camp.Z, 0) is not null);
+
+        // Within the minute the cached (empty) list is used, so the new stone is not found and nobody is summoned.
+        await world.RunAsync(30_000);
+        Assert.Equal(0, world.Bots.Summons.StonesCached(map));
+        Assert.Equal(0, world.Bots.Summons.Started);
+
+        // After the minute the map is scanned again and the stone is found; the two bots beside it summon the far member.
+        Assert.True(await world.RunUntilAsync(120_000, () => world.Bots.Summons.StonesCached(map) == 1), await world.TraceAsync());
+        Assert.True(await world.RunUntilAsync(120_000, () => world.Bots.Summons.Started >= 1), await world.TraceAsync());
+    }
+
+    /// <summary>A helper that left the world is taken off the job by any other bot's think (DropGoneHelpers), so it stops filling a place of the job.</summary>
+    [Fact]
+    public async Task AHelperWhoLogsOutMidJob_IsTakenOffTheJob_ByAnotherBotsThink_WhileTheJobGoesOn()
+    {
+        await using GroupTestWorld world = await StartAsync(stone: true);
+        var userOne = await BotAsync(world, "Stonegonea", Warrior, Camp + new Vector3(6f, 3f, 0f));
+        var userTwo = await BotAsync(world, "Stonegoneb", Warrior, Camp + new Vector3(6f, -3f, 0f));
+        var far = await BotAsync(world, "Stonegonec", Warrior, FarCamp);
+        await using WorldTestClient anchor = await world.World.EnterWorldAsync("SUMMONANCHOR", "Summonanchor", AccountSecurity.Player);
+        await GroupAsync(world, "Summonanchor", userOne, userTwo, far);
+        Assert.True(await world.RunUntilAsync(180_000, () => world.Bots.Summons.Active >= 1), await world.TraceAsync());
+        string summonerName = await world.OnWorldAsync(() =>
+            world.Bots.Summons.JobOf(world.Player(userOne.Id).Guid) is not null ? userOne.Name : userTwo.Name);
+        string helperName = summonerName == userOne.Name ? userTwo.Name : userOne.Name;
+        Assert.True(await world.RunUntilAsync(60_000, () => world.Bots.Summons.IsHelper(world.World.Host.World.FindOnlinePlayer(helperName)!.Guid)), await world.TraceAsync());
+        ObjectGuid helperGuid = await world.OnWorldAsync(() => world.World.Host.World.FindOnlinePlayer(helperName)!.Guid);
+
+        await world.OnWorldAsync(() =>
+        {
+            world.World.Host.World.LogoutPlayer(world.World.Host.World.FindOnlinePlayer(helperName)!);
+            return true;
+        });
+
+        // The helper no longer thinks; the summoner's and the target's thinks drop it from the job well inside the job's time bound.
+        Assert.True(await world.RunUntilAsync(20_000, () => !world.Bots.Summons.IsHelper(helperGuid)), await world.TraceAsync());
+        Assert.Equal(1, world.Bots.Summons.Active);
     }
 
     /// <summary>A far-since entry that was not looked at while the picks were gated starts over, so the 10 s debounce is not skipped when the gate lifts.</summary>

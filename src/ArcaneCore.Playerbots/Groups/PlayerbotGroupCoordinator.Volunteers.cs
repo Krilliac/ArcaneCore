@@ -77,6 +77,13 @@ public sealed partial class PlayerbotGroupCoordinator
     /// <summary>One volunteer: the bot asked, the goal's key, when the volunteering lapses (world ms) and the role the player stated and its class can play (null: none stated).</summary>
     private readonly record struct VolunteerEntry(Guid Bot, (PlayerbotGroupGoalKind, uint) Key, uint Until, PlayerbotGroupRole? Role);
 
+    /// <summary>A refusal that keeps nothing: a volunteering noted earlier is dropped too, so a later Match cannot act on a request the player has since been told cannot be placed.</summary>
+    private PlayerbotVolunteerResult Forgotten(Player player, PlayerbotVolunteerResult refusal)
+    {
+        _volunteers.Remove(player.Guid);
+        return refusal;
+    }
+
     /// <summary>
     /// World thread: <paramref name="player"/> asked <paramref name="botId"/>, which waits for partners, for an invitation. Ready when a
     /// dry-run match over the bot's real candidates includes the player (the group then forms at once); Noted, with the true number the
@@ -113,7 +120,7 @@ public sealed partial class PlayerbotGroupCoordinator
         if (goal.InInstance)
         {
             (Guid BotId, Waiting Waiting) anchor = sameGoal.Where(w => w.Waiting.Goal.Anchors).OrderBy(w => w.Waiting.SinceMs, PlayerbotGroupContent.SinceOrder).FirstOrDefault();
-            if (anchor.Waiting is null) return new(PlayerbotVolunteerOutcome.CannotPlace);
+            if (anchor.Waiting is null) return Forgotten(player, new(PlayerbotVolunteerOutcome.CannotPlace));
             goal = anchor.Waiting.Goal;
         }
 
@@ -125,7 +132,7 @@ public sealed partial class PlayerbotGroupCoordinator
 
         int size = sameGoal.Max(w => w.Waiting.Goal.Size);
         List<PlayerbotGroupCandidate> candidates = BuildCandidates(sameGoal, goal);
-        if (!CanReach(player, goal) || !candidates.Exists(c => c.BotId == botId)) return new(PlayerbotVolunteerOutcome.CannotPlace);
+        if (!CanReach(player, goal) || !candidates.Exists(c => c.BotId == botId)) return Forgotten(player, new(PlayerbotVolunteerOutcome.CannotPlace));
         if (PlanForVolunteer(player, candidates, size, goal, botId, role) is { } plan && (!goal.InInstance || PlanAnchored(plan)))
         {
             // A group with a real player takes no slot from the bots' cap: it forms now and the leader invites on the forming ticks.
@@ -137,7 +144,7 @@ public sealed partial class PlayerbotGroupCoordinator
         // A player more than the level range above every waiting bot is placed in no window of them: say so instead of the general refusal.
         int highest = 0;
         foreach (PlayerbotGroupCandidate candidate in candidates) highest = Math.Max(highest, candidate.Level);
-        if (player.Level > highest + _options.Groups.LevelRange) return new(PlayerbotVolunteerOutcome.LevelHigh, Level: highest + _options.Groups.LevelRange);
+        if (player.Level > highest + _options.Groups.LevelRange) return Forgotten(player, new(PlayerbotVolunteerOutcome.LevelHigh, Level: highest + _options.Groups.LevelRange));
 
         // The dry run came first: the role answer is for a player the coordinator could not place (a dual-role bot may tank or heal, so the roles are only counted once placing failed).
         // It is given only when the role is the true reason: a stand-in of the missing role's class, with the player's level and position, must be placeable where the player is not.
@@ -162,7 +169,7 @@ public sealed partial class PlayerbotGroupCoordinator
         }
 
         // Too few bots is the one reason that time can mend; any other (the level range, the roles) is not promised away.
-        if (candidates.Count + 1 >= size) return new(PlayerbotVolunteerOutcome.CannotPlace);
+        if (candidates.Count + 1 >= size) return Forgotten(player, new(PlayerbotVolunteerOutcome.CannotPlace));
         uint now = Now;
         if (_volunteers.Count >= MaxVolunteers)
         {
