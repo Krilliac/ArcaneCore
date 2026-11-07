@@ -101,6 +101,7 @@ public sealed class SpellGoGateTests
         (Player player, FakeSession session) = kit.AddPlayer(1);
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(player, Invisible, SpellCastTargets.ForSelf(), triggered: false));
+        kit.Advance(kit.System.SpellBatchWindowMs); // a non-triggered cast is held to the batch boundary when the run batches (the CI lane)
 
         Assert.Equal(1, SpellGoCount(session, Invisible));
     }
