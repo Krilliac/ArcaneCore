@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 using Xunit;
@@ -92,9 +93,18 @@ public sealed class MovementCompressionTests
         return writer.ToArray();
     }
 
-    private static async Task<(WorldTestHost Host, WorldTestClient Mover, WorldTestClient Watcher)> StartAsync(int count)
+    /// <summary>
+    /// Two sessions that see each other, with the batch threshold at <paramref name="count"/>. With <paramref name="instantLogout"/> an
+    /// ordinary player's CMSG_LOGOUT_REQUEST is answered at once instead of after the 20 s countdown (LogoutHandlers: resting, taxi or
+    /// <c>World:InstantLogoutSecurity</c>), which the logout test needs: on the real clock nothing advances the countdown.
+    /// </summary>
+    private static async Task<(WorldTestHost Host, WorldTestClient Mover, WorldTestClient Watcher)> StartAsync(int count, bool instantLogout = false)
     {
-        WorldTestHost host = WorldTestHost.Start(configure: o => o.CompressMovementCount = count);
+        WorldTestHost host = WorldTestHost.Start(configure: o =>
+        {
+            o.CompressMovementCount = count;
+            if (instantLogout) o.InstantLogoutSecurity = AccountSecurity.Player;
+        });
         WorldTestClient mover = await host.EnterWorldAsync("MVMOVER", "Mvmover");
         WorldTestClient watcher = await host.EnterWorldAsync("MVWATCH", "Mvwatcher");
         await mover.CollectAsync();
@@ -161,7 +171,7 @@ public sealed class MovementCompressionTests
     [Fact]
     public async Task AfterTheWatcherLogsOutAndInAgain_TheIntervalCountsStartOver_AndTheFirstRelayIsPlain()
     {
-        (WorldTestHost host, WorldTestClient mover, WorldTestClient watcher) = await StartAsync(count: 2);
+        (WorldTestHost host, WorldTestClient mover, WorldTestClient watcher) = await StartAsync(count: 2, instantLogout: true);
         await using (host)
         await using (mover)
         await using (watcher)
