@@ -49,6 +49,14 @@ public sealed class EfAccountStore(AuthDbContext db, AccountStatusEvents? events
         return true;
     }
 
+    public async Task<bool> DeleteAsync(string username, CancellationToken cancellationToken = default)
+    {
+        string normalized = username.ToUpperInvariant();
+        int removed = await db.Accounts.Where(a => a.Username == normalized)
+            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        return removed > 0;
+    }
+
     public async Task<IReadOnlyDictionary<int, string>> GetUsernamesAsync(
         IReadOnlyCollection<int> accountIds, CancellationToken cancellationToken = default)
     {

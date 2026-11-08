@@ -110,11 +110,14 @@ public static class WorldConfigKeys
         LiveNonNegative("AccountDataWriteIntervalMs", o => o.AccountDataWriteIntervalMs, (o, v) => o.AccountDataWriteIntervalMs = v),
         LiveNonNegative("CharactersPerRealm", o => o.CharactersPerRealm, (o, v) => o.CharactersPerRealm = v),
         Live("Motd", o => o.Motd, (o, v) => o.Motd = v),
+        Live("ExpectedSpamRecords", o => o.ExpectedSpamRecords, (o, v) => o.ExpectedSpamRecords = v),
         LiveNonNegative("ListenRangeSay", o => o.ListenRangeSay, (o, v) => o.ListenRangeSay = v),
         LiveNonNegative("ListenRangeYell", o => o.ListenRangeYell, (o, v) => o.ListenRangeYell = v),
         LiveNonNegative("ListenRangeTextEmote", o => o.ListenRangeTextEmote, (o, v) => o.ListenRangeTextEmote = v),
         Live("AllowTwoSideChat", o => o.AllowTwoSideChat, (o, v) => o.AllowTwoSideChat = v),
         Live("AllowTwoSideWhoList", o => o.AllowTwoSideWhoList, (o, v) => o.AllowTwoSideWhoList = v),
+        Live("LimitPlayTime", o => o.LimitPlayTime, (o, v) => o.LimitPlayTime = v),
+        LiveNonNegative("CompressMovementCount", o => o.CompressMovementCount, (o, v) => o.CompressMovementCount = v),
         Live("LogoutDelayMs", o => o.LogoutDelayMs, (o, v) => o.LogoutDelayMs = v),
         Live("InstantLogoutSecurity", o => o.InstantLogoutSecurity, (o, v) => o.InstantLogoutSecurity = v, DefinedSecurity),
         Live("GmLevelInWhoList", o => o.GmLevelInWhoList, (o, v) => o.GmLevelInWhoList = v, DefinedSecurity),
@@ -327,6 +330,10 @@ public static class WorldConfigKeys
         LivePlayerbotsValue("Chat:Voice:QuestHelpRepeatSeconds", o => o.Chat.Voice.QuestHelpRepeatSeconds, (o, v) => o.Chat.Voice.QuestHelpRepeatSeconds = v, v => v is >= 60 and <= 86400 ? null : "must be 60..86400"),
         LivePlayerbots("Chat:Voice:AnswerPosts", o => o.Chat.Voice.AnswerPosts, (o, v) => o.Chat.Voice.AnswerPosts = v),
         LivePlayerbotsValue("Chat:Voice:PostLifeSeconds", o => o.Chat.Voice.PostLifeSeconds, (o, v) => o.Chat.Voice.PostLifeSeconds = v, v => v is >= 60 and <= 3600 ? null : "must be 60..3600"),
+        // Not vmangos keys: the bot LFG talk (docs/areas/playbots.md, Bot voice). PlayerbotNeedsVoice reads the shared PlayerbotOptions.Chat.Lfg at every heard line.
+        LivePlayerbots("Chat:Lfg:Enabled", o => o.Chat.Lfg.Enabled, (o, v) => o.Chat.Lfg.Enabled = v),
+        LivePlayerbotsValue("Chat:Lfg:AnswerRepeatSeconds", o => o.Chat.Lfg.AnswerRepeatSeconds, (o, v) => o.Chat.Lfg.AnswerRepeatSeconds = v, v => v is >= 10 and <= 600 ? null : "must be 10..600"),
+        LivePlayerbotsValue("Chat:Lfg:MaxTrackedVolunteers", o => o.Chat.Lfg.MaxTrackedVolunteers, (o, v) => o.Chat.Lfg.MaxTrackedVolunteers = v, v => v is >= 8 and <= 512 ? null : "must be 8..512"),
         // Not vmangos keys: bots grouping up for group content (docs/areas/playbots-groups.md). PlayerbotGroupCoordinator reads the
         // shared PlayerbotOptions.Groups at every decision.
         LivePlayerbots("Groups:Enabled", o => o.Groups.Enabled, (o, v) => o.Groups.Enabled = v),
@@ -447,6 +454,14 @@ public static class WorldConfigKeys
             (o, v) => o.Groups.WorldBosses.IncludedEntries = v, PlayerbotWorldBossOptions.CheckIncluded),
         LivePlayerbotsValue("Groups:WorldBosses:ExcludedEntries", o => o.Groups.WorldBosses.ExcludedEntries,
             (o, v) => o.Groups.WorldBosses.ExcludedEntries = v, PlayerbotWorldBossOptions.CheckExcluded),
+
+        // Summons (docs/areas/playbots-groups.md): the bots' Ritual of Summoning, the meeting-stone summon and the acceptance, read at each decision.
+        LivePlayerbots("Summon:Enabled", o => o.Summon.Enabled, (o, v) => o.Summon.Enabled = v),
+        LivePlayerbots("Summon:MeetingStones", o => o.Summon.MeetingStones, (o, v) => o.Summon.MeetingStones = v),
+        LivePlayerbotsValue("Summon:FarYards", o => o.Summon.FarYards, (o, v) => o.Summon.FarYards = v, PlayerbotSummonOptions.CheckFarYards),
+        LivePlayerbotsValue("Summon:RetrySeconds", o => o.Summon.RetrySeconds, (o, v) => o.Summon.RetrySeconds = v, PlayerbotSummonOptions.CheckRetrySeconds),
+        LivePlayerbotsValue("Summon:HelperYards", o => o.Summon.HelperYards, (o, v) => o.Summon.HelperYards = v, PlayerbotSummonOptions.CheckHelperYards),
+        LivePlayerbots("Summon:AnnounceToPlayers", o => o.Summon.AnnounceToPlayers, (o, v) => o.Summon.AnnounceToPlayers = v),
 
         // Following and catch-up (docs/areas/playbots.md): a follower reads the shared object at each decision.
         LivePlayerbotsValue("Follow:CatchUpMode", o => o.Follow.CatchUpMode, (o, v) => o.Follow.CatchUpMode = v, PlayerbotFollowOptions.CheckMode),
@@ -834,6 +849,8 @@ public static class WorldConfigKeys
             v => v is >= 0 and <= PlayerbotEconomyOptions.MaxListingsCeiling ? null : $"must be 0..{PlayerbotEconomyOptions.MaxListingsCeiling}"),
         LivePlayerbotsValue("Economy:BuyUpgradeBudgetFraction", o => o.Economy.BuyUpgradeBudgetFraction, (o, v) => o.Economy.BuyUpgradeBudgetFraction = v,
             v => float.IsFinite(v) && v is >= 0f and <= 1f ? null : "must be 0..1"),
+        LivePlayerbotsValue("Economy:UpgradeSlotSearches", o => o.Economy.UpgradeSlotSearches, (o, v) => o.Economy.UpgradeSlotSearches = v,
+            v => v is >= 0 and <= PlayerbotEconomyOptions.MaxUpgradeSearches ? null : $"must be 0..{PlayerbotEconomyOptions.MaxUpgradeSearches}"),
         LivePlayerbotsValue("Economy:VisitIntervalMinutes", o => o.Economy.VisitIntervalMinutes, (o, v) => o.Economy.VisitIntervalMinutes = v,
             v => v is >= 1 and <= PlayerbotEconomyOptions.MaxVisitIntervalMinutes ? null : $"must be 1..{PlayerbotEconomyOptions.MaxVisitIntervalMinutes}"),
         LivePlayerbots("Economy:BankDeposit", o => o.Economy.BankDeposit, (o, v) => o.Economy.BankDeposit = v),
@@ -863,6 +880,22 @@ public static class WorldConfigKeys
             v => v is >= 100 and <= 100000 ? null : "must be 100..100000"),
         LivePlayerbotsValue("Economy:BuyBelowAskPercent", o => o.Economy.BuyBelowAskPercent, (o, v) => o.Economy.BuyBelowAskPercent = v,
             v => v is >= 1 and <= 99 ? null : "must be 1..99"),
+        // Not vmangos keys: bot trips to the capital cities (docs/areas/playbots-city.md). The capital goals read the shared
+        // PlayerbotOptions.City at every decision.
+        LivePlayerbots("City:Enabled", o => o.City.Enabled, (o, v) => o.City.Enabled = v),
+        LivePlayerbotsValue("City:VisitIntervalMinutes", o => o.City.VisitIntervalMinutes, (o, v) => o.City.VisitIntervalMinutes = v,
+            v => v is >= 1 and <= PlayerbotCityOptions.MaxVisitIntervalMinutes ? null : $"must be 1..{PlayerbotCityOptions.MaxVisitIntervalMinutes}"),
+        LivePlayerbotsValue("City:MinGoldForAuctionTrip", o => o.City.MinGoldForAuctionTrip, (o, v) => o.City.MinGoldForAuctionTrip = v,
+            v => v is >= 0 and <= PlayerbotCityOptions.MaxMinGoldForAuctionTrip ? null : $"must be 0..{PlayerbotCityOptions.MaxMinGoldForAuctionTrip}"),
+        LivePlayerbots("City:BindInCapital", o => o.City.BindInCapital, (o, v) => o.City.BindInCapital = v),
+        LivePlayerbotsValue("City:MaxTripYards", o => o.City.MaxTripYards, (o, v) => o.City.MaxTripYards = v,
+            v => float.IsFinite(v) && v > 0f && v <= PlayerbotCityOptions.MaxTripYardsCeiling ? null : $"must be above 0 and at most {PlayerbotCityOptions.MaxTripYardsCeiling}"),
+        LivePlayerbotsValue("City:MinLevel", o => o.City.MinLevel, (o, v) => o.City.MinLevel = v,
+            v => v is >= 1 and <= PlayerbotCityOptions.MaxMinLevel ? null : $"must be 1..{PlayerbotCityOptions.MaxMinLevel}"),
+        LivePlayerbotsValue("City:MaxTripsPerCapital", o => o.City.MaxTripsPerCapital, (o, v) => o.City.MaxTripsPerCapital = v,
+            v => v is >= 1 and <= 1000 ? null : "must be 1..1000"),
+        LivePlayerbotsValue("City:MaxStartsPerMinute", o => o.City.MaxStartsPerMinute, (o, v) => o.City.MaxStartsPerMinute = v,
+            v => v is >= 1 and <= 600 ? null : "must be 1..600"),
         // Not vmangos keys: how bots plan their money and ride (docs/areas/playbots-economy.md). PlayerbotBudget and PlayerbotMount read the
         // shared PlayerbotOptions.Budget / Mounts at every decision.
         LivePlayerbots("Budget:Enabled", o => o.Budget.Enabled, (o, v) => o.Budget.Enabled = v),

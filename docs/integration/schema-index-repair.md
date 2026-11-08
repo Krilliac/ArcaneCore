@@ -105,7 +105,7 @@ upgrade to Characters 11 refuses to start and names the table and index. On SQLi
 
 All tests are in `tests/ArcaneCore.Data.Tests` (xunit). SQLite runs everywhere; MariaDB and PostgreSQL run
 where `ARCANECORE_TEST_MARIADB` / `ARCANECORE_TEST_POSTGRES` are set (hosted CI sets them). The interrupted-startup
-theories of `SchemaStartupResilienceTests` run the injected faults of one case `ARCANECORE_TEST_FAULT_PARALLELISM` at a
+theories of `SchemaStartupResilienceTestBase` (shared by `SchemaStartupResilienceTests`, the `SchemaStartupResilienceFreshCreateShare*Tests` and the `SchemaStartupResilienceUpgradeSlice*Tests` classes) run the injected faults of one case `ARCANECORE_TEST_FAULT_PARALLELISM` at a
 time (default 4; anything that is not a positive integer means 4), each against its own database, dropped as soon as
 its fault is checked. Measured timings are in `wave4-integration.md` (Verification).
 
@@ -113,7 +113,7 @@ its fault is checked. Measured timings are in `wave4-integration.md` (Verificati
   and of the EF model; a populated frozen baseline upgrades with every row preserved and model index and column parity;
   the repaired database enforces one guild per character and one auction per item; duplicates fail closed with
   rows kept; table names are distinct across components.
-- `SchemaStartupResilienceTests`: an interruption after every DDL statement of every upgrade step and of a fresh create
+- `SchemaStartupResilienceTests` and its share/slice classes: an interruption after every DDL statement of every upgrade step and of a fresh create
   (and before the version write) resumes on restart; the database the previous bootstrapper left (tables, empty
   version table) resumes; two concurrent starts on a fresh database and on the populated baseline serialize (exactly one
   issues DDL); repeated starts issue no DDL; a complete database whose version row is behind converges without losing rows.

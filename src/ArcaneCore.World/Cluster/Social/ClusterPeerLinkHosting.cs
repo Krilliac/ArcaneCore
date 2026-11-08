@@ -35,7 +35,7 @@ public sealed class PeerLinkRuntime
 /// The production wiring of the peer link for realm presence (cluster mode only, i.e. with a <see cref="RealmAuthorityLeaseKeeper"/>): every node runs one
 /// <see cref="PeerLinkClient"/> (located through the lease store and <c>Cluster:Peer:Nodes</c> or <c>Cluster:Peer:Endpoints</c>, so it dials the Social holder and never itself), and the node that holds the
 /// Social or Economy lease also runs a <see cref="PeerLinkHost"/> on <c>Cluster:Peer:BindAddress:Port</c> whose <see cref="PeerLinkHost.PayloadHandler"/> is
-/// <see cref="PresenceHolderService.Handle"/>. A small poll loop (every <see cref="PeerLinkOptions.HolderPollMs"/>) starts the host when the lease is gained and disposes it when the
+/// <see cref="PresenceHolderService.Handle"/> (group requests at a node without the Social lease are answered "not the holder"). A small poll loop (every <see cref="PeerLinkOptions.HolderPollMs"/>) starts the host when the lease is gained and disposes it when the
 /// lease is lost, so a failover moves the listener with the lease. Nothing starts without the secret in <see cref="PeerLinkOptions.SecretEnvironmentVariable"/> and valid
 /// <c>Cluster:Peer</c> options: the node then logs a warning and cross-worker presence stays unavailable (the publisher keeps retrying).
 /// <para>Thread affinity: none; the poll loop and the link tasks run on the thread pool. Ownership: this service owns the client, the host and the poll task and disposes them in StopAsync.</para>
@@ -113,6 +113,7 @@ public sealed class PeerLinkHostedService(
                     var host = new PeerLinkHost(options, secret, manifest, leases, loggers.CreateLogger<PeerLinkHost>())
                     {
                         PayloadHandler = holder.Handle,
+                        RememberAnswer = PresenceHolderService.RememberAnswer,
                     };
                     host.Start();
                     _host = host;

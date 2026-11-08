@@ -25,6 +25,9 @@ public sealed class TotemContent
 
     public int Count => _spellByCreature.Count;
 
+    /// <summary>The creature entries that have a row, in no particular order.</summary>
+    public IEnumerable<uint> Entries => _spellByCreature.Keys;
+
     /// <summary>The totem's spell, or null when the creature has none (e.g. Sentry Totem 3968).</summary>
     public uint? GetSpell(uint creatureEntry) => _spellByCreature.TryGetValue(creatureEntry, out uint spell) ? spell : null;
 }

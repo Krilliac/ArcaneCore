@@ -7,10 +7,14 @@
 //   openClientFilesSettings()      opens the settings panel (Change folder / Forget folder / cache budget)
 //   clientFilesStatus()            -> {state, folderName, build, version, warnings, cacheBytes, cacheBudgetBytes, archiveReads, cacheHits, error}
 //   localTileProvider()            -> {tile(layer, map, x, y, signal) -> {state, detail, body}}
+//   localModelProvider()           -> {model(kind, path, {signal}) -> Promise<object>}  the parsed M2 / WMO root / WMO group file (m2.js, wmo.js)
+//   localTextureProvider()         -> {texture(key, {signal}) -> Promise<Uint8Array>}  ATX1 bytes of a baked `cft:` terrain texture
+//   onClientFilesChanged(listener) -> unsubscribe  listener() runs when a folder was opened (picked or re-allowed) or forgotten
 //
 // States: none (no choice yet), skipped, needs-permission (a stored handle waits for one click), ready, error.
 // Thread affinity: page thread only; parsing runs in the Workers of pool.js.
 
+import { LAYER_TERRAIN_TEX } from './terrain-tex.js';
 import { createFirstEntryDialog, createReallowBanner, createSettingsPanel, openFolderInput } from './dialog.js';
 import { ClientFsError } from './limits.js';
 import { WorkerPool, poolSizeFor } from './pool.js';
@@ -25,6 +29,8 @@ export const ERROR_BLOCKED = 'Your browser blocked access - click Re-allow';
 const STATES = ['Ok', 'Empty', 'Missing', 'Rejected', 'NotApplicable'];
 const CACHEABLE = new Set(['Ok', 'Empty', 'Missing']);
 const KEY_VERSION = 'tile/v1';
+const TEXTURE_KEY_VERSION = 'texture/v1';
+const TEXTURE_LRU_BYTES = 96 * 1024 * 1024;
 
 const model = {
     state: 'none',
@@ -44,6 +50,8 @@ const model = {
 };
 
 const lru = new LruCache();
+const textureLru = new LruCache(TEXTURE_LRU_BYTES); // baked terrain textures live in memory only, never in OPFS
+const textureInflight = new Map();
 const opfs = new OpfsCache(() => model.budget);
 const inflight = new Map();
 let pool = null;
@@ -52,10 +60,29 @@ let banner = null;
 let settings = null;
 let waiters = [];
 let declined = false; // Skip / Not now / closing the dialog this session: later cache misses resolve false without any UI
+let persisting = Promise.resolve(); // the running store of a validated pick, awaited by Forget folder before it deletes
 let generation = 0; // bumped by Forget folder so a pick that is still validating cannot store its folder afterwards
 
 const spawn = () => new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
 const getPool = () => (pool ??= new WorkerPool({ size: poolSizeFor(navigator.hardwareConcurrency), spawn }));
+
+const changeListeners = new Set();
+
+/** Calls `listener()` whenever the visitor opened a folder (picked one or re-allowed the stored one) or forgot it. @returns {() => void} unsubscribe */
+export function onClientFilesChanged(listener) {
+    changeListeners.add(listener);
+    return () => changeListeners.delete(listener);
+}
+
+function notifyChanged() {
+    for (const listener of [...changeListeners]) {
+        try {
+            listener();
+        } catch {
+            // a listener that throws must not stop the others or the reader
+        }
+    }
+}
 
 function resolveWaiters(value) {
     const list = waiters;
@@ -150,16 +177,27 @@ async function finishPick(scan, handle, started) {
         }
         const archives = scan.archives.map(({ name, size, lastModified }) => ({ name, size, lastModified }));
         const meta = { choice: 'folder', kind: scan.kind, folderName: scan.name, build: result.build, version: result.version, warnings: result.warnings, archives };
-        if (handle) {
-            await dbPut('handles', HANDLE_KEY, handle);
-        } else {
-            await dbDelete('handles', HANDLE_KEY);
+        // The writes are tracked in `persisting`: a Forget folder that lands while they run waits for them before it deletes, so the
+        // folder it forgets can never be stored after the delete. The generation is re-checked once they are done, because Forget
+        // has already reset the model and a late pick must not turn it back to ready.
+        const write = (async () => {
+            if (handle) {
+                await dbPut('handles', HANDLE_KEY, handle);
+            } else {
+                await dbDelete('handles', HANDLE_KEY);
+            }
+            await dbPut('meta', META_KEY, meta);
+        })();
+        persisting = write.then(() => undefined, () => undefined);
+        await write;
+        if (started !== generation) {
+            return;
         }
-        await dbPut('meta', META_KEY, meta);
         Object.assign(model, { state: 'ready', error: null, kind: scan.kind, handle: handle ?? null, folder: scan, folderName: scan.name, build: result.build, version: result.version, warnings: result.warnings, archives });
         declined = false;
         closeDialog();
         resolveWaiters(true);
+        notifyChanged();
     } catch (error) {
         if (started === generation) {
             dialog?.setError(error instanceof ClientFsError ? error.message : `Could not read the folder: ${error?.message ?? error}`);
@@ -259,6 +297,7 @@ function showBanner() {
                     banner?.close();
                     banner = null;
                     resolveWaiters(true);
+                    notifyChanged();
                 } else {
                     banner?.setError(model.error);
                 }
@@ -314,10 +353,13 @@ async function forgetNow() {
     pool = null;
     inflight.clear();
     Object.assign(model, { state: 'none', folderName: '', build: null, version: null, warnings: [], error: null, kind: null, handle: null, folder: null, archives: [], cacheHits: 0 });
+    await persisting;
     await dbDelete('handles', HANDLE_KEY);
     await dbDelete('meta', META_KEY);
     lru.clear();
+    textureLru.clear();
     await opfs.clear();
+    notifyChanged();
 }
 
 export async function openClientFilesSettings() {
@@ -442,8 +484,36 @@ function waitForFiles() {
     return new Promise((resolve) => waiters.push(resolve));
 }
 
+/**
+ * Asks the visitor for the folder without waiting for the answer (the dialog, or the Re-allow banner for a stored handle). Does
+ * nothing once they declined or while a folder is open. The answer arrives as onClientFilesChanged.
+ */
+function promptForFiles() {
+    if (model.folder !== null || declined) {
+        return;
+    }
+    if (model.state === 'needs-permission') {
+        showBanner();
+    } else {
+        openClientFilesDialog();
+    }
+}
+
+/**
+ * Whether serving this layer's tile needs the live folder before anything else. A textured terrain tile is only useful together with
+ * its baked textures, which exist only while the folder is open (they are never cached), so a cached textured tile without a live
+ * folder would draw every chunk with the missing-texture checker and never prompt the visitor.
+ */
+export const needsLiveFolder = (layer, folder) => layer === LAYER_TERRAIN_TEX && folder === null;
+
 /** The cache-owned result (shared by every caller of the same tile); localTileProvider copies the body once per caller. */
 async function buildOrLoad(layer, map, x, y) {
+    if (needsLiveFolder(layer, model.folder)) {
+        // Answered at once, never held for the visitor: the page's tile fetches have a few slots, and a human prompt that stays open
+        // must not occupy them. The tile is asked again when onClientFilesChanged fires after the folder opened.
+        promptForFiles();
+        return emptyResult('NotApplicable', 'The client folder has to be opened first.');
+    }
     const started = generation; // Forget folder bumps it; a result from before that must not be cached under the old folder's key
     const forgotten = () => started !== generation;
     const logical = `${KEY_VERSION}/${layer}/${map}/${x}/${y}`;
@@ -534,6 +604,68 @@ export function localTileProvider() {
             const result = await raceAbort(job, signal);
             signal?.throwIfAborted?.();
             return { state: result.state, detail: result.detail, body: result.body.slice(0) };
+        },
+    };
+}
+
+/** The baked terrain textures (`cft:` keys) of the chosen folder: built in a Worker, kept in memory, shared by concurrent callers. */
+export function localTextureProvider() {
+    return {
+        async texture(key, { signal } = {}) {
+            signal?.throwIfAborted?.();
+            await init();
+            if (model.folder === null && !await waitForFiles()) {
+                throw new ClientFsError('bad-file', 'The client folder is not open, so the terrain texture cannot be built.');
+            }
+            const folder = model.folder;
+            if (folder === null) {
+                throw new ClientFsError('bad-file', 'The client folder is not open, so the terrain texture cannot be built.');
+            }
+            signal?.throwIfAborted?.();
+            const cacheId = chainKey(`${TEXTURE_KEY_VERSION}/${key}`, folder.archives);
+            const hot = textureLru.get(cacheId);
+            if (hot !== undefined) {
+                return hot.slice();
+            }
+            let job = textureInflight.get(cacheId);
+            if (job === undefined) {
+                const started = getPool().run('texture', { archives: folder.archives, key }, { kind: 'tile', key: cacheId })
+                    .then((bytes) => {
+                        textureLru.set(cacheId, bytes, bytes.byteLength);
+                        return bytes;
+                    })
+                    .finally(() => {
+                        if (textureInflight.get(cacheId) === started) {
+                            textureInflight.delete(cacheId);
+                        }
+                    });
+                job = started;
+                textureInflight.set(cacheId, job);
+            }
+            const bytes = await raceAbort(job, signal);
+            signal?.throwIfAborted?.();
+            return bytes.slice();
+        },
+    };
+}
+
+/** Parsed model files (`m2`, `wmo-root`, `wmo-group`) of the chosen folder, read and parsed in a Worker. Needs the live folder (never cached). */
+export function localModelProvider() {
+    return {
+        async model(kind, path, { signal } = {}) {
+            signal?.throwIfAborted?.();
+            await init();
+            if (model.folder === null && !await waitForFiles()) {
+                throw new ClientFsError('bad-file', 'The client folder is not open, so the model cannot be read.');
+            }
+            const folder = model.folder;
+            if (folder === null) {
+                throw new ClientFsError('bad-file', 'The client folder is not open, so the model cannot be read.');
+            }
+            const job = getPool().run('model', { archives: folder.archives, kind, path }, { kind: 'file', key: chainKey(`model/${kind}/${path}`, folder.archives) });
+            const result = await raceAbort(job, signal);
+            signal?.throwIfAborted?.();
+            return result;
         },
     };
 }

@@ -41,10 +41,10 @@ public sealed record TransferDecisionRecord(
 public interface ITransferDecisionStore
 {
     /// <summary>Seeds or updates the active ownership token for a character prior to transfer.</summary>
-    void SeedCharacterOwnership(ulong characterGuid, CharacterOwnershipToken ownershipToken);
+    Task SeedCharacterOwnershipAsync(ulong characterGuid, CharacterOwnershipToken ownershipToken, CancellationToken cancellationToken = default);
 
     /// <summary>Returns the currently active ownership token for <paramref name="characterGuid"/>.</summary>
-    CharacterOwnershipToken? GetActiveOwnership(ulong characterGuid);
+    Task<CharacterOwnershipToken?> GetActiveOwnershipAsync(ulong characterGuid, CancellationToken cancellationToken = default);
 
     /// <summary>Stage 1: creates a durable pre-commit reservation record.</summary>
     Task<TransferDecisionRecord> CreateReservationAsync(

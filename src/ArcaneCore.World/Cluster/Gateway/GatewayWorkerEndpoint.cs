@@ -118,10 +118,16 @@ public sealed class GatewayWorkerEndpoint(
         // Resolved here, not in the constructor: building it looks up the world host among the hosted services, which would loop through this endpoint.
         // The self-heal decorates the control service (C11, design section 3.5); it is registered exactly when the control service is.
         _host.ControlHandler = (IGatewayControlHandler?)rootServices?.GetService<Control.WorkerSelfHealService>() ?? rootServices?.GetService<Control.WorkerControlService>();
+        // The gateway names the slot on every worker link: the name this process's transfer side answers under, whichever process the slot's history made this one.
+        if (rootServices?.GetService<Control.WorkerControlService>() is { } control)
+        {
+            _host.SlotNamed = control.ServeSlot;
+        }
+
         // The far-teleport router (Cluster:Worker:Transfers:Enabled, non-empty OwnedMaps) receives the gateway's answers to its transfer requests and the outcome notices; null otherwise.
         _host.SubmitSink = rootServices?.GetService<Transfer.ClusterFarTeleportFeature>()?.Router;
         rootServices?.GetService<Control.ClusterRestartRelay>()?.Attach(_host, Acceptor ?? throw new InvalidOperationException("the session acceptor was not created"));
-        _host.Start();
+        _host.Start(); // a link port that cannot bind throws WorldBindFailedException (a clean failed start through WorldStartup.RunAsync); nothing else is started yet
         if (lifecycle is not null && _countdownHandler is null)
         {
             _countdownHandler = OnCountdownChanged;

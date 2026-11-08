@@ -72,7 +72,8 @@ public static class WorkerTransferHosting
         bool standby = options.Standby;
 
         WorkerControlHandoff? handoff = null;
-        if (handoffOn && services.GetService<IWorldHandoffStore>() is { } handoffJournal)
+        IWorldHandoffStore? handoffJournal = handoffOn ? services.GetService<IWorldHandoffStore>() : null;
+        if (handoffJournal is not null)
         {
             // An active worker is the draining source, a standby the target (a promoted standby stays addressable as the target of its own handoff).
             handoff = new WorkerControlHandoff(
@@ -81,31 +82,20 @@ public static class WorkerTransferHosting
                 standby ? new StandbyWorldHandoffTarget(nodeId, host) : null);
         }
 
-        WorkerControlTransfer? transfer = null;
-        if (transfersOn && !standby && services.GetService<ITransferDecisionStore>() is { } transferJournal)
-        {
-            CharacterSaveQueue saves = services.GetRequiredService<CharacterSaveQueue>();
-            WorkerAdmission admission = services.GetRequiredService<WorkerAdmission>();
-            var source = new WorkerTransferSource(
-                nodeId, world, new SaveQueueTransferPersistence(saves, services.GetService<CharacterPersistenceBarrier>()), new FeatureTransferPlayerProbe(services, saves),
-                logger: loggers?.CreateLogger<WorkerTransferSource>());
-            var target = new WorkerTransferTarget(
-                nodeId, world, new CharacterHooksShadowLoader(bundle => AdoptedSession(services, bundle), services), new WorldSessionTransferEntry(services), admission,
-                MaxTargetReservations, host.Incarnation, loggers?.CreateLogger<WorkerTransferTarget>(),
-                instances: AllocateInstance(services),
-                sessionReady: bundle => AdoptedSession(services, bundle) is not null,
-                offlineArrival: new CharacterStoreOfflineArrival(services.GetRequiredService<IServiceScopeFactory>(), services.GetService<CharacterRetirementRegistry>()),
-                claims: services.GetService<CharacterClaimService>());
-            // Section 4.4: stage 3 installs before stage 4 opens the client's session here, so the shadow load starts when that session opens.
-            // This hooks the acceptor that exists now: GatewayWorkerEndpoint.StartAsync sets Acceptor before it resolves this service, and nothing restarts the endpoint in-process.
-            // A restarted endpoint would have a new acceptor whose SessionOpened is not hooked; the install after the commit then re-probes and loads at once, so a transfer still completes.
-            // The probe and the loader match the session by account only (AdoptedSession); a stale earlier session of the same account in the acceptor would be taken for the one stage 4 opens.
-            if (services.GetService<GatewayWorkerEndpoint>()?.Acceptor is { } sessionAcceptor)
-            {
-                sessionAcceptor.SessionOpened += opened => target.OnSessionOpened(opened.AccountId);
-            }
+        // The gateway journals and addresses every transfer participant by slot, and a process that took a slot over keeps its own node id, so the transfer side answers under this name: its own node id
+        // until the gateway names the slot (in Promote, and on every worker link), which also reaches a promoted process relaunched as active. Handoff rows name processes, so the handoff side keeps nodeId.
+        var transferName = new WorkerTransferName(nodeId);
+        WorkerControlTransfer? transfer = transfersOn && !standby ? BuildTransfer(services, transferName, host, world, loggers) : null;
 
-            transfer = new WorkerControlTransfer(transferJournal, source, target, () => admission.IsOpen, () => MaxTargetReservations - target.ReservedCount);
+        // A standby has neither a draining source nor transfer participants while it waits; promotion makes it an active worker, and the control service asks for them then
+        // (WorkerControlService.Current): the handoff keeps its journal and target and gains the source, and the transfer side is built as an active worker's is.
+        Func<WorkerPromotedParticipants>? onPromoted = null;
+        if (standby)
+        {
+            WorkerControlHandoff? standbyHandoff = handoff;
+            onPromoted = () => new WorkerPromotedParticipants(
+                standbyHandoff is null ? null : standbyHandoff with { Source = services.GetService<IWorldHandoffSource>() },
+                transfersOn ? BuildTransfer(services, transferName, host, world, loggers) : null);
         }
 
         WorkerControlIdentity Identity() => new(
@@ -116,7 +106,45 @@ public static class WorkerTransferHosting
             world.CharacterOwnership?.Scope ?? string.Empty,
             host.WorkerOwnedMaps is { } maps ? maps.Order().Take(ClusterControlWire.MaxOwnedMaps).ToArray() : Array.Empty<uint>());
 
-        return new WorkerControlService(handoffOn, handoff, transfersOn, transfer, Identity, loggers?.CreateLogger<WorkerControlService>());
+        return new WorkerControlService(handoffOn, handoff, transfersOn, transfer, Identity, loggers?.CreateLogger<WorkerControlService>(), onPromoted, () => host.PromotionCompleted, transferName);
+    }
+
+    /// <summary>
+    /// The transfer side of an active worker: the production source and target over this process's world, and the journal every worker reads. Null without a decision store.
+    /// Runs once per worker: at build for an active worker, at promotion for a standby. <paramref name="name"/> is what the participants answer under, the slot the gateway's journal rows, bundles and verbs
+    /// carry. It starts as this process's own node id, and the gateway replaces it when it names the slot: in Promote for a standby, on every worker link for any process. That covers a promoted process relaunched as active:
+    /// its own node id is still the standby's while the slot's is not (the gateway compares a process with the slot's ActiveNode, which follows the swap, so nothing requires the two to match).
+    /// </summary>
+    private static WorkerControlTransfer? BuildTransfer(IServiceProvider services, WorkerTransferName name, WorldHost host, WorldRuntime world, ILoggerFactory? loggers)
+    {
+        if (services.GetService<ITransferDecisionStore>() is not { } transferJournal)
+        {
+            return null;
+        }
+
+        CharacterSaveQueue saves = services.GetRequiredService<CharacterSaveQueue>();
+        WorkerAdmission admission = services.GetRequiredService<WorkerAdmission>();
+        var source = new WorkerTransferSource(
+            name.Current, world, new SaveQueueTransferPersistence(saves, services.GetService<CharacterPersistenceBarrier>()), new FeatureTransferPlayerProbe(services, saves),
+            logger: loggers?.CreateLogger<WorkerTransferSource>(), servedName: name);
+        var target = new WorkerTransferTarget(
+            name.Current, world, new CharacterHooksShadowLoader(bundle => AdoptedSession(services, bundle), services), new WorldSessionTransferEntry(services), admission,
+            MaxTargetReservations, host.Incarnation, loggers?.CreateLogger<WorkerTransferTarget>(),
+            instances: AllocateInstance(services),
+            sessionReady: bundle => AdoptedSession(services, bundle) is not null,
+            offlineArrival: new CharacterStoreOfflineArrival(services.GetRequiredService<IServiceScopeFactory>(), services.GetService<CharacterRetirementRegistry>()),
+            claims: services.GetService<CharacterClaimService>(),
+            servedName: name);
+        // Section 4.4: stage 3 installs before stage 4 opens the client's session here, so the shadow load starts when that session opens.
+        // This hooks the acceptor that exists now: GatewayWorkerEndpoint.StartAsync sets Acceptor before it resolves this service, and nothing restarts the endpoint in-process.
+        // A restarted endpoint would have a new acceptor whose SessionOpened is not hooked; the install after the commit then re-probes and loads at once, so a transfer still completes.
+        // The probe and the loader match the session by account only (AdoptedSession); a stale earlier session of the same account in the acceptor would be taken for the one stage 4 opens.
+        if (services.GetService<GatewayWorkerEndpoint>()?.Acceptor is { } sessionAcceptor)
+        {
+            sessionAcceptor.SessionOpened += opened => target.OnSessionOpened(opened.AccountId);
+        }
+
+        return new WorkerControlTransfer(transferJournal, source, target, () => admission.IsOpen, () => MaxTargetReservations - target.ReservedCount);
     }
 
     /// <summary>

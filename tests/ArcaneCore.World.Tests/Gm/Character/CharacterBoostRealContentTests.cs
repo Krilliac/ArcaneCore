@@ -250,8 +250,13 @@ internal sealed class RealBoostContent
 
     public static RealBoostContent Load(string path, string dbcDirectory, string dump)
     {
+        // The rows ItemTextDumpImporter writes to item_enchantment_template, read from the dump (plain or .gz) with the importer's parser.
+        using Stream dumpFile = File.OpenRead(dump);
+        using Stream dumpInput = dump.EndsWith(".gz", StringComparison.OrdinalIgnoreCase)
+            ? new System.IO.Compression.GZipStream(dumpFile, System.IO.Compression.CompressionMode.Decompress) : dumpFile;
+        using var dumpReader = new StreamReader(dumpInput);
         var properties = new ItemRandomPropertyCatalog(
-            ItemRandomPropertiesDbcReader.Load(Path.Combine(dbcDirectory, "ItemRandomProperties.dbc")), ItemEnchantmentTemplateDumpReader.Load(dump));
+            ItemRandomPropertiesDbcReader.Load(Path.Combine(dbcDirectory, "ItemRandomProperties.dbc")), ItemEnchantmentTemplateDumpReader.Read(dumpReader));
         SpellDbcContent spellRows = SpellDbcImporter.ReadDirectory(dbcDirectory);
         var spellStore = SpellStoreFactory.Build(new SpellContent(spellRows.Spells, spellRows.CastTimes, spellRows.Durations,
             spellRows.Ranges, spellRows.Radii, [], []));

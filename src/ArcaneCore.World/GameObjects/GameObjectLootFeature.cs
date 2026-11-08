@@ -227,6 +227,9 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
     public Task WaitForSettlementAsync(int characterId, CancellationToken cancellationToken = default)
         => _settlements?.WaitForCharacterAsync(characterId, cancellationToken) ?? Task.CompletedTask;
 
+    /// <summary>The characters with a chest operation in flight (see <see cref="ICharacterSettlementBarrier.SettlingCharacters"/>).</summary>
+    public IReadOnlyCollection<int> SettlingCharacters => _settlements?.SettlingCharacters ?? Array.Empty<int>();
+
     /// <summary>Cancel in-flight chest operations and finalize them without world publication.</summary>
     public Task StopAsync() => _settlements?.StopAsync() ?? Task.CompletedTask;
 
@@ -274,6 +277,8 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
             Dismount = _dismount ??= player => SpellFeature?.System.RemoveSpellsCausingAura(player, Game.Spells.AuraType.Mounted),
             // HandleGameObjectUseOpcode (SpellHandler.cpp:257): RemoveAurasWithInterruptFlags(AURA_INTERRUPT_LOOTING_CANCELS) before Use.
             BreakLootingAuras = _breakLootingAuras ??= player => SpellFeature?.System.RemoveAurasWithInterruptFlags(player, Game.Spells.AuraInterruptMask.Looting),
+            // Bot QA (docs/areas/playbots-qa.md): an unsupported use by a bot becomes a finding; null when QA is not registered.
+            Qa = services.GetService<Game.Diagnostics.IGameQaObserver>(),
         };
         if (map.FindUpdater<CreatureMapSystem>() is { } creatures)
         {

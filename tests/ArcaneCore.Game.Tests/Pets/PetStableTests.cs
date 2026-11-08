@@ -507,6 +507,31 @@ public sealed class PetStableTests
     }
 
     [Fact]
+    public async Task BuySlot_RollbackWriteFailure_IsRecordedUnderOneFaultSite()
+    {
+        using PetTestKit kit = Kit();
+        (PetStableController stable, MemoryStableStore store, WorldPump pump) = Stable(kit);
+        (Player hunter, _) = Hunter(kit);
+        hunter.Money = 500;
+        store.FailSlotCallsFrom = 2;
+        store.FailSlotCallsThrough = 9;
+        using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Key == "pet/stable-rollback-failed" && n.Subject == "character 1");
+        long Count(string site) => FaultLedger.Shared.Snapshot().Where(s => s.Site == site).Sum(s => s.Count);
+        long before = Count("pet.stable");
+        await PrimeAsync(stable, pump, hunter);
+        var gate = new TaskCompletionSource();
+
+        await BuyInFlightAsync(stable, store, pump, hunter, gate);
+        hunter.Money = 100;
+        gate.SetResult();
+        await pump.UntilAsync(() => capture.Any("pet/stable-rollback-failed"));
+
+        // LogFault records the fault ledger entry (site "pet-stable"); a second Record under "pet.stable" would count every failure twice.
+        Assert.Equal(before, Count("pet.stable"));
+        Assert.True(Count("pet-stable") >= 2);
+    }
+
+    [Fact]
     public async Task StableThenUnstable_RoundTripsTheSummonedPet()
     {
         using PetTestKit kit = Kit();
@@ -744,10 +769,7 @@ public sealed class PetStableTests
 
         Task unstableTail = SaveTail(kit.Service, 1);
         release.SetResult(); // D fails; the barrier then queues its delete retry R behind U, whose store write is still gated
-        while (ReferenceEquals(SaveTail(kit.Service, 1), unstableTail))
-        {
-            await Task.Delay(1).WaitAsync(HangBound); // polls for R's queue slot: a state, not a timing
-        }
+        await pump.UntilAsync(() => !ReferenceEquals(SaveTail(kit.Service, 1), unstableTail)); // R's queue slot: a state, not a timing; one overall deadline
 
         unstableGate.SetResult(); // only now may U finish (and clear the owed delete), so R is guaranteed to have been queued first
         await pump.UntilAsync(() => session.Sent.Any(p => p.Opcode == WorldOpcode.SmsgStableResult) && barrier.IsCompleted);

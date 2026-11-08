@@ -3,6 +3,7 @@ using System.Diagnostics;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.Kernel.Safety;
 using ArcaneCore.Protocol;
 using ArcaneCore.Kernel.Characters;
 using Microsoft.Extensions.Logging;
@@ -58,6 +59,18 @@ public sealed partial class WorldRuntime : IDisposable
     /// a hook nobody registered costs its dispatch site one empty-array check.
     /// </summary>
     public Scripting.ScriptHookRegistry Scripts { get; } = new();
+
+    private ArcaneCore.Game.Diagnostics.IGmTraceSink? _gmTrace;
+
+    /// <summary>
+    /// Where game code publishes GM stream events (<see cref="GmTraceGuard.Wants"/>). Set by the World's
+    /// <c>GmStreamFeature</c>; null in a bare Game host, where every producer's guard is a null check. Safe to read from any map thread.
+    /// </summary>
+    public ArcaneCore.Game.Diagnostics.IGmTraceSink? GmTrace
+    {
+        get => Volatile.Read(ref _gmTrace);
+        set => Volatile.Write(ref _gmTrace, value);
+    }
 
     public WorldRuntimeOptions Options { get; }
 
@@ -154,7 +167,7 @@ public sealed partial class WorldRuntime : IDisposable
     {
         if (!player.IsQuestSettlementPending && _online.TryGetValue(player.Guid, out Player? current) && ReferenceEquals(current, player))
         {
-            _saveQueue.Enqueue(player.CreateSnapshot(NowMs));
+            EnqueueSave(player.CreateSnapshot(NowMs));
         }
     }
 
@@ -245,6 +258,7 @@ public sealed partial class WorldRuntime : IDisposable
     }
 
     /// <summary>Queue work for the start of the next tick. Thread-safe.</summary>
+    [RunsOnWorldThread]
     public void Post(Action command)
     {
         _commands.Enqueue(command);
@@ -268,6 +282,7 @@ public sealed partial class WorldRuntime : IDisposable
     /// is (a command not yet run is then skipped) and when the world is stopped before the command ran, so a caller never waits on a
     /// world thread that is gone.
     /// </summary>
+    [RunsOnWorldThread]
     public Task<T> InvokeAsync<T>(Func<T> func, CancellationToken cancellationToken = default)
     {
         if (cancellationToken.IsCancellationRequested)
@@ -533,7 +548,7 @@ public sealed partial class WorldRuntime : IDisposable
         player.Map?.RemovePlayer(player);
         if (!player.IsQuestSettlementPending)
         {
-            _saveQueue.Enqueue(player.CreateSnapshot(NowMs));
+            EnqueueSave(player.CreateSnapshot(NowMs));
         }
         // Publish offline only after the final snapshot is queued: login's save barrier
         // must never overtake this old session's last write.
@@ -721,7 +736,10 @@ public sealed partial class WorldRuntime : IDisposable
                 GcSnapshot gcBeforeMap = diagnostics is not null ? GcSource() : default;
                 try
                 {
-                    map.Update(diffMs, diagnostics);
+                    using (Collision.SyncTileReadCounters.EnterMapUpdate())
+                    {
+                        map.Update(diffMs, diagnostics);
+                    }
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
@@ -919,7 +937,7 @@ public sealed partial class WorldRuntime : IDisposable
             {
                 try
                 {
-                    _saveQueue.Enqueue(player.CreateSnapshot(now));
+                    EnqueueSave(player.CreateSnapshot(now));
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {

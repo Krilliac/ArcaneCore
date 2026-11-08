@@ -393,8 +393,8 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
     }
 
     /// <summary>
-    /// What the last <see cref="WarnRaisedCaps"/> looked at (the cap, the option and the three templates, by reference: a content reload
-    /// replaces them); null before the first scan.
+    /// What the last <see cref="WarnRaisedCaps"/> looked at (the cap, the option and the three templates, by reference, so a template registered
+    /// anew counts as a change; today <c>BattlegroundFeature.RegisterTemplates</c> runs only from its <c>Install</c>, once at start); null before the first scan.
     /// </summary>
     private (int Cap, bool Raise, BattlegroundTemplate? Wsg, BattlegroundTemplate? Ab, BattlegroundTemplate? Av)? _raiseWarned;
 
@@ -403,8 +403,9 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
 
     /// <summary>
     /// One warning when the configured <c>MaxBotsPerBattleground</c> is overridden for some type: at the first scan after the world starts
-    /// (the templates are loaded), and again whenever a <c>.reload config</c> (or a template reload) changes the cap or which types are
-    /// raised. A reload that changes neither does not repeat it.
+    /// (the templates are loaded), and again whenever a <c>.reload config</c> changes the cap or which types are
+    /// raised. The key compares templates by reference: a config reload that changes neither does not repeat it. Registering a new
+    /// template instance (even with the same limits) would warn again while the cap stays raised, but no production path does that after Install.
     /// </summary>
     private void WarnRaisedCaps(BattlegroundManager manager, PlayerbotBattlegroundOptions o)
     {
@@ -863,6 +864,9 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
     /// <summary>A free bot that may start a queue now: alive, out of combat, on an allowed open-world map, in no group, queue or match, no deserter.</summary>
     private bool MayQueue(Player player, BattlegroundFeature feature)
     {
+        // A cluster worker that is not the holder keeps no queue state: the join would land in the holder's queue and this coordinator would never see the slot or the invitation.
+        // Bots therefore queue only where the manager holds the state (a limit of the cluster mode: no bot battleground queueing on a plain worker).
+        if (!feature.HoldsQueueState) return false;
         if (!player.IsAlive || player.Combat.IsInCombat || player.Map is not { } map) return false;
         if (map.Template is { IsDungeon: true } or { IsBattleground: true }) return false;
         if (_options.AllowedMaps is { Length: > 0 } allowed && !allowed.Contains(map.MapId)) return false;
@@ -1197,7 +1201,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             AllowPartial = true,
             MaxSearchNodes = 256,
             LoadTiles = true,
-            NonBlockingTiles = true, // a tile not in yet is read on the pool, never on the world thread: pending counts as walkable below
+            NonBlockingTiles = true, // a tile not in yet is read on a dedicated reader thread, never on the world thread: pending counts as walkable below
         });
         if ((reach.Type & PathType.TilesPending) != 0)
             return MidfieldCheck.Pending;

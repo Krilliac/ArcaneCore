@@ -49,7 +49,7 @@ public sealed class GatewayClusterFarTeleportRouter : IClusterFarTeleportRouter,
     private ulong _nextRequestId;
     private Guid _lastTransferId;
 
-    private sealed record InFlight(Guid TransferId, ulong RequestId, long StartedAt);
+    private sealed record InFlight(Guid TransferId, ulong RequestId, long StartedAt, long SessionGeneration);
 
     /// <param name="world">The world, for the ownership token and to reach the player on the world thread.</param>
     /// <param name="probe">The blockers that forbid a transfer (open trade, charm, taxi flight, quest or economy settlement).</param>
@@ -133,7 +133,7 @@ public sealed class GatewayClusterFarTeleportRouter : IClusterFarTeleportRouter,
 
             requestId = ++_nextRequestId;
             // Registered before the frame is queued: the gateway's reply can arrive before this method returns.
-            _inFlight[character] = new InFlight(transferId, requestId, _time.GetTimestamp());
+            _inFlight[character] = new InFlight(transferId, requestId, _time.GetTimestamp(), generation);
             _characterByRequest[requestId] = character;
             _lastTransferId = transferId;
         }
@@ -209,6 +209,23 @@ public sealed class GatewayClusterFarTeleportRouter : IClusterFarTeleportRouter,
         if (notice.Outcome != ControlNoticeOutcome.Completed)
         {
             Tell(notice.CharacterGuid, notice.Code, notice.Text);
+        }
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// The gateway's answer or outcome notice for this session can no longer arrive here, and without this the character could not ask for a far teleport until <see cref="InFlightExpiry"/>.
+    /// Only the local entry ends: a transfer the gateway accepted keeps running from its journal, and it refuses a second one of the character. The session is closing, so nobody is told.
+    /// </remarks>
+    public void OnSessionLinkLost(long sessionGeneration)
+    {
+        lock (_gate)
+        {
+            foreach ((ulong character, InFlight entry) in _inFlight.Where(e => e.Value.SessionGeneration == sessionGeneration).ToArray())
+            {
+                _inFlight.Remove(character);
+                _characterByRequest.Remove(entry.RequestId);
+            }
         }
     }
 

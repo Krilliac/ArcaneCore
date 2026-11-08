@@ -241,6 +241,29 @@ public sealed class PlayerbotRunFixesTests
         Assert.Equal(1, await world.OnWorldAsync(() => world.Coordinator.Catalogue().Plans.Count));
     }
 
+    [Fact]
+    public async Task Attach_DoesNotWaitForTheEncounterTable_TheCatalogueIsEmptyUntilTheReadEnds()
+    {
+        await using GroupTestWorld world = await StartAsync([], dungeon: true);
+        var gate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var store = new GatedEncounters(gate.Task, [new InstanceEncounter(DungeonEntry.Deadmines, 0, 167, 0, BossEntry, true, "Deadmines Boss")]);
+        IServiceProvider provider = new ServiceCollection()
+            .AddSingleton<IInstanceEncounterStore>(store)
+            .AddSingleton(new ArcaneCore.World.Bots.InstanceEncounterCatalog())
+            .BuildServiceProvider();
+        var coordinator = new PlayerbotGroupCoordinator(provider, Microsoft.Extensions.Logging.Abstractions.NullLogger<PlayerbotGroupCoordinator>.Instance);
+
+        // The store is held shut: Attach returns anyway (it would hang here if it read the table itself).
+        Task attach = Task.Run(() => coordinator.Attach(world.World.Host.World));
+        await attach.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.False(coordinator.EncounterLoading.IsCompleted);
+        Assert.Empty(coordinator.Encounters);
+
+        gate.SetResult(true);
+        await coordinator.EncounterLoading.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Single(coordinator.Encounters);
+    }
+
     // --- helpers --------------------------------------------------------------------------------------------------------
 
     private static Task<GroupTestWorld> StartAsync(uint[] quests, bool dungeon = false, Action<IServiceCollection>? services = null)
@@ -258,6 +281,15 @@ public sealed class PlayerbotRunFixesTests
         var group = new PlayerbotGroupCoordinator.BotGroup(1, goal, Guid.NewGuid(), leader.Guid, 0) { Run = run };
         group.Members.Add(new PlayerbotGroupCoordinator.Member(Guid.NewGuid(), leader.Guid, leader.Name, PlayerbotGroupRole.Damage, PlayerbotRole.RangeDps, 0, real: false) { Joined = true });
         return group;
+    }
+
+    private sealed class GatedEncounters(Task gate, IReadOnlyList<InstanceEncounter> rows) : IInstanceEncounterStore
+    {
+        public async Task<IReadOnlyList<InstanceEncounter>> LoadAsync(CancellationToken cancellationToken = default)
+        {
+            await gate.ConfigureAwait(false);
+            return rows;
+        }
     }
 
     private sealed class MutableEncounters : IInstanceEncounterStore

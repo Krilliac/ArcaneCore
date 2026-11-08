@@ -55,6 +55,13 @@ public sealed class EconomyOptions
     /// <summary>Whether players of opposite teams may trade (vmangos CONFIG_BOOL_ALLOW_TWO_SIDE_TRADE).</summary>
     public bool AllowCrossTeamTrade { get; set; }
 
+    /// <summary>
+    /// Whether a game master with GM mode on may start a trade with a player of the other team although <see cref="AllowCrossTeamTrade"/> is off
+    /// (default true). An ArcaneCore extension: vmangos HandleInitiateTradeOpcode (TradeHandler.cpp:634-636) has no such rule, so false is the
+    /// retail behaviour. Only the initiator is tested; a player who invites a game master of the other team is refused.
+    /// </summary>
+    public bool GmCrossTeamTrade { get; set; } = true;
+
     /// <summary>The Plain Letter item created by CMSG_MAIL_CREATE_TEXT_ITEM (vmangos MAIL_BODY_ITEM_TEMPLATE 8383).</summary>
     public uint LetterItemEntry { get; set; } = 8383;
 
@@ -150,6 +157,7 @@ public sealed class EconomyOptions
     /// <summary>
     /// The three houses: Alliance 2, Horde 6, neutral (Blackwater/goblin) 7, with the deposit and cut percentages of the build-5875
     /// client AuctionHouse.dbc (m_depositRate, m_consignmentRate), which vmangos reads: 5/5 for both faction houses, 25/15 for the neutral one.
+    /// A configured entry is added after these three, whatever its index, and the last entry of an id is the one in force, so an entry with id 2, 6 or 7 replaces that house's percentages.
     /// </summary>
     public List<AuctionHouseEntry> AuctionHouses { get; set; } =
     [
@@ -189,8 +197,14 @@ public static class AuctionHouseRules
     {
         uint id = options.NeutralAuctioneerFactions.Contains(auctioneerFactionId) ? NeutralHouse
             : playerTeam == Team.Alliance ? AllianceHouse : HordeHouse;
-        return options.AuctionHouses.FirstOrDefault(h => h.Id == id);
+        return House(options, id);
     }
+
+    /// <summary>
+    /// The house with this id: the last entry that has it. The configuration binder adds configured entries after the default ones, so a configured
+    /// entry for a default house wins over the default.
+    /// </summary>
+    public static AuctionHouseEntry? House(EconomyOptions options, uint id) => options.AuctionHouses.FindLast(h => h.Id == id);
 
     /// <summary>
     /// vmangos GetAuctionDeposit (AuctionHouseMgr.cpp:98-110): single-precision arithmetic in vmangos order,

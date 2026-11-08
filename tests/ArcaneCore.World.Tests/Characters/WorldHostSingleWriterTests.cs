@@ -28,6 +28,7 @@ namespace ArcaneCore.World.Tests.Characters;
 /// One world per characters database, and a free port, are checked before the first playerbot row is read or written (the 2026-10 incident: a second world
 /// restored 863 bots on the live database and then failed to bind its port). The writer lock is a file lock, so two hosts in one process contend exactly as two processes do.
 /// </summary>
+[Xunit.Collection(Net.PacketCaptureCollection.Name)] // a host stop drains every open packet trace in the process
 public sealed class WorldHostSingleWriterTests
 {
     [Fact]
@@ -201,7 +202,7 @@ public sealed class WorldHostSingleWriterTests
             await using ServiceProvider provider = new ServiceCollection().AddLogging().AddCharacterDatabase(configuration).AddWorldDaemon(configuration).BuildServiceProvider();
             WorldHost host = provider.GetServices<IHostedService>().OfType<WorldHost>().Single(); // no ListenerExpected seam: WorldServer is detected
 
-            InvalidOperationException failure = await Assert.ThrowsAsync<InvalidOperationException>(() => host.StartAsync(CancellationToken.None));
+            InvalidOperationException failure = await Assert.ThrowsAsync<ArcaneCore.World.Net.WorldPortInUseException>(() => host.StartAsync(CancellationToken.None));
 
             Assert.Contains($"127.0.0.1:{port}", failure.Message);
             Assert.Contains("already in use", failure.Message);
@@ -264,7 +265,7 @@ public sealed class WorldHostSingleWriterTests
             string database = Path.Combine(directory.Path, "characters.db");
             await using Kit kit = Kit.Create(DatabaseOptions(database), fencing: true, world: new WorldOptions { BindAddress = "127.0.0.1", Port = port });
 
-            InvalidOperationException failure = await Assert.ThrowsAsync<InvalidOperationException>(() => kit.Host.StartAsync(CancellationToken.None));
+            InvalidOperationException failure = await Assert.ThrowsAsync<ArcaneCore.World.Net.WorldPortInUseException>(() => kit.Host.StartAsync(CancellationToken.None));
 
             Assert.Contains($"127.0.0.1:{port}", failure.Message);
             Assert.False(kit.Feature.Attached);

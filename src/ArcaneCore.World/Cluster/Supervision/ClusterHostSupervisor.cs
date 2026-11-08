@@ -740,6 +740,13 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
     }
 
     /// <summary>
+    /// Whether a refusal text (<see cref="CapacityAdmissionResult.Reason"/>, a <see cref="SupervisorStartPlan.Denied"/> reason, or the message of the exception
+    /// <see cref="StartProcessAsync"/> throws) is the free-memory reserve: the one refusal that waiting can cure.
+    /// </summary>
+    internal static bool IsMemoryReserveRefusal(string? reason)
+        => reason is not null && reason.Contains(nameof(ClusterSupervisorOptions.MinFreeMemoryReserveMb), StringComparison.Ordinal);
+
+    /// <summary>
     /// Evaluates whether <paramref name="candidate"/> can be admitted under the host's process ceiling,
     /// memory budget, free RAM reserve, and single-writer map ownership constraints.
     /// </summary>
@@ -1406,13 +1413,15 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
 
     /// <summary>
     /// One line a child wrote. Heartbeats, the stop announcement and cross-world lifecycle requests are the supervisor's own protocol: consumed here
-    /// (stdout only) and never routed to the console. Everything else, including a line that only looks like the protocol, is ordinary output.
+    /// (stdout only) and never routed to the console. Everything else, including a line that only looks like the protocol, is ordinary output; the supervisor's own protocol token is replaced in every line before it is shown.
     /// </summary>
     private void OnChildLine(ManagedEntry entry, ISupervisedProcess process, string line, bool isStdErr)
     {
         if (!isStdErr)
         {
-            if (SupervisorProtocol.TryParseHeartbeat(line, out SupervisorHeartbeatState beat))
+            // A heartbeat is authenticated like the stop announcement: logged text a player or GM influences can land on a line of its own and match the
+            // shape, so a token-less (or wrong-token) heartbeat is ordinary output and never counts as liveness or arms the hang watch.
+            if (SupervisorProtocol.TryParseHeartbeat(line, out SupervisorHeartbeatState beat, out string beatToken) && TokenMatches(beatToken))
             {
                 RecordBeat(entry, process, beat);
                 return;
@@ -1447,8 +1456,15 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
             }
         }
 
+        // Whatever a line is (a rejected protocol-shaped line with a trailing word or a stray control character, a line with text before "heartbeat ", or stderr),
+        // it must never carry this run's real token to the console or the child log: the token is exactly the secret, so it is replaced wherever it appears.
+        line = RedactProtocolToken(line, _protocolToken);
         _multiplexer.RouteLine(entry.Config, line, isStdErr);
     }
+
+    /// <summary><paramref name="line"/> with every occurrence of the exact per-run <paramref name="token"/> replaced by <c>&lt;redacted&gt;</c>; a line without it (a wrong token included) is returned unchanged.</summary>
+    internal static string RedactProtocolToken(string line, string token)
+        => string.IsNullOrEmpty(token) || string.IsNullOrEmpty(line) ? line : line.Replace(token, "<redacted>", StringComparison.Ordinal);
 
     private void RecordBeat(ManagedEntry entry, ISupervisedProcess process, SupervisorHeartbeatState beat)
     {
@@ -1584,8 +1600,8 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
 
     /// <summary>
     /// <paramref name="arguments"/> with <see cref="StandbyArgument"/> added at the end (when <paramref name="standby"/> and it is not already a word of the line)
-    /// or removed from the end (when not). Only a trailing occurrence is ever removed, which is the one this supervisor appends; an occurrence an operator wrote
-    /// into the middle of the configured arguments is left alone.
+    /// or removed (when not). Every occurrence of the word is removed wherever it stands, because <c>tools/ops/live/start-cluster.ps1</c> writes it in the middle of
+    /// the line and a leftover would bring the promoted child back as a standby on its next launch. The rest of the line is left byte for byte as it was.
     /// </summary>
     internal static string WithStandbyArgument(string? arguments, bool standby)
     {
@@ -1597,10 +1613,12 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
                 : text.Length == 0 ? StandbyArgument : text + " " + StandbyArgument;
         }
 
-        if (string.Equals(text, StandbyArgument, StringComparison.Ordinal))
-            return string.Empty;
+        string padded = $" {text} ";
+        string word = $" {StandbyArgument} ";
+        while (padded.Contains(word, StringComparison.Ordinal))
+            padded = padded.Replace(word, " ", StringComparison.Ordinal);
 
-        return text.EndsWith(" " + StandbyArgument, StringComparison.Ordinal) ? text[..^(StandbyArgument.Length + 1)] : text;
+        return padded.Length <= 2 ? string.Empty : padded[1..^1];
     }
 
     /// <summary>Sets the standby role of <paramref name="entry"/> and keeps its launch arguments in step. Call under <c>_gate</c>.</summary>
@@ -1616,31 +1634,47 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
     /// for the realm (<see cref="HandleLifecycleRequest"/> forwards by <c>Config.RealmId</c>) reaches the world that is serving. The slot's two children are the workers that
     /// name the same shard (<c>Cluster:Fencing:Shard</c>, which <c>tools/ops/live/start-cluster.ps1 -Standby</c> gives both): the shard is the supervisor's only knowledge of
     /// which standby stands behind which world. The moved-to child keeps the environment it was launched with (its own realm id stays 0 until its next launch); only the
-    /// supervisor's routing follows the swap, which is all a forwarded lifecycle line needs. No shard, or no peer without a realm id, leaves the id where it is. Call under <c>_gate</c>.
+    /// supervisor's routing follows the swap, which is all a forwarded lifecycle line needs. No shard, no peer of the shard, or a peer that already has a realm id, leaves the id where it is.
+    /// The promoted peer is the active world now, so its <see cref="ManagedEntry.Standby"/> flag (and the standby argument of its next launch) is cleared whether or not a realm id moves (only the lease-holder slot has one): left set,
+    /// two swaps of one slot persist both children as standbys and a supervisor restart then brings the slot back with no active world. Call under <c>_gate</c>.
     /// </summary>
     private void MoveRealmRoleUnderLock(ManagedEntry demoted)
     {
-        int realmId = demoted.Config.RealmId;
-        if (realmId <= 0 || !string.Equals(demoted.Config.Role, SupervisedRoles.Worker, StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(demoted.Config.Role, SupervisedRoles.Worker, StringComparison.OrdinalIgnoreCase))
             return;
 
         string shard = ShardOf(demoted.Config);
         if (shard.Length == 0)
             return;
 
+        // The peer is found by shard alone: start-cluster.ps1 gives only the lease-holder world a realm id (the other slots' two children both have 0), yet the
+        // gateway swaps those slots too, so the standby flag of the promoted child must not depend on a realm id existing. A peer with no realm id is preferred
+        // for receiving the realm id.
         ManagedEntry? peer = _entries.Values
             .Where(e => !ReferenceEquals(e, demoted)
-                && e.Config.RealmId == 0
                 && string.Equals(e.Config.Role, SupervisedRoles.Worker, StringComparison.OrdinalIgnoreCase)
                 && string.Equals(ShardOf(e.Config), shard, StringComparison.OrdinalIgnoreCase))
-            .OrderBy(e => e.Config.Name, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(e => e.Config.RealmId == 0 ? 0 : 1)
+            .ThenBy(e => e.Config.Name, StringComparer.OrdinalIgnoreCase)
             .FirstOrDefault();
         if (peer is null)
             return;
 
-        peer.Config.RealmId = realmId;
-        demoted.Config.RealmId = 0;
-        _logger.LogInformation("Supervisor moved realm {RealmId} from {Demoted} (now a standby) to {Promoted}", realmId, demoted.Config.Name, peer.Config.Name);
+        bool wasStandby = peer.Standby;
+        string argumentsBefore = peer.Config.Arguments ?? string.Empty;
+        SetStandbyUnderLock(peer, false);
+        bool changed = wasStandby || !string.Equals(argumentsBefore, peer.Config.Arguments ?? string.Empty, StringComparison.Ordinal);
+        int realmId = demoted.Config.RealmId;
+        if (realmId > 0 && peer.Config.RealmId == 0)
+        {
+            peer.Config.RealmId = realmId;
+            demoted.Config.RealmId = 0;
+            _logger.LogInformation("Supervisor moved realm {RealmId} from {Demoted} (now a standby) to {Promoted}", realmId, demoted.Config.Name, peer.Config.Name);
+        }
+        else if (changed) // a peer that was already active (never a standby) has nothing cleared: no line
+        {
+            _logger.LogInformation("Supervisor cleared the standby role of {Promoted}, the world that replaces {Demoted} in shard {Shard}", peer.Config.Name, demoted.Config.Name, shard);
+        }
     }
 
     private static string ShardOf(SupervisedProcessConfig config)
@@ -1660,6 +1694,13 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
     /// again. A child that is already down is simply started. The old process has exited before the new one starts, so it has released what the new one needs
     /// (a world's writer lock). Throws <see cref="KeyNotFoundException"/> for an unknown name, and <see cref="InvalidOperationException"/> when the old process
     /// survived its kill (nothing is relaunched then), the role cannot be a standby, or admission refuses the launch.
+    /// <para>
+    /// <paramref name="standby"/> <c>false</c> is a promotion request: <see cref="WithStandbyArgument"/> strips <see cref="StandbyArgument"/> from the child's launch arguments, so a worker
+    /// that is configured as a standby and was never promoted comes back as an active world, not as a standby. That is the operator's explicit request (it is how a restart by name
+    /// makes a standby the active world). Do not derive the argument from <see cref="SupervisedProcessSnapshot"/>.Standby: that flag is false for a standby that is only configured
+    /// with the argument and has never been moved at runtime, so passing it would promote that child. A caller that wants the present role kept must pass true for a child whose
+    /// configured Arguments hold <see cref="StandbyArgument"/> or whose snapshot says standby.
+    /// </para>
     /// </summary>
     public async Task<SupervisedProcessSnapshot> RestartProcessAsync(string name, bool standby, CancellationToken ct = default)
     {
@@ -2341,6 +2382,13 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
     /// <summary>
     /// Records one failure of <paramref name="entry"/> at <paramref name="now"/> and, when that is more than <c>CrashLoopMaxRestarts</c> inside the window,
     /// marks the child Faulted, writes the ledgers and returns true with the message to show. Call under <c>_gate</c>.
+    /// <para>
+    /// Accepted limit: the child gives up only when more than <c>CrashLoopMaxRestarts</c> failures (so MaxRestarts + 1, six with the default of 5) fall inside the sliding
+    /// <c>CrashLoopWindowSeconds</c> window (300 s by default), so a child that fails more slowly than that (a steady cycle longer than about window / MaxRestarts, roughly
+    /// 60 s with the defaults) is relaunched after its backoff for ever and never gives up. Such a crash is recorded only by the console announcement and the crash dialog
+    /// offer on the exit path (the hang watch covers hangs only); the fault and anomaly ledger entries below are written only when the child gives up. To give up on a slower
+    /// cycle, raise <c>CrashLoopWindowSeconds</c> or lower <c>CrashLoopMaxRestarts</c>.
+    /// </para>
     /// </summary>
     private bool GiveUpOnCrashLoopUnderLock(ManagedEntry entry, long now, int? exitCode, out string? message)
     {

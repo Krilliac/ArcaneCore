@@ -1,5 +1,8 @@
 using System.Globalization;
+using ArcaneCore.Game;
+using ArcaneCore.Game.Diagnostics;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Logging;
@@ -16,11 +19,13 @@ namespace ArcaneCore.World.AntiCheat.PacketHeuristics;
 
 /// <summary>
 /// Report-only heuristics over the packets sessions send (docs/areas/packet-heuristics.md): wrong-state, unknown-opcode, malformed, shape,
-/// cadence, replay, orphan-ack and incapacitated-action findings go to the anomaly ledger under subsystem <c>packet</c>. Off by default.
+/// cadence, replay, orphan-ack and incapacitated-action findings go to the anomaly ledger under subsystem <c>packet</c>. On by default.
 /// <para>
-/// The one rule: this class observes and never decides. No method here returns a verdict to the session, throws, blocks, drops, delays or alters
-/// a packet, kicks, or touches the AntiCheat score; a packet that dispatched before still dispatches and one that was dropped is still dropped.
-/// The sessions call it through <c>WorldSession.PacketHeuristics.cs</c> and pay one volatile read when it is off.
+/// The one rule: this class observes and never decides. No method here returns a verdict to the session, throws, blocks, drops, delays, alters
+/// or kicks anything. The single exception is the optional score request (<c>FeedAntiCheatScore</c>, off by default): a reported finding of
+/// a few checks is queued for the AntiCheat feature, which applies it later on the world thread and alone decides what follows. A packet that
+/// dispatched before still dispatches and one that was dropped is still dropped.
+/// The sessions call it through <c>WorldSession.PacketHeuristics.cs</c> and pay one volatile read when it is off (<c>Enabled</c> = false).
 /// </para>
 /// <para>
 /// Threads: the settings are an immutable snapshot swapped by reference (any thread); counters are <see cref="Interlocked"/>; per-session state
@@ -38,8 +43,9 @@ public sealed class PacketHeuristicsFeature : IWorldFeature
     private int _epoch;
     private readonly object _applyGate = new();
     private TeleportFeature? _teleport;
+    private ArcaneCore.Game.Maps.WorldRuntime? _world; // the GM stream's anticheat channel (TraceToGmStream)
 
-    /// <summary>Creates the feature with the options of the <c>World:PacketHeuristics</c> section (defaults when there is none or it is invalid; the startup check refuses an invalid one).</summary>
+    /// <summary>Creates the feature with the options of the <c>World:PacketHeuristics</c> section (the defaults, with the checks on, when there is none; Enabled = false when it is invalid; the startup check refuses an invalid one).</summary>
     public PacketHeuristicsFeature(IServiceProvider services)
     {
         _services = services;
@@ -48,8 +54,8 @@ public sealed class PacketHeuristicsFeature : IWorldFeature
         IReadOnlyList<string> problems = configured.Validate();
         if (problems.Count > 0)
         {
-            _logger?.LogError("{Section} is invalid ({Problems}); packet heuristics stay off with the defaults", PacketHeuristicsOptions.SectionName, string.Join(" ", problems));
-            configured = new PacketHeuristicsOptions();
+            _logger?.LogError("{Section} is invalid ({Problems}); packet heuristics are switched off", PacketHeuristicsOptions.SectionName, string.Join(" ", problems));
+            configured = new PacketHeuristicsOptions { Enabled = false };
         }
 
         _settings = new PacketHeuristicsSettings(configured);
@@ -73,7 +79,9 @@ public sealed class PacketHeuristicsFeature : IWorldFeature
     /// <inheritdoc/>
     public void Attach(ArcaneCore.Game.Maps.WorldRuntime world)
     {
-        _logger?.LogInformation("Packet heuristics {State} (report only; .packetcheck on|off switches it)", _active ? "enabled" : "disabled");
+        Volatile.Write(ref _world, world);
+        _logger?.LogInformation("Packet heuristics {State} ({Mode}; .packetcheck on|off switches it)", _active ? "enabled" : "disabled",
+            Settings.FeedScore ? "reports, and feeds the AntiCheat score" : "report only");
     }
 
     /// <summary>Replaces the options (any thread). False, with the problems, when they are invalid; nothing changes then.</summary>
@@ -126,7 +134,7 @@ public sealed class PacketHeuristicsFeature : IWorldFeature
         var lines = new List<string>
         {
             string.Create(CultureInfo.InvariantCulture,
-                $"Packet heuristics: {(settings.Enabled ? "ON" : "off")} (report only). Bots {(settings.ExemptBots ? "exempt" : "INCLUDED")}, staff {(settings.ExemptStaff ? "exempt" : "INCLUDED")}, one ledger report per session, check and opcode per {settings.ReportIntervalMs / 1000} s."),
+                $"Packet heuristics: {(settings.Enabled ? "ON" : "off")} ({(settings.FeedScore ? $"reports; AntiCheat score feed ON, weight {settings.ScoreWeight}" : "report only")}). Bots {(settings.ExemptBots ? "exempt" : "INCLUDED")}, staff {(settings.ExemptStaff ? "exempt" : "INCLUDED")}, one ledger report per session, check and opcode per {settings.ReportIntervalMs / 1000} s."),
             "check                   enabled     player        bot      staff       tool",
         };
         for (int i = 0; i < PacketChecks.Count; i++)
@@ -422,10 +430,103 @@ public sealed class PacketHeuristicsFeature : IWorldFeature
             }
 
             Ledger.Report(PacketChecks.Subsystem, PacketChecks.Code(check), SubjectOf(session, traffic), text, severity);
+            TraceToGmStream(session, check, severity, text, traffic);
+            FeedScore(session, settings, check, traffic);
         }
 
         // Counted last: a reader that sees the count also finds the ledger report of that occurrence (when it was not held back).
         Interlocked.Increment(ref _counts[Slot(check, traffic)]);
+    }
+
+    /// <summary>
+    /// Hands one reported finding of a real player to the AntiCheat score, when <c>FeedAntiCheatScore</c> is on. Only the checks whose only
+    /// honest cause is a modified client are fed: shape, malformed and dev-opcode. Everything the check table of docs/areas/packet-heuristics.md
+    /// lists with an honest false-positive risk is left out (wrong-state, unknown-opcode and incapacitated-action from latency and unimplemented
+    /// client features, cadence from a crowded city's query burst, orphan-ack from a late acknowledgement after a superseding change, replay from
+    /// an opcode that legitimately repeats a payload). Bot, staff and tool-injected traffic is never fed. The request is queued (any thread) and applied on the world thread by the AntiCheat feature,
+    /// which also applies its own exemptions. The detail is a constant, never client input. Observe only: nothing here changes the packet.
+    /// </summary>
+    private void FeedScore(WorldSession session, PacketHeuristicsSettings settings, PacketCheck check, PacketTraffic traffic)
+    {
+        if (!settings.FeedScore || traffic != PacketTraffic.Player || !IsScoredCheck(check))
+        {
+            return;
+        }
+
+        try
+        {
+            if (_services.GetService<AntiCheatFeature>() is { } antiCheat)
+            {
+                antiCheat.EnqueuePacketFinding(session, settings.ScoreWeight, PacketChecks.ScoreDetail(check));
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            if (_logger is { } log)
+            {
+                log.LogFault("packet.score-feed", ex, "PacketHeuristics: score feed threw for account {Account}", session.AccountId);
+            }
+            else
+            {
+                FaultLedger.Shared.Record("packet.score-feed", ex);
+            }
+        }
+    }
+
+    /// <summary>The checks that may feed the AntiCheat score: those a release client never trips (see <see cref="FeedScore"/>).</summary>
+    internal static bool IsScoredCheck(PacketCheck check) => check is PacketCheck.Shape or PacketCheck.DevOpcode or PacketCheck.Malformed;
+
+    /// <summary>
+    /// The report that just went to the ledger, to GMs following the <c>anticheat</c> channel. The subject is the session's player by GUID
+    /// only (no position): this runs on the reporting thread, which need not own the player's map, so nothing of the map is read. The line
+    /// carries the GUID and the account id, never a player or account name: <c>packet CODE (Player:guid) account N: text [Severity]</c>, and
+    /// <c>packet CODE account N: text [Severity]</c> while the session has no player yet (the account id alone identifies it); injected tool and bot
+    /// traffic add a <c>tool</c> or <c>bot</c> marker after CODE (<see cref="FormatPacketLine"/>).
+    /// </summary>
+    private void TraceToGmStream(WorldSession session, PacketCheck check, AnomalySeverity severity, string text, PacketTraffic traffic)
+    {
+        if (!GmTraceGuard.Wants(Volatile.Read(ref _world), GmStreamChannels.AntiCheat, out IGmTraceSink? sink))
+        {
+            return;
+        }
+
+        try
+        {
+            ObjectGuid guid = session.Player?.Guid ?? default;
+            sink.Publish(GmStreamChannels.AntiCheat, new GmTraceSubject(guid, default, 0, 0, 0f, 0f, 0f, HasPosition: false),
+                (Guid: guid, Account: session.AccountId, Code: PacketChecks.Code(check), Severity: severity, Text: text, Traffic: traffic),
+                static s => FormatPacketLine(s.Code, s.Guid, s.Account, s.Text, s.Severity, s.Traffic));
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            // Observe only: a failing trace never stops the report's count (Report increments after this call).
+            if (_logger is { } log)
+            {
+                log.LogFault("gm.trace-packet", ex, "PacketHeuristics: GM stream publish threw for account {Account}", session.AccountId);
+            }
+            else
+            {
+                FaultLedger.Shared.Record("gm.trace-packet", ex);
+            }
+        }
+    }
+
+    /// <summary>
+    /// The GM stream line of a packet report: GUID (when the session has a player) and account id, no name. A packet an operator's tool injected
+    /// (<see cref="PacketTraffic.Tool"/>) or a bot sent (<see cref="PacketTraffic.Bot"/>) carries a <c>tool</c> or <c>bot</c> marker after the code, so
+    /// the line does not read as the target player cheating; player and staff traffic carry no marker.
+    /// </summary>
+    internal static string FormatPacketLine(string code, ObjectGuid guid, int account, string text, AnomalySeverity severity, PacketTraffic traffic)
+    {
+        string marker = traffic switch
+        {
+            PacketTraffic.Tool => " tool",
+            PacketTraffic.Bot => " bot",
+            _ => string.Empty,
+        };
+        return guid == default
+            ? string.Create(CultureInfo.InvariantCulture, $"packet {code}{marker} account {account}: {text} [{severity}]")
+            : string.Create(CultureInfo.InvariantCulture, $"packet {code}{marker} (Player:{guid.Low}) account {account}: {text} [{severity}]");
     }
 
     /// <summary>The ledger subject: <c>account N</c> for a player or staff session, <c>botname NAME</c> for a managed bot, <c>tool N</c> (the target's account) for a packet a packet tool injected. Never the <c>bot-</c> subsystem prefix that files bot QA issues, and not a leading <c>bot </c> either: PlayerbotPolicyTelemetry counts every anomaly subject that starts with that.</summary>

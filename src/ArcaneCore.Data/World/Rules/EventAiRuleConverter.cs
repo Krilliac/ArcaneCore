@@ -184,6 +184,7 @@ public static class EventAiRuleConverter
         [57] = Action(CreatureRuleIds.ActionSetRangedMode, [1, 2]),
         [58] = Action(CreatureRuleIds.ActionSetWalk, [1]),
         [59] = Action(CreatureRuleIds.ActionSetFacing, [2], targetParam: 1, bools: 1),
+        [60] = Action(CreatureRuleIds.ActionSetSpellList, [1], nonNegative: 1),
         [61] = Action(CreatureRuleIds.ActionSetImmobilized, [1, 2], bools: 3),
         [63] = Action(CreatureRuleIds.ActionSetImmunitySet, [1], nonNegative: 1),
         [64] = Action(CreatureRuleIds.ActionSetFollowMovement, [1]),

@@ -4,7 +4,11 @@ Branch `claude/ac-10a-cluster-docs`, base `c3dea16292756e146df0ddd0783f97fee734d
 This is the scope record for M15.0 "Ownership/session seams, durable fencing and saves,
 ID allocation, schema authority" ([ROADMAP.md:139](../ROADMAP.md),
 [CLUSTERING_DESIGN.md:315](../CLUSTERING_DESIGN.md)). It contains no code and no schema.
-M15.0 stays **open**; nothing here implements any part of it beyond item 1 below.
+M15.0 stayed **open** when this record was written; nothing here implements any part of it beyond item 1 below.
+
+> **Superseded (dated record).** M15.0 has since merged; [ROADMAP.md:133](../ROADMAP.md) owns the phase status and says so. Its closure is still
+> open on one clause, the provider gap (the MariaDB and PostgreSQL rows of the provider theories are Skipped unless the server test-database
+> variables are set). Retire this note once the V2 provider gap closes.
 
 ## What this tranche delivers
 
@@ -64,9 +68,9 @@ these is started.
 
 | # | Work | Verdict | Why |
 |---|---|---|---|
-| A1 | Kernel contracts (only members with a consumer) + one characters data module with an `ownership_fence` table + an ownership store; claim = atomic epoch increment | keep, narrowed | Drop the `id_range` table and any `GetAsync`/range contract until a caller exists (charter 1.4). New files only; the module is reflection-discovered (`seams.md`). Must implement a no-op `ICharacterDataCleanup` (guard in `CharacterDeletionTests.cs:32-37`). The characters version is renumbered by the lead at merge |
+| A1 | Kernel contracts (only members with a consumer) + one characters data module with an `ownership_fence` table + an ownership store; claim = atomic epoch increment | keep, narrowed | Drop the `id_range` table and any `GetAsync`/range contract until a caller exists. New files only; the module is reflection-discovered (`seams.md`). Must implement a no-op `ICharacterDataCleanup` (guard in `CharacterDeletionTests.cs:32-37`). The characters version is renumbered by the lead at merge |
 | A2 | Fenced character save: same-transaction check of the held epoch, a terminal `StaleOwnerException`, claim in `WorldHost` before the save queue and world start, fail-closed handling, default off behind `Cluster:Fencing:Enabled` | keep, but not first, and larger than first stated | (a) `StageStateAsync` is also called by `EfEconomyStore.cs:87-90` and `EfCharacterQuestRewardStore.cs:82` through `new EfCharacterStore(db)`, so a fence in `SaveStateAsync` alone is bypassed by every economy and quest-reward settlement; (b) `CharacterSaveQueue` retries any exception three times and retains the snapshot (`:282-328`), so a stale-owner failure must be made terminal there or a re-claimed node can replay an old snapshot; (c) touches contested files (below) |
-| A3 | Durable item-GUID ranges (`ItemGuidAllocator` block source, opt-in) | defer to M15.1 | No consumer until a second worker exists (charter 1.4). If pulled forward: never reserve synchronously inside `Next()`, which runs on the world thread (`PlayerInventory.Storage.cs:465`); prefetch a block; keep the overflow fail-closed (`ItemTemplateStore.cs:71-75`). The "precedent" of blocking startup seeds (`EconomyFeature.cs:89-95`) is a one-shot, not a hot call |
+| A3 | Durable item-GUID ranges (`ItemGuidAllocator` block source, opt-in) | defer to M15.1 | No consumer until a second worker exists. If pulled forward: never reserve synchronously inside `Next()`, which runs on the world thread (`PlayerInventory.Storage.cs:465`); prefetch a block; keep the overflow fail-closed (`ItemTemplateStore.cs:71-75`). The "precedent" of blocking startup seeds (`EconomyFeature.cs:89-95`) is a one-shot, not a hot call |
 | A4 | Extract `ISessionClaims` from `SessionRegistry`, add a per-account session generation | defer to M15.1 | No consumer until gateway claims exist; the server-id field is still discarded (`WorldSession.cs:405`). Its true file list is wider than first stated: `WorldSession.cs:68`, `WorldServer.cs`, service registration, `WorldTestHost.cs:81`, `WorldServerShutdownTests.cs:62`, `WorldLifecyclePersistenceTests.cs:461`, and `SessionRegistry.Find` returns the concrete session |
 | A5 | Transfer-state inventory document | done here | |
 | B1 | Save-acknowledgement contract and one "character flush" barrier across core, quest, spellbook, spell state, social, reputation and instance writes; retire drop-after-3 | defer; large | Depends on the reputation, delete-recovery and reward lanes landing |
@@ -78,7 +82,7 @@ these is started.
 ## Deliberately deferred, and out of scope
 
 - All of M15.1 and later: gateway and worker processes, gRPC packages, transfer
-  participant interfaces, supervision, placement. Charter 1.4 forbids pre-creating them.
+  participant interfaces, supervision, placement. Nothing was pre-created before it had a consumer (those phases have since merged; see the superseded note above).
 - Durable item-GUID ranges and `ISessionClaims` (A3, A4) until a consumer exists.
 - Fencing the non-core stores (B4) and the settlement paths until their lanes merge.
 - Any default-on behavior change (see decisions).
@@ -91,8 +95,8 @@ these is started.
 ## Decisions that need an explicit go
 
 The 2026-10-02 charter amendment (the "Blanket go-ahead"; the charter has since been retired, see
-[contributing](../guide/contributing.md#retired-rules)) removed per-milestone waiting, but `ROADMAP.md:146-149` still says this request
-authorizes research and planning, with runtime code only in its bounded phase. Ask once,
+[contributing](../guide/contributing.md#retired-rules)) removed per-milestone waiting, but `ROADMAP.md:146-149` still said this request
+authorized research and planning, with runtime code only in its bounded phase. The record asked once,
 explicitly, before any A-item code.
 
 1. **Start M15.0 implementation** and confirm which of A1-A4 are in the first tranche.
@@ -116,7 +120,7 @@ explicitly, before any A-item code.
    add a second realm-identity source if one already exists in the realm options.
 7. **Schema authority (B2).** Lock plus opt-in validate mode first; changing the default
    for serving nodes changes Realm and World startup.
-8. **Real-client acceptance.** Per charter 1.3/8.1, M15.0 cannot be "accepted" without a
+8. **Real-client acceptance.** Under the real-client acceptance rule, M15.0 cannot be "accepted" without a
    real 5875 run, which the developer has deferred. "Implemented" means CI plus automated
    tests only.
 

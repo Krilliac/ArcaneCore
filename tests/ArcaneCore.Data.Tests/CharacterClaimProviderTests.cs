@@ -144,6 +144,81 @@ public sealed class CharacterClaimProviderTests : IAsyncLifetime
     }
 
     /// <summary>
+    /// A shard with no heartbeat row (a worker that crashed before the schema-75 upgrade, or before its first beat) is never reaped, whatever the age asked for: fail closed. The row is deleted
+    /// after the acquire (which writes the first beat), then the real <c>ReapAsync</c> is asked; a beat then fills the row and the same call reaps.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task AShardWithNoHeartbeatRow_IsNeverReaped_UntilItBeats(DatabaseProvider provider)
+    {
+        (ServiceProvider services, _) = await OpenAsync(await _databases.CreateAsync(provider));
+        CharacterOwnershipToken a = await AcquireAsync(services, "a", 1);
+        long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        long farFuture = now + (long)TimeSpan.FromDays(1).TotalMilliseconds;
+
+        await using (AsyncServiceScope scope = services.CreateAsyncScope())
+        {
+            CharacterDbContext db = scope.ServiceProvider.GetRequiredService<CharacterDbContext>();
+            using IDisposable exempt = CharacterWriteFence.Exempt();
+            Assert.Equal(1, await db.Set<CharacterOwnershipHeartbeatRow>().Where(h => h.Scope == a.Scope).ExecuteDeleteAsync());
+        }
+
+        await using (AsyncServiceScope scope = services.CreateAsyncScope())
+        {
+            ICharacterOwnershipStore ownership = scope.ServiceProvider.GetRequiredService<ICharacterOwnershipStore>();
+            Assert.False(await ownership.ReapAsync(a, farFuture, 0)); // no row: nothing is old enough, however far in the future the clock is
+            Assert.True(await ownership.IsOwnedAsync(a.Scope));
+        }
+
+        await HeartbeatAsync(services, a, now);
+        await using (AsyncServiceScope scope = services.CreateAsyncScope())
+        {
+            Assert.True(await scope.ServiceProvider.GetRequiredService<ICharacterOwnershipStore>().ReapAsync(a, farFuture, 0));
+        }
+    }
+
+    /// <summary>
+    /// A heartbeat never waits for a character write: while a fenced transaction of the shard is open (its begin took the shared lock on the fence row, FOR SHARE on PostgreSQL, LOCK IN SHARE MODE on
+    /// MariaDB) a beat completes at once, and beats racing many fenced begins and commits all succeed. SQLite has no row locks (its fence is an UPDATE and its writer is single), so it is not part of this case.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task AHeartbeat_NeverWaitsForAFencedBegin_OnTheServerProviders(DatabaseProvider provider)
+    {
+        if (provider == DatabaseProvider.Sqlite)
+            return;
+        (ServiceProvider services, EfTransferDecisionStore store) = await OpenAsync(await _databases.CreateAsync(provider));
+        CharacterOwnershipToken a = await AcquireAsync(services, "a", 1);
+        await store.TryClaimCharacterAsync(44, a);
+        services.GetRequiredService<CharacterOwnershipContext>().Current = a;
+        TimeSpan limit = TimeSpan.FromSeconds(30);
+        long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        await using (AsyncServiceScope scope = services.CreateAsyncScope())
+        {
+            CharacterDbContext db = scope.ServiceProvider.GetRequiredService<CharacterDbContext>();
+            using (CharacterWriteClaim.Use(44))
+            {
+                await using IDbContextTransaction open = await db.Database.BeginTransactionAsync();
+                await HeartbeatAsync(services, a, now + 1).WaitAsync(limit); // the transaction is open and holds the shared lock
+                await open.CommitAsync();
+            }
+        }
+
+        Task writers = Task.Run(async () =>
+        {
+            for (int i = 0; i < 25; i++)
+                await WriteAsync(services, 44, a);
+        });
+        Task beats = Task.Run(async () =>
+        {
+            for (int i = 0; i < 50; i++)
+                await HeartbeatAsync(services, a, now + 100 + i);
+        });
+        await Task.WhenAll(writers, beats).WaitAsync(TimeSpan.FromMinutes(2));
+    }
+
+    /// <summary>
     /// The read-only live-owner probe a playerbot start asks before it writes anything: it must say "live" exactly when the claim would refuse (a fresh holder, a holder with no heartbeat, a
     /// stale holder whose shard lock is still held, a transfer in flight) and "not live" exactly when the claim would take the character (no row, its own claim, a dead incarnation, a stale
     /// heartbeat with the lock free). Each case is checked against the real claim, so the two cannot drift apart.

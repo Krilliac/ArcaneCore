@@ -180,6 +180,18 @@ public sealed class LootSettlements(IServiceScopeFactory scopes, ILogger logger,
         return true;
     }
 
+    /// <summary>The characters with a chest operation in flight, ascending.</summary>
+    public IReadOnlyCollection<int> SettlingCharacters
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return [.. _operations.Select(o => o.Source.Actor?.Before.Id).OfType<int>().Distinct().Order()];
+            }
+        }
+    }
+
     /// <summary>Completes when no operation involving the character is in flight (storage and publication).</summary>
     public Task WaitForCharacterAsync(int characterId, CancellationToken cancellationToken = default)
     {

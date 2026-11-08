@@ -1,4 +1,5 @@
 using ArcaneCore.Game;
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Instances;
 using ArcaneCore.Game.Maps;
@@ -86,6 +87,9 @@ public interface ITransferSessionEntry
     void ResumeSaves(Player player);
 }
 
+/// <summary>The shadow load found the adopted session already closed (its scope disposed): the client left, which is not a fault.</summary>
+internal sealed class TransferClientClosedException(string message, Exception inner) : InvalidOperationException(message, inner);
+
 /// <summary>
 /// Production <see cref="ITransferShadowLoader"/>: the <see cref="ICharacterHooks"/> loading phases of CMSG_PLAYER_LOGIN (through
 /// <see cref="TransferShadowHooks"/>, so hooks marked <see cref="ISkippedOnTransferShadowLoad"/> do not run) on the adopted session's service
@@ -106,6 +110,19 @@ public sealed class CharacterHooksShadowLoader(Func<PlayerTransferBundle, WorldS
             throw new InvalidOperationException($"adopted session belongs to account {session.AccountId}, the transfer to account {bundle.AccountId}");
         }
 
+        try
+        {
+            return await LoadForSessionAsync(session, bundle, cancellationToken).ConfigureAwait(false);
+        }
+        catch (ObjectDisposedException ex) when (session.IsDisconnected)
+        {
+            // The session's scope was disposed because the client left while the load ran: the client closing, not a fault of a service.
+            throw new TransferClientClosedException($"the session of account {bundle.AccountId} closed while its shadow load ran", ex);
+        }
+    }
+
+    private static async Task<Player> LoadForSessionAsync(WorldSession session, PlayerTransferBundle bundle, CancellationToken cancellationToken)
+    {
         int characterId = checked((int)new ObjectGuid(bundle.CharacterGuid).Low);
         ICharacterStore characters = session.Services.GetRequiredService<ICharacterStore>();
         IWorldDataStore worldData = session.Services.GetRequiredService<IWorldDataStore>();
@@ -138,11 +155,13 @@ public sealed class CharacterHooksShadowLoader(Func<PlayerTransferBundle, WorldS
         }
 
         IReadOnlyList<ActionButton> buttons = await characters.GetActionButtonsAsync(characterId, cancellationToken).ConfigureAwait(false);
+#pragma warning disable ARC0002 // the shadow player is built here and returned only after the load hooks ran, so no world thread owns Home or CharacterOwnership yet
         var player = new Player(character, CharacterPackets.BuildAppearance(raceInfo, classInfo), session, buttons)
         {
             Home = home,
             CharacterOwnership = session.World.CharacterOwnership,
         };
+#pragma warning restore ARC0002
 
         await TransferShadowHooks.RunAsync(session.Services.GetServices<ICharacterHooks>(), session, character, player).ConfigureAwait(false);
         return player;
@@ -265,7 +284,8 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
     /// <summary>How many finished (activated or discarded) transfer ids are remembered to keep repeats idempotent.</summary>
     private const int RememberedFinished = 4096;
 
-    private readonly WorkerNodeId _workerId;
+    private readonly WorkerNodeId _ownName;
+    private readonly WorkerTransferName? _servedName;
     private readonly WorldRuntime _world;
     private readonly ITransferShadowLoader _loader;
     private readonly ITransferSessionEntry _entry;
@@ -296,13 +316,15 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
         ITransferInstanceAllocator? instances = null,
         Func<PlayerTransferBundle, bool>? sessionReady = null,
         ITransferOfflineArrival? offlineArrival = null,
-        CharacterClaimService? claims = null)
+        CharacterClaimService? claims = null,
+        WorkerTransferName? servedName = null)
     {
         ArgumentNullException.ThrowIfNull(world);
         ArgumentNullException.ThrowIfNull(loader);
         ArgumentNullException.ThrowIfNull(entry);
         ArgumentOutOfRangeException.ThrowIfLessThan(maxReservations, 1);
-        _workerId = workerId;
+        _ownName = workerId;
+        _servedName = servedName;
         _world = world;
         _loader = loader;
         _entry = entry;
@@ -323,7 +345,8 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
     /// </summary>
     internal TimeSpan SessionOpenGrace { get; init; } = TimeSpan.FromSeconds(2);
 
-    public WorkerNodeId WorkerId => _workerId;
+    /// <summary>The name this target answers under: the served name as it is now, else the id it was built with.</summary>
+    public WorkerNodeId WorkerId => _servedName?.Current ?? _ownName;
 
     public Guid Incarnation { get; }
 
@@ -556,6 +579,12 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
 
         if (error is not null)
         {
+            if (error is TransferClientClosedException)
+            {
+                _logger.LogInformation("The deferred shadow load of character {Guid} for transfer {TransferId} found the client closed", slot.CharacterGuid, slot.TransferId);
+                return;
+            }
+
             FaultLedger.Shared.Record("cluster.transfer-target", error);
             _logger.LogWarning(error, "The deferred shadow load of character {Guid} for transfer {TransferId} failed; the install after the commit repeats it", slot.CharacterGuid, slot.TransferId);
         }
@@ -585,7 +614,7 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
 
         if (removed is not null)
         {
-            _logger.LogInformation("Transfer {TransferId} discarded on {Worker}: {Reason}", transferId, _workerId, abortReason);
+            _logger.LogInformation("Transfer {TransferId} discarded on {Worker}: {Reason}", transferId, WorkerId, abortReason);
         }
 
         // The shadow was never in a map or the online registry: dropping the reference is the teardown, plus undoing what its load registered
@@ -621,7 +650,9 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
         }
         else if (load.IsCompletedSuccessfully)
         {
+#pragma warning disable ARC0006 // IsCompletedSuccessfully was checked in the same condition, so Result does not block
             ReleaseShadow(load.Result);
+#pragma warning restore ARC0006
         }
     }
 
@@ -688,7 +719,7 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
 
             if (_discarded.Contains(transferId))
             {
-                throw new InvalidOperationException($"transfer '{transferId}' was discarded on worker '{_workerId}'");
+                throw new InvalidOperationException($"transfer '{transferId}' was discarded on worker '{WorkerId}'");
             }
 
             if (!_slots.TryGetValue(transferId, out Slot? found))
@@ -709,7 +740,7 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
 
             if (found.Activating)
             {
-                throw new InvalidOperationException($"transfer '{transferId}' is already activating on worker '{_workerId}'");
+                throw new InvalidOperationException($"transfer '{transferId}' is already activating on worker '{WorkerId}'");
             }
 
             found.Activating = true; // from here a discard of this transfer is ignored
@@ -721,7 +752,7 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
             if (PlayerTokenFor(token) is not { } playerToken)
             {
                 throw new InvalidOperationException(
-                    $"transfer '{transferId}' committed character {bundle.CharacterGuid} to {token.Scope}/{token.Incarnation:D}, but worker '{_workerId}' writes as {_world.CharacterOwnership?.Scope}/{_world.CharacterOwnership?.Incarnation:D}");
+                    $"transfer '{transferId}' committed character {bundle.CharacterGuid} to {token.Scope}/{token.Incarnation:D}, but worker '{WorkerId}' writes as {_world.CharacterOwnership?.Scope}/{_world.CharacterOwnership?.Incarnation:D}");
             }
 
             var guid = new ObjectGuid(bundle.CharacterGuid);
@@ -740,7 +771,7 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
                 online
                     ? "Transfer {TransferId}: character {Character} is online on {Worker} already; the activation without the client writes nothing"
                     : "Transfer {TransferId}: the client of character {Character} is gone; the character arrived offline on {Worker}",
-                transferId, bundle.CharacterGuid, _workerId);
+                transferId, bundle.CharacterGuid, WorkerId);
         }
         catch
         {
@@ -833,18 +864,18 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
                 return false;
             }
 
-            throw new InvalidOperationException($"character {bundle.CharacterGuid} is already online on worker '{_workerId}'");
+            throw new InvalidOperationException($"character {bundle.CharacterGuid} is already online on worker '{WorkerId}'");
         }
 
         if (_world.TryGetMap(bundle.TargetMapId, bundle.TargetInstanceId, out Map? map) != MapAccessResult.Granted || map is null)
         {
-            throw new InvalidOperationException($"worker '{_workerId}' does not own map {bundle.TargetMapId} instance {bundle.TargetInstanceId}");
+            throw new InvalidOperationException($"worker '{WorkerId}' does not own map {bundle.TargetMapId} instance {bundle.TargetInstanceId}");
         }
 
         TeleportService? teleports = TeleportService.Of(_world);
         if (teleports is null)
         {
-            throw new InvalidOperationException($"worker '{_workerId}' has no teleport service attached");
+            throw new InvalidOperationException($"worker '{WorkerId}' has no teleport service attached");
         }
 
         // The arrived player's snapshot token must be this world's own ownership token: the write fence verifies a snapshot's token against the scope's
@@ -854,7 +885,7 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
         if (PlayerTokenFor(token) is not { } playerToken)
         {
             throw new InvalidOperationException(
-                $"transfer '{slot.TransferId}' committed character {bundle.CharacterGuid} to {token.Scope}/{token.Incarnation:D}, but worker '{_workerId}' writes as {_world.CharacterOwnership?.Scope}/{_world.CharacterOwnership?.Incarnation:D}");
+                $"transfer '{slot.TransferId}' committed character {bundle.CharacterGuid} to {token.Scope}/{token.Incarnation:D}, but worker '{WorkerId}' writes as {_world.CharacterOwnership?.Scope}/{_world.CharacterOwnership?.Incarnation:D}");
         }
 
         TransferPosition at = bundle.TargetPosition;
@@ -911,7 +942,7 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
         try
         {
             _world.RegisterPlayerForTransferArrival(shadow);
-            if (!teleports.BeginClusterArrival(shadow, map, new TeleportDestination(bundle.TargetMapId, at.X, at.Y, at.Z, at.Orientation), new Arrival(_entry, _world)))
+            if (!teleports.BeginClusterArrival(shadow, map, new TeleportDestination(bundle.TargetMapId, at.X, at.Y, at.Z, at.Orientation), new Arrival(_entry, _world, bundle.SourceMapId)))
             {
                 throw new InvalidOperationException($"the arrival of character {bundle.CharacterGuid} could not be started");
             }
@@ -919,16 +950,32 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             // Never leave a session "in world" with a player that is in the registry but will never reach a map: undo the registration and kick.
+            // Each undo step is guarded on its own, so a second failure cannot skip the ones after it (above all the detach, which unregisters the player).
             FaultLedger.Shared.Record("cluster.transfer-target", ex);
-            claims?.AbandonTicket(characterId, claimTicket);
-            teleports.Forget(shadow);
-            _world.DetachPlayerForTransfer(shadow);
-            shadow.Session.Kick("transfer target could not start the arrival");
+
+            UndoStep(() => claims?.AbandonTicket(characterId, claimTicket), slot, "abandon the claim ticket");
+            UndoStep(() => teleports.Forget(shadow), slot, "forget the teleport");
+            UndoStep(() => _world.DetachPlayerForTransfer(shadow), slot, "detach the player");
+            UndoStep(() => shadow.Session.Kick("transfer target could not start the arrival"), slot, "kick the session");
             throw;
         }
 
         Finish(slot);
         return false;
+    }
+
+    /// <summary>One step of a failed arrival's undo: a failure is logged and recorded, never thrown, so the remaining steps still run. World thread.</summary>
+    private void UndoStep(Action step, Slot slot, string what)
+    {
+        try
+        {
+            step();
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("cluster.transfer-target-undo", ex);
+            _logger.LogError(ex, "Transfer {TransferId}: failed to {Step} while undoing a failed arrival", slot.TransferId, what);
+        }
     }
 
     /// <summary>
@@ -996,11 +1043,24 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
     }
 
     /// <summary>The arrival callbacks of the teleport service: the held saves resume once the player is in its map (and when the arrival is abandoned), then the login notification.</summary>
-    private sealed class Arrival(ITransferSessionEntry entry, WorldRuntime world) : ITransferArrivalObserver
+    private sealed class Arrival(ITransferSessionEntry entry, WorldRuntime world, uint sourceMapId) : ITransferArrivalObserver
     {
         public void MapAdded(Player player) => entry.ResumeSaves(player);
 
-        public void Entered(Player player) => world.NotifyLoggedIn(player);
+        public void Entered(Player player)
+        {
+            world.NotifyLoggedIn(player);
+
+            // A ghost that entered the map of its body comes back to life here, not on the source (MapCombat.ReviveAfterTransferArrival). Posted: the notification puts the body back,
+            // and CharacterLifeFeature posts the last of the stored vitals from it, so this runs after both.
+            world.Post(() =>
+            {
+                if (ReferenceEquals(world.FindOnlinePlayer(player.Guid), player))
+                {
+                    player.Map?.Combat.ReviveAfterTransferArrival(player, sourceMapId);
+                }
+            });
+        }
 
         public void Abandoned(Player player) => entry.ResumeSaves(player);
     }
@@ -1018,7 +1078,7 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
 
             if (_discarded.Contains(transferId))
             {
-                throw new InvalidOperationException($"transfer '{transferId}' was discarded on worker '{_workerId}'");
+                throw new InvalidOperationException($"transfer '{transferId}' was discarded on worker '{WorkerId}'");
             }
 
             if (!_slots.TryGetValue(transferId, out Slot? slot))
@@ -1026,7 +1086,7 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
                 // The reservation is gone (this worker restarted after the reserve): adopt the transfer from the bundle.
                 if (!_world.Owns(bundle.TargetMapId, bundle.TargetInstanceId))
                 {
-                    throw new InvalidOperationException($"worker '{_workerId}' does not own map {bundle.TargetMapId} instance {bundle.TargetInstanceId}");
+                    throw new InvalidOperationException($"worker '{WorkerId}' does not own map {bundle.TargetMapId} instance {bundle.TargetInstanceId}");
                 }
 
                 if (_byCharacter.TryGetValue(bundle.CharacterGuid, out Guid other))
@@ -1142,7 +1202,14 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
                     }
                 }
 
-                FaultLedger.Shared.Record("cluster.transfer-target", ex);
+                if (ex is TransferClientClosedException)
+                {
+                    _logger.LogInformation("Transfer {TransferId}: the shadow load found the client of character {Guid} closed", slot.TransferId, slot.CharacterGuid);
+                }
+                else
+                {
+                    FaultLedger.Shared.Record("cluster.transfer-target", ex);
+                }
             }
 
             throw;
@@ -1186,9 +1253,9 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
             throw new ArgumentException($"bundle belongs to transfer '{bundle.TransferId}', not '{transferId}'", nameof(bundle));
         }
 
-        if (bundle.TargetWorkerId != _workerId)
+        if (bundle.TargetWorkerId != WorkerId)
         {
-            throw new ArgumentException($"bundle targets worker '{bundle.TargetWorkerId}', this is '{_workerId}'", nameof(bundle));
+            throw new ArgumentException($"bundle targets worker '{bundle.TargetWorkerId}', this is '{WorkerId}'", nameof(bundle));
         }
     }
 

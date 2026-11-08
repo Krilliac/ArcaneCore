@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Globalization;
 using System.Numerics;
 using System.Runtime.CompilerServices;
@@ -61,7 +62,7 @@ internal static class PlayerbotShipNetwork
     internal static IReadOnlyDictionary<uint, ShipClass> ClassificationOf(TuningCatalog catalog)
     {
         ArgumentNullException.ThrowIfNull(catalog);
-        return catalog.Ships.ToDictionary(r => r.Entry, r => new ShipClass((TravelMeans)r.Means, (TravelAccess)r.Access, r.Name));
+        return catalog.Ships.ToFrozenDictionary(r => r.Entry, r => new ShipClass((TravelMeans)r.Means, (TravelAccess)r.Access, r.Name));
     }
 
     private static ClassicBox? s_classicBox;

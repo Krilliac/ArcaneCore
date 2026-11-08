@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using ArcaneCore.Kernel.Safety;
 
 namespace ArcaneCore.World.Ops.Diagnostics;
 
@@ -81,6 +82,7 @@ public sealed class AllocationAggregator(int maxTypes = AllocationAggregator.Def
     /// Record one sampled allocation of <paramref name="bytes"/> by <paramref name="typeName"/> on heap <paramref name="heap"/>
     /// (the runtime's <c>AllocationKind</c>). An unknown heap or a negative size counts as a malformed event and nothing else.
     /// </summary>
+    [AuditedUnsafe("Unsafe.IsNullRef only tests the ref returned by GetValueRefOrNullRef for null; the ref is used inside the lock before any dictionary mutation")]
     public void Add(string? typeName, int heap, long bytes)
     {
         if (heap is < 0 or > 2 || bytes < 0)

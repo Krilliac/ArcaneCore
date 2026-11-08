@@ -26,6 +26,9 @@ public static class WorldStateDumpImporter
         "winter_rain_chance", "winter_snow_chance", "winter_storm_chance",
     ];
 
+    /// <summary>The MySQL INSERT modifiers an importer-unsupported form may carry; one shared array, not one per line and table.</summary>
+    private static readonly string[] s_insertModifiers = ["LOW_PRIORITY ", "DELAYED ", "HIGH_PRIORITY ", "IGNORE "];
+
     /// <summary>Parse the two tables out of <paramref name="dump"/>; throws <see cref="InvalidDataException"/> on anything malformed.</summary>
     public static WorldStateContent Parse(TextReader dump)
     {
@@ -101,7 +104,7 @@ public static class WorldStateDumpImporter
             return false;
         }
 
-        foreach (string modifier in new[] { "LOW_PRIORITY ", "DELAYED ", "HIGH_PRIORITY ", "IGNORE " })
+        foreach (string modifier in s_insertModifiers)
         {
             if (rest.StartsWith(modifier, StringComparison.OrdinalIgnoreCase))
             {
@@ -259,7 +262,7 @@ public static class WorldStateDumpImporter
     /// <paramref name="onlyCarried"/> a table is emptied only when <paramref name="content"/> has rows for it (the refresh command).
     /// Joins the caller's transaction through a savepoint. Returns the row counts written.
     /// </summary>
-    public static async Task<(int Weather, int BaseXp)> WriteAsync(WorldDbContext db, WorldStateContent content, bool replace, CancellationToken cancellationToken = default, bool onlyCarried = false)
+    public static async Task<(int Weather, int BaseXp)> WriteAsync(WorldDbContext db, WorldStateContent content, bool replace, bool onlyCarried = false, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(db);
         ArgumentNullException.ThrowIfNull(content);

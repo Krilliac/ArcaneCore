@@ -276,14 +276,24 @@ public sealed class WorldHandoffHostingTests
     }
 
     [Fact]
-    public void NotWorkerMode_OrAStandbyProcess_RegistersNothing()
+    public void NotWorkerMode_RegistersNothing()
     {
-        foreach (IConfiguration configuration in new[] { Configuration(workerEnabled: false), Configuration(standby: true) })
-        {
-            var services = new ServiceCollection();
-            services.AddWorldHandoff(configuration);
-            Assert.Empty(services);
-        }
+        var services = new ServiceCollection();
+        services.AddWorldHandoff(Configuration(workerEnabled: false));
+        Assert.Empty(services);
+    }
+
+    [Fact]
+    public void AStandbyProcess_RegistersTheSourceOnly()
+    {
+        var services = new ServiceCollection();
+        services.AddWorldHandoff(Configuration(standby: true));
+
+        Assert.Contains(services, d => d.ServiceType == typeof(IWorldHandoffSource));
+        Assert.DoesNotContain(services, d => d.ServiceType == typeof(WorldHandoffCoordinatorProvider));
+        Assert.DoesNotContain(services, d => d.ServiceType == typeof(WorldHandoffInFlight));
+        Assert.DoesNotContain(services, d => d.ServiceType == typeof(Microsoft.Extensions.Hosting.IHostedService));
+        Assert.Single(services);
     }
 
     [Fact]
@@ -360,6 +370,19 @@ public sealed class WorldHandoffHostingTests
         Assert.Contains("router:reroute", events.Snapshot());
         Assert.Equal(ClusterRestartOutcome.RestartQueued, result.Outcome);
         Assert.DoesNotContain("cancel", result.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ACompletedHandoff_IsNotCounted_EvenBeforeItsRemovalContinuationRuns()
+    {
+        var inFlight = new WorldHandoffInFlight();
+        var gate = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _ = inFlight.Track(gate.Task);
+        Assert.Equal(1, inFlight.Count);
+
+        gate.SetResult(1);
+
+        Assert.Equal(0, inFlight.Count);
     }
 
     [Fact]

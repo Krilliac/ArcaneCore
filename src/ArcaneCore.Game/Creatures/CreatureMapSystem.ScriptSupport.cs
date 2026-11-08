@@ -210,11 +210,17 @@ public sealed partial class CreatureMapSystem
     }
 
     /// <summary>
-    /// cmangos Creature::SetInCombatWithZone (Entities/Creature.cpp:2360-2403, EventAI ZONE_COMBAT_PULSE): only on a dungeon or raid map
-    /// (Map::IsDungeon, the map template's type: a battleground is not one); every living player on the map who is not a game master and
-    /// whom the creature can attack is put on the creature's threat list and in combat with it. Returns how many.
+    /// cmangos Creature::SetInCombatWithZone (Entities/Creature.h: <c>void SetInCombatWithZone(bool checkAttackability = true);</c>;
+    /// Entities/Creature.cpp: only on a dungeon or raid map, every living player on the map who is not a game master is put on the
+    /// creature's threat list and in combat with it, skipping a player the creature cannot attack unless <paramref name="checkAttackability"/>
+    /// is false). EventAI's ZONE_COMBAT_PULSE and every other caller use the default <c>true</c>. Only the Thaddius overload passes
+    /// <c>false</c> (naxxramas/boss_thaddius.cpp: the Thadius Lightning Visual spell effect calls
+    /// <c>static_cast&lt;Creature*&gt;(target)->SetInCombatWithZone(false)</c> right after <c>SetCombatScriptStatus(false)</c>, while he
+    /// still carries the immunity flags his own Aggro only drops once he is actually engaged). Only on a dungeon or raid map
+    /// (Map::IsDungeon, the map template's type: a battleground is not one); a dead creature does nothing. Returns how many players were
+    /// put in combat with it.
     /// </summary>
-    public int SetInCombatWithZone(Creature creature)
+    public int SetInCombatWithZone(Creature creature, bool checkAttackability = true)
     {
         ArgumentNullException.ThrowIfNull(creature);
         if (Map.Template is not { IsDungeon: true } || !creature.IsAlive)
@@ -222,7 +228,8 @@ public sealed partial class CreatureMapSystem
             return 0;
         }
 
-        Player[] players = [.. Map.Players.Where(p => p.IsAlive && !p.IsGameMaster && Map.Combat.Hooks.CanAttack(creature, p))];
+        Player[] players = [.. Map.Players.Where(p => p.IsAlive && !p.IsGameMaster
+            && (!checkAttackability || Map.Combat.CanAttackSingleTarget(creature, p)))];
         if (creature.Combat.Victim is null && players.Length > 0)
         {
             // Engaged first: the unit AttackClosestEnemy would pick from the threat list once every player is on it.
@@ -323,7 +330,7 @@ public sealed partial class CreatureMapSystem
 
     /// <summary>
     /// cmangos Creature::UpdateEntry(entry) with its health kept (EventAI UPDATE_TEMPLATE, CreatureEventAI.cpp:1078-1086): the creature takes
-    /// the other template (entry, model, faction, flags, level and stats) and keeps its health percent, its combat and its AI; its next respawn
+    /// the other template (entry, model, faction, flags, level, stats and spell list) and keeps its health percent, its combat and its AI; its next respawn
     /// returns to the template it had. False for the creature's own entry or a missing template.
     /// </summary>
     public bool UpdateEntry(Creature creature, uint entry)
@@ -346,6 +353,7 @@ public sealed partial class CreatureMapSystem
             creature.UnitFlags |= UnitFlags.InCombat;
         }
 
+        BindSpellList(creature); // cmangos Creature::UpdateEntry -> SetSpellList (Creature.cpp:609-612)
         return true;
     }
 
@@ -360,7 +368,7 @@ public sealed partial class CreatureMapSystem
         SyncWalkMode(creature, run);
     }
 
-    /// <summary>vmangos IsWithinLOSInMap between two objects of this map (open without vmaps).</summary>
+    /// <summary>vmangos IsWithinLOSInMap between two objects of this map (open without vmaps); also the spell lists' target-rule line of sight.</summary>
     internal bool IsInLineOfSight(WorldObject from, WorldObject to) => InLineOfSight(from, to);
 
     /// <summary>A spell a creature of this map cast landed: its AI hears of it (cmangos SpellHitTarget).</summary>

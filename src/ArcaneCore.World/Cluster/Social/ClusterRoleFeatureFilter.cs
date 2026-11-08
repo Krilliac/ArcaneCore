@@ -49,7 +49,7 @@ public sealed class ClusterRoleFeatureFilter
         => ShouldAttachFeature(featureType, role, nodeId, _ => fencingToken, nowUtc);
 
     /// <summary>
-    /// The lease scope whose holder <em>attaches</em> <paramref name="featureType"/> (<see cref="RealmAuthorityScopes.Social"/> for AutoBroadcast,
+    /// The lease scope whose holder <em>runs</em> <paramref name="featureType"/> (<see cref="RealmAuthorityScopes.Social"/> for AutoBroadcast,
     /// <see cref="RealmAuthorityScopes.Economy"/> for the auction house bot), or null for a feature that is attached on every node.
     /// <see cref="Instances.InstanceFeature"/> is attached on every map worker and gates its own schedule on <see cref="RealmAuthorityScopes.Instances"/>, so it has no scope here.
     /// </summary>
@@ -68,6 +68,14 @@ public sealed class ClusterRoleFeatureFilter
 
         return null;
     }
+
+    /// <summary>
+    /// Whether <paramref name="featureType"/> is attached on a node of <paramref name="role"/> even while the node does not hold its lease: the realm singletons (<see cref="LeaseScopeFor"/>) on a
+    /// <see cref="ClusterNodeRole.MapWorker"/>. They sit dormant (they gate every tick on <see cref="RealmAuthorityLeaseKeeper.Holds"/>) and start by themselves when the node takes the lease over at run time,
+    /// so a survivor of a dead holder runs them without a restart. <see cref="ShouldAttachFeature(Type, ClusterNodeRole, string, Func{string, long?}, DateTimeOffset, Guid)"/> still says whether the lease is held now.
+    /// </summary>
+    public static bool AttachesDormant(Type featureType, ClusterNodeRole role)
+        => role == ClusterNodeRole.MapWorker && LeaseScopeFor(featureType) is not null;
 
     /// <summary>
     /// As <see cref="ShouldAttachFeature(Type, ClusterNodeRole, string, long?, DateTimeOffset)"/>, with the fencing token looked up per
@@ -92,7 +100,7 @@ public sealed class ClusterRoleFeatureFilter
 
         // AutoBroadcast is a realm-wide timer that sends to every player (docs/CLUSTERING_DESIGN.md:538-542):
         // running it on every map worker would broadcast each message once per worker. It runs on Combined, on Social, or on the
-        // one MapWorker that holds the social lease.
+        // one MapWorker that holds the social lease (the other map workers attach it dormant, see AttachesDormant, and it starts on the one that takes the lease over).
         if (featureType == typeof(AutoBroadcastFeature))
         {
             if (role == ClusterNodeRole.Combined)
@@ -109,7 +117,8 @@ public sealed class ClusterRoleFeatureFilter
         }
 
         // AuctionBotFeature (and its periodic sell/buy/custody reconciliation timer) runs only on Combined, the
-        // fenced Economy authority, or the one MapWorker that holds the economy lease (docs/CLUSTERING_DESIGN.md:484-528, 565).
+        // fenced Economy authority, or the one MapWorker that holds the economy lease (docs/CLUSTERING_DESIGN.md:484-528, 565); the other
+        // map workers attach it dormant (see AttachesDormant) and it starts on the one that takes the lease over.
         if (featureType == typeof(AuctionBotFeature))
         {
             if (role == ClusterNodeRole.Combined)

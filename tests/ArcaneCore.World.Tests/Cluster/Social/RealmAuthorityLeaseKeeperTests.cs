@@ -1,3 +1,4 @@
+using System.Data.Common;
 using ArcaneCore.Kernel.Cluster.Social;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Ops;
@@ -78,6 +79,65 @@ public sealed class RealmAuthorityLeaseKeeperTests
         Assert.Equal(2, keeper.TokenFor(RealmAuthorityScopes.Social));
     }
 
+    private sealed class StoreDbException() : DbException("a lock wait outlasted the command timeout");
+
+    /// <summary>Advances the manual clock one retry delay at a time until <paramref name="task"/> is done (the start's retry waits on a timer of that clock). Unproven until the integration gate runs it.</summary>
+    private async Task AdvanceRetryDelaysUntilAsync(Task task)
+    {
+        for (int step = 0; step < 500 && !task.IsCompleted; step++)
+        {
+            _time.Advance(RealmAuthorityLeaseKeeper.StartAcquireRetryDelay);
+            await Task.Delay(5);
+        }
+
+        Assert.True(task.IsCompleted, "the start did not finish");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AcquireAtStart_RetriesAStoreFailure_AndThenHoldsTheScope(bool databaseException)
+    {
+        // A takeover's FOR UPDATE can wait behind a stream of fenced writers past the command timeout; the first attempts fail, the next one succeeds, and the start must not fail.
+        var store = new ControlledStore(_inner) { AcquireFailure = () => databaseException ? new StoreDbException() : new TimeoutException("lock wait") };
+        store.FailNextAcquires(2);
+        await using RealmAuthorityLeaseKeeper keeper = Create(store);
+
+        Task acquire = keeper.AcquireAtStartAsync(Guid.NewGuid(), CancellationToken.None);
+        await AdvanceRetryDelaysUntilAsync(acquire);
+        await acquire.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(1, keeper.TokenFor(RealmAuthorityScopes.Social));
+        Assert.Equal(3 + 4, store.Acquires); // social: two failures and the grant; the four other map worker scopes: one call each
+    }
+
+    [Fact]
+    public async Task AcquireAtStart_GivesUpAfterTheBoundedAttempts_WithTheStoreFailure()
+    {
+        var store = new ControlledStore(_inner) { AcquireFailure = () => new TimeoutException("lock wait") };
+        store.FailNextAcquires(1000);
+        await using RealmAuthorityLeaseKeeper keeper = Create(store);
+
+        Task acquire = keeper.AcquireAtStartAsync(Guid.NewGuid(), CancellationToken.None);
+        await AdvanceRetryDelaysUntilAsync(acquire);
+
+        await Assert.ThrowsAsync<TimeoutException>(() => acquire.WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.Equal(RealmAuthorityLeaseKeeper.StartAcquireAttempts, store.Acquires);
+        Assert.Null(keeper.TokenFor(RealmAuthorityScopes.Social));
+    }
+
+    [Fact]
+    public async Task AcquireAtStart_DoesNotRetryAFailureThatIsNotAStoreOrTimeoutFailure()
+    {
+        var store = new ControlledStore(_inner) { AcquireFailure = () => new InvalidOperationException("a bug, not a lock wait") };
+        store.FailNextAcquires(1);
+        await using RealmAuthorityLeaseKeeper keeper = Create(store);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => keeper.AcquireAtStartAsync(Guid.NewGuid(), CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10)));
+
+        Assert.Equal(1, store.Acquires);
+    }
+
     /// <summary>A clock whose one-shot timers fire <c>early</c> before they are due, as an operating-system timer on a coarse tick clock can.</summary>
     private sealed class EarlyTimerTimeProvider(ManualTimeProvider inner, TimeSpan early) : TimeProvider
     {
@@ -99,6 +159,204 @@ public sealed class RealmAuthorityLeaseKeeperTests
         Assert.Null(keeper.TokenFor(RealmAuthorityScopes.Economy)); // worker-b runs the auction bot
         Assert.True(_inner.ValidateFencingToken(RealmAuthorityScopes.Social, Node, 1, _time.GetUtcNow()));
         Assert.Equal(Node, keeper.NodeId);
+    }
+
+    [Fact]
+    public async Task ScopeHeldByAnotherNodeAtStart_IsTakenOverOnceItsLeaseLapses()
+    {
+        // worker-b took the instances lease at start and then died: it never renews. Unproven until the integration gate runs it.
+        _inner.TryAcquire(RealmAuthorityScopes.Instances, "worker-b", Guid.NewGuid(), TimeSpan.FromSeconds(30), _time.GetUtcNow());
+        await using RealmAuthorityLeaseKeeper keeper = Create();
+        await keeper.AcquireAtStartAsync(Guid.NewGuid(), CancellationToken.None);
+        Assert.Null(keeper.TokenFor(RealmAuthorityScopes.Instances));
+        Assert.False(keeper.Holds(RealmAuthorityScopes.Instances));
+
+        _time.Advance(TimeSpan.FromSeconds(10)); // worker-b's lease is still live: the takeover attempt is refused
+        Assert.Null(keeper.TokenFor(RealmAuthorityScopes.Instances));
+        Assert.False(keeper.Holds(RealmAuthorityScopes.Instances));
+
+        _time.Advance(TimeSpan.FromSeconds(10));
+        _time.Advance(TimeSpan.FromSeconds(10));
+        _time.Advance(TimeSpan.FromSeconds(10)); // 40 s: worker-b's lease lapsed at 30 s
+
+        Assert.Equal(2, keeper.TokenFor(RealmAuthorityScopes.Instances)); // strictly above worker-b's token
+        Assert.True(keeper.Holds(RealmAuthorityScopes.Instances));
+        Assert.True(keeper.FenceFor(RealmAuthorityScopes.Instances) is { FencingToken: 2 });
+        Assert.True(_inner.ValidateFencingToken(RealmAuthorityScopes.Instances, Node, 2, _time.GetUtcNow()));
+        Assert.Equal(1, keeper.TokenFor(RealmAuthorityScopes.Social)); // the leases it already held were renewed, not retaken
+        Assert.Equal(0, _lifetime.Stops);
+    }
+
+    [Fact]
+    public async Task EveryScopeOwnerlessAtStart_AllScopesAreTakenOver_SocialAndEconomyIncluded()
+    {
+        // The row's scenario: every scope is held by a node that is gone, so this keeper holds nothing at start and its timer must still run.
+        // Social and economy follow too: AutoBroadcast and the auction bot are attached dormant on every map worker and start when the lease is held.
+        foreach (string scope in new[] { RealmAuthorityScopes.Social, RealmAuthorityScopes.Economy, RealmAuthorityScopes.Instances, RealmAuthorityScopes.Maintenance, RealmAuthorityScopes.WorldState })
+        {
+            _inner.TryAcquire(scope, "worker-b", Guid.NewGuid(), TimeSpan.FromSeconds(30), _time.GetUtcNow());
+        }
+
+        await using RealmAuthorityLeaseKeeper keeper = Create();
+        await keeper.AcquireAtStartAsync(Guid.NewGuid(), CancellationToken.None);
+        Assert.False(keeper.Holds(RealmAuthorityScopes.Instances));
+        Assert.Equal(1, _time.PendingTimers); // the renewal timer runs although nothing is held
+
+        for (int i = 0; i < 4; i++)
+        {
+            _time.Advance(TimeSpan.FromSeconds(10)); // worker-b's leases lapse at 30 s
+        }
+
+        Assert.Equal(2, keeper.TokenFor(RealmAuthorityScopes.Instances));
+        Assert.Equal(2, keeper.TokenFor(RealmAuthorityScopes.Maintenance));
+        Assert.Equal(2, keeper.TokenFor(RealmAuthorityScopes.WorldState));
+        Assert.Equal(2, keeper.TokenFor(RealmAuthorityScopes.Social));
+        Assert.Equal(2, keeper.TokenFor(RealmAuthorityScopes.Economy));
+        Assert.True(keeper.Holds(RealmAuthorityScopes.Social));
+        Assert.True(keeper.Holds(RealmAuthorityScopes.Economy));
+        Assert.Equal(0, _lifetime.Stops);
+    }
+
+    [Fact]
+    public async Task ScopeHeldByALiveOtherNode_IsNeverTakenOver()
+    {
+        var other = new ManualRenewer(_inner, RealmAuthorityScopes.Instances, "worker-b", _time);
+        await using RealmAuthorityLeaseKeeper keeper = Create();
+        await keeper.AcquireAtStartAsync(Guid.NewGuid(), CancellationToken.None);
+
+        for (int i = 0; i < 6; i++)
+        {
+            other.Renew();
+            _time.Advance(TimeSpan.FromSeconds(10));
+        }
+
+        Assert.Null(keeper.TokenFor(RealmAuthorityScopes.Instances));
+        Assert.False(keeper.Holds(RealmAuthorityScopes.Instances));
+        Assert.Equal(0, _lifetime.Stops);
+    }
+
+    [Fact]
+    public async Task ReleaseAll_StopsTheTakeover()
+    {
+        _inner.TryAcquire(RealmAuthorityScopes.Instances, "worker-b", Guid.NewGuid(), TimeSpan.FromSeconds(30), _time.GetUtcNow());
+        var store = new ControlledStore(_inner);
+        await using RealmAuthorityLeaseKeeper keeper = Create(store);
+        await keeper.AcquireAtStartAsync(Guid.NewGuid(), CancellationToken.None);
+        await keeper.ReleaseAllAsync();
+        int acquires = store.Acquires;
+
+        for (int i = 0; i < 5; i++)
+            _time.Advance(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(acquires, store.Acquires); // the timer is gone: not one more takeover attempt
+        Assert.Null(keeper.TokenFor(RealmAuthorityScopes.Instances));
+        Assert.False(keeper.Holds(RealmAuthorityScopes.Instances));
+    }
+
+    [Fact]
+    public async Task RenewalFailure_SkipsTheTakeover_AndTheNextTickStillRenews()
+    {
+        _inner.TryAcquire(RealmAuthorityScopes.Instances, "worker-b", Guid.NewGuid(), TimeSpan.FromSeconds(30), _time.GetUtcNow());
+        var store = new ControlledStore(_inner);
+        await using RealmAuthorityLeaseKeeper keeper = Create(store);
+        await keeper.AcquireAtStartAsync(Guid.NewGuid(), CancellationToken.None);
+        int acquires = store.Acquires;
+        Assert.Equal(0, store.Renewals);
+        store.ThrowOnRenew = true;
+
+        _time.Advance(TimeSpan.FromSeconds(10)); // the renewals throw but the leases are far from lapsing
+
+        Assert.Equal(4, store.Renewals); // social, economy, maintenance, worldstate (instances is worker-b's)
+        Assert.Equal(acquires, store.Acquires); // a store that is failing is not asked for a takeover
+        Assert.Equal(0, _lifetime.Stops);
+
+        store.ThrowOnRenew = false;
+        _time.Advance(TimeSpan.FromSeconds(10)); // the next tick renews and, with every renewal good, tries the takeover again
+
+        Assert.Equal(8, store.Renewals);
+        Assert.Equal(acquires + 1, store.Acquires);
+        Assert.Equal(0, _lifetime.Stops);
+    }
+
+    [Fact]
+    public async Task SlowTakeover_DoesNotDelayTheNextRenewal()
+    {
+        _inner.TryAcquire(RealmAuthorityScopes.Instances, "worker-b", Guid.NewGuid(), TimeSpan.FromSeconds(30), _time.GetUtcNow());
+        var store = new ControlledStore(_inner);
+        await using RealmAuthorityLeaseKeeper keeper = Create(store);
+        await keeper.AcquireAtStartAsync(Guid.NewGuid(), CancellationToken.None);
+        store.BlockAcquires = true;
+
+        Task firstTick = Task.Run(() => _time.Advance(TimeSpan.FromSeconds(10))); // tick 1 renews, then hangs in the takeover call
+        try
+        {
+            await WaitUntilAsync(() => store.BlockedAcquires == 1);
+            Assert.Equal(4, store.Renewals);
+
+            _time.Advance(TimeSpan.FromSeconds(10)); // tick 2 renews on time although the takeover of tick 1 has not returned
+
+            Assert.Equal(8, store.Renewals);
+            Assert.Equal(1, store.BlockedAcquires); // and starts no second takeover
+            Assert.Equal(0, _lifetime.Stops);
+        }
+        finally
+        {
+            store.Release();
+        }
+
+        await firstTick.WaitAsync(TimeSpan.FromSeconds(10));
+    }
+
+    [Fact]
+    public async Task StopRacingATakeoverGrant_GivesTheLeaseBack_AndHoldsNothing()
+    {
+        _inner.TryAcquire(RealmAuthorityScopes.Instances, "worker-b", Guid.NewGuid(), TimeSpan.FromSeconds(30), _time.GetUtcNow());
+        var store = new ControlledStore(_inner);
+        await using RealmAuthorityLeaseKeeper keeper = Create(store);
+        await keeper.AcquireAtStartAsync(Guid.NewGuid(), CancellationToken.None);
+        _time.Advance(TimeSpan.FromSeconds(25)); // worker-b's lease is still live: refused
+        store.BlockGrants = true;
+
+        Task tick = Task.Run(() => _time.Advance(TimeSpan.FromSeconds(15))); // the tick that finds the lease lapsed is granted it, then the reply is held back
+        try
+        {
+            await WaitUntilAsync(() => store.BlockedGrants == 1);
+            await keeper.ReleaseAllAsync(); // the orderly stop begins while the grant is in flight
+        }
+        finally
+        {
+            store.Release();
+        }
+
+        await tick.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(5, store.Releases); // four held scopes at the stop, plus the instances lease given straight back
+        Assert.Null(keeper.TokenFor(RealmAuthorityScopes.Instances));
+        Assert.False(keeper.Holds(RealmAuthorityScopes.Instances));
+        Assert.Null(_inner.GetCurrent(RealmAuthorityScopes.Instances, _time.GetUtcNow()));
+        Assert.Equal(0, _lifetime.Stops);
+    }
+
+    /// <summary>Another node that keeps its lease alive by renewing it by hand.</summary>
+    private sealed class ManualRenewer
+    {
+        private readonly InMemoryRealmAuthorityLeaseStore _store;
+        private readonly string _scope;
+        private readonly string _node;
+        private readonly ManualTimeProvider _time;
+        private readonly Guid _incarnation = Guid.NewGuid();
+        private long _token;
+
+        public ManualRenewer(InMemoryRealmAuthorityLeaseStore store, string scope, string node, ManualTimeProvider time)
+        {
+            _store = store;
+            _scope = scope;
+            _node = node;
+            _time = time;
+            _token = store.TryAcquire(scope, node, _incarnation, TimeSpan.FromSeconds(30), time.GetUtcNow()).Lease!.FencingToken;
+        }
+
+        public void Renew() => _store.TryRenew(_scope, _node, _incarnation, _token, TimeSpan.FromSeconds(30), _time.GetUtcNow());
     }
 
     [Fact]
@@ -420,10 +678,29 @@ public sealed class RealmAuthorityLeaseKeeperTests
     {
         private int _releases;
         private int _renewals;
+        private int _acquires;
+        private int _blockedGrants;
+        private int _blockedAcquires;
         public bool RejectRenewals { get; set; }
         public bool ThrowOnRenew { get; set; }
         public bool ThrowOnRelease { get; set; }
         public bool BlockRenewals { get; set; }
+
+        private int _acquireFailuresLeft;
+
+        /// <summary>The failure the next <see cref="FailNextAcquires"/> acquires throw, before they reach the inner store.</summary>
+        public Func<Exception>? AcquireFailure { get; set; }
+
+        public void FailNextAcquires(int count) => Volatile.Write(ref _acquireFailuresLeft, count);
+
+        /// <summary>Every acquire (also a refused one) hangs until <see cref="Release"/>, before it reaches the inner store.</summary>
+        public bool BlockAcquires { get; set; }
+
+        /// <summary>An acquire that was granted holds its reply until <see cref="Release"/>.</summary>
+        public bool BlockGrants { get; set; }
+        public int Acquires => Volatile.Read(ref _acquires);
+        public int BlockedAcquires => Volatile.Read(ref _blockedAcquires);
+        public int BlockedGrants => Volatile.Read(ref _blockedGrants);
 
         /// <summary>Renew in the inner store first, then hold the reply until <see cref="Release"/>: a renewal that succeeded but whose caller learns of it late.</summary>
         public bool BlockAfterRenew { get; set; }
@@ -436,7 +713,28 @@ public sealed class RealmAuthorityLeaseKeeperTests
         public int Renewals => Volatile.Read(ref _renewals);
 
         public AuthorityLeaseResult TryAcquire(string scope, string ownerNodeId, Guid ownerIncarnation, TimeSpan ttl, DateTimeOffset nowUtc)
-            => inner.TryAcquire(scope, ownerNodeId, ownerIncarnation, ttl, nowUtc);
+        {
+            Interlocked.Increment(ref _acquires);
+            if (AcquireFailure is { } failure && Interlocked.Decrement(ref _acquireFailuresLeft) >= 0)
+            {
+                throw failure();
+            }
+
+            if (BlockAcquires)
+            {
+                Interlocked.Increment(ref _blockedAcquires);
+                _gate.Wait();
+            }
+
+            AuthorityLeaseResult result = inner.TryAcquire(scope, ownerNodeId, ownerIncarnation, ttl, nowUtc);
+            if (BlockGrants && result.Outcome == AuthorityLeaseOutcome.Granted)
+            {
+                Interlocked.Increment(ref _blockedGrants);
+                _gate.Wait();
+            }
+
+            return result;
+        }
 
         public AuthorityLeaseResult TryRenew(string scope, string ownerNodeId, Guid ownerIncarnation, long fencingToken, TimeSpan ttl, DateTimeOffset nowUtc)
         {

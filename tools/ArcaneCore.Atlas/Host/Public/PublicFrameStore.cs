@@ -37,6 +37,7 @@ internal sealed class PublicFrameStore(PublicOptions options, TimeProvider time)
 
     private readonly Dictionary<uint, MapState> _maps = [];
     private readonly Lock _gate = new();
+    private readonly HashSet<uint> _seedSummonEntries = [];
 
     /// <summary>Raised after a map's projection or state changed (called on the feed reader thread; must not block).</summary>
     public event Action<uint>? Updated;
@@ -67,6 +68,30 @@ internal sealed class PublicFrameStore(PublicOptions options, TimeProvider time)
         lock (state)
         {
             state.Links = links;
+        }
+    }
+
+    /// <summary>
+    /// Seeds every map's projectors (existing and future) with the world's static summon and totem template set from its <c>caps</c> answer
+    /// (<c>summonTemplates</c>), so a pet species that first appears while <c>links</c> is unavailable is still recognised. Additive: a later call
+    /// widens the seed, nothing is ever forgotten.
+    /// </summary>
+    public void SeedSummonTemplates(IReadOnlySet<uint> entries)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        List<MapState> states;
+        lock (_gate)
+        {
+            _seedSummonEntries.UnionWith(entries);
+            states = [.. _maps.Values];
+        }
+
+        foreach (MapState state in states)
+        {
+            lock (state)
+            {
+                state.Projector.SeedSummonEntries(entries);
+            }
         }
     }
 
@@ -127,6 +152,7 @@ internal sealed class PublicFrameStore(PublicOptions options, TimeProvider time)
             if (!_maps.TryGetValue(map, out MapState? state))
             {
                 state = new MapState(new GuestFrameProjector(options.Guest, time), new GuestFrameProjector(StaffPolicy(options.Guest), time));
+                state.Projector.SeedSummonEntries(_seedSummonEntries);
                 _maps[map] = state;
             }
 

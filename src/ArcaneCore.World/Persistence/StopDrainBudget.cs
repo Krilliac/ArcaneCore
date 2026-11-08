@@ -40,6 +40,7 @@ public sealed class StopDrainBudget
     private int _refused;
     private StopDrainExhaustedException? _lastRefusal;
     private volatile string? _suppressedReason; // written under the gate (first wins), read lock-free
+    private volatile string? _pausedReason; // written under the gate, read lock-free; cleared by Resume
 
     /// <summary>How much stalled time exhausts the lane.</summary>
     public TimeSpan StallBudget { get; init; } = DefaultStallBudget;
@@ -105,8 +106,39 @@ public sealed class StopDrainBudget
         }
     }
 
-    /// <summary>True once <see cref="Suppress"/> was called. Queues refuse every attempt on a suppressed lane, stopping or not (see <see cref="Refuse"/>).</summary>
-    public bool IsSuppressed => SuppressedReason is not null;
+    /// <summary>
+    /// Why the lane is paused (null: not paused). A pause is the reversible form of <see cref="Suppress"/>: set while the characters database writer lock is merely lost (another world may or may not
+    /// have taken it; nothing is known yet), so no write is attempted in the window, and cleared by <see cref="Resume"/> when the lock is taken again without a rival. A conflict suppresses the lane for good.
+    /// </summary>
+    public string? PausedReason => _pausedReason;
+
+    /// <summary>True while <see cref="Pause"/> is in force and the lane is not <see cref="Suppress"/>ed (a suppression outranks a pause).</summary>
+    public bool IsPaused => _pausedReason is not null && _suppressedReason is null;
+
+    /// <summary>
+    /// Refuses every later attempt on this lane until <see cref="Resume"/>, like <see cref="Suppress"/> but reversible: the write stays retained with a <see cref="StopDrainExhaustedException"/> naming
+    /// <paramref name="reason"/>. The character save queue also stops picking work while the lane is paused (snapshots wait, newest wins) and writes them after <see cref="Resume"/>. The first reason stays until Resume.
+    /// </summary>
+    public void Pause(string reason)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+        lock (_gate)
+        {
+            _pausedReason ??= reason;
+        }
+    }
+
+    /// <summary>Ends a <see cref="Pause"/>. Does nothing when not paused; never undoes a <see cref="Suppress"/>.</summary>
+    public void Resume()
+    {
+        lock (_gate)
+        {
+            _pausedReason = null;
+        }
+    }
+
+    /// <summary>True once <see cref="Suppress"/> was called or while the lane is paused. Queues refuse every attempt on such a lane, stopping or not (see <see cref="Refuse"/>).</summary>
+    public bool IsSuppressed => SuppressedReason is not null || _pausedReason is not null;
 
     /// <summary>The stalled time so far in milliseconds, counting completed failed attempts only; 0 when not started.</summary>
     public double StalledMs
@@ -209,6 +241,8 @@ public sealed class StopDrainBudget
             _refused++;
             _lastRefusal = new StopDrainExhaustedException(_suppressedReason is not null
                 ? $"{Name}: writes are suppressed ({_suppressedReason}); the write was not attempted and stays retained"
+                : _pausedReason is not null
+                ? $"{Name}: writes are paused ({_pausedReason}); the write was not attempted and stays retained"
                 : $"{Name}: stalled {StalledMsLocked():0} ms of {StallBudget.TotalMilliseconds:0} ms with no write landing; the write was not attempted and stays retained");
             return _lastRefusal;
         }
@@ -228,7 +262,7 @@ public sealed class StopDrainBudget
     public string Describe()
         => $"{Name}: {Succeeded} landed, {Failed} failed, {Refused} refused, {InFlight} in flight, stalled {StalledMs:0} ms of {StallBudget.TotalMilliseconds:0} ms";
 
-    private bool ExhaustedLocked() => _suppressedReason is not null || (_beginTimestamp != 0 && StalledMsLocked() >= StallBudget.TotalMilliseconds);
+    private bool ExhaustedLocked() => _suppressedReason is not null || _pausedReason is not null || (_beginTimestamp != 0 && StalledMsLocked() >= StallBudget.TotalMilliseconds);
 
     private double StalledMsLocked() => _beginTimestamp == 0 ? 0 : _stalledTicks * 1000.0 / Time.TimestampFrequency; // completed failures only: a running attempt is unknown until its verdict
 

@@ -31,10 +31,24 @@ public interface IScriptQuestEvents
     bool IsQuestIncomplete(Player player, uint questId) => false;
 
     /// <summary>
+    /// Whether <paramref name="questId"/> is in the player's log with its status complete, which a non-repeatable quest also keeps after it is turned in (the log keeps status Complete with the rewarded mark; cmangos <c>Player::GetQuestStatus(questId) ==
+    /// QUEST_STATUS_COMPLETE</c>, as the ScriptDev2 creature scripts ask it). False by default.
+    /// </summary>
+    bool IsQuestComplete(Player player, uint questId) => false;
+
+    /// <summary>
     /// cmangos Player::TalkedToCreature from a script (a ScriptDev2 gossip hello): the speak-to credit of <paramref name="creatureEntry"/>,
     /// counted only by quests with KILL_OR_CAST or SPEAKTO that are not EXPLORATION_OR_EVENT. Nothing by default.
     /// </summary>
     void TalkedToCreature(Player player, uint creatureEntry, ObjectGuid source)
+    {
+    }
+
+    /// <summary>
+    /// A script (SmartAI CLOSE_GOSSIP) closed the player's gossip window itself and sent SMSG_GOSSIP_COMPLETE: the player's menu is forgotten, so
+    /// a later gossip selection is refused (AzerothCore GossipDef.cpp:241 clears the sender). Nothing by default.
+    /// </summary>
+    void GossipClosed(Player player)
     {
     }
 }

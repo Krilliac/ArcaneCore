@@ -301,7 +301,7 @@ public sealed class WorldEventSpellTests
     [Fact]
     public void TheEvidenceRulingSpells_AreNotListedYet()
     {
-        foreach (uint id in new uint[] { 30012, 17619, 23852 })
+        foreach (uint id in new uint[] { 30012, 17619 })
         {
             Assert.False(DeliberatelyInertSpells.TryGet(id, out _), $"spell {id} waits for the evidence ruling");
         }

@@ -14,6 +14,7 @@ import { ActionLogModel, ActionLogPanel } from './devui-log.js';
 import { buildMenu, openMenu } from './devui-menu.js';
 import { DebugOverlays } from './devui-overlays.js';
 import { openDevPalette } from './devui-palette.js';
+import { FeedReconnect } from './devui-reconnect.js';
 import { closeTopDialog, hasOpenDialog } from './popover.js';
 import { copyText } from './widgets.js';
 
@@ -102,6 +103,7 @@ export class DevUi {
         this.selection = new DevSelection();
         this.log = new ActionLogModel();
         this.overlays = new DebugOverlays({ app });
+        this.reconnect = new FeedReconnect({ app });
         this.active = false;
         this.catalogCache = null;
         this.menu = null;
@@ -168,6 +170,7 @@ export class DevUi {
         this.app.events.on('view', () => this.#redrawSoon());
         new ResizeObserver(() => this.#redrawSoon()).observe(root);
 
+        this.reconnect.start();
         this.refreshLog();
         if (window.__atlas) {
             window.__atlas.devui = this;
@@ -177,6 +180,7 @@ export class DevUi {
     /** Removes every listener and element (the host refused the token, or a test ended). */
     dispose() {
         this.overlays.stop();
+        this.reconnect.stop();
         this.menu?.close();
         this.removeKeys?.();
         for (const off of this.listeners) {
@@ -410,11 +414,17 @@ export class DevUi {
     async catalog(force = false) {
         const now = performance.now();
         if (!force && this.catalogCache && now - this.catalogCache.at < 2000) {
+            // A failed lookup is cached for the same two seconds, so a burst of right clicks asks the daemon once, not once per click.
+            if (this.catalogCache.error) {
+                throw this.catalogCache.error;
+            }
             return this.catalogCache.data;
         }
         const result = await this.app.runCommand('action.catalog', {}, { quiet: true, noRefresh: true });
         if (!result.ok) {
-            throw new Error(result.error?.message ?? 'action.catalog failed');
+            const error = new Error(result.error?.message ?? 'action.catalog failed');
+            this.catalogCache = { at: now, data: null, error };
+            throw error;
         }
         this.catalogCache = { at: now, data: result.data };
         return result.data;

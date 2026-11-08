@@ -104,7 +104,7 @@ public sealed class PetitionManager
     /// Install the stored petitions (vmangos GuildMgr::LoadPetitions, GuildMgr.cpp:168-246). A petition whose
     /// owner is gone or already in a guild is deleted (joining a guild removes the owner's petition, so it is
     /// stale), and signatures of characters that no longer exist or are already guilded are dropped. Run after the
-    /// guilds are loaded.
+    /// guilds are loaded. Only the authority writes these repairs: a replica reads.
     /// </summary>
     public void Load(IEnumerable<PetitionData> petitions)
     {
@@ -115,7 +115,11 @@ public sealed class PetitionManager
                 || _context.Guilds.GetGuildOf((uint)data.OwnerId) is not null
                 || _petitions.Values.Any(p => p.OwnerId == (uint)data.OwnerId))
             {
-                Persistence?.DeletePetition(data.Id);
+                if (_context.Guilds.IsAuthority)
+                {
+                    Persistence?.DeletePetition(data.Id);
+                }
+
                 continue;
             }
 
@@ -139,7 +143,7 @@ public sealed class PetitionManager
             }
 
             _petitions[petition.Id] = petition;
-            if (changed)
+            if (changed && _context.Guilds.IsAuthority)
             {
                 Persistence?.SavePetition(petition.ToData());
             }
@@ -800,6 +804,28 @@ public sealed class PetitionManager
         if (data is not null)
         {
             Install(data);
+        }
+    }
+
+    /// <summary>
+    /// This worker became the holder at run time: what storage holds replaces the replica, as <see cref="GuildManager.ReloadFromStorage"/>, which runs first (a petition's owner must not be guilded). A save stores a whole
+    /// petition, so a signature the previous holder stored but never published would otherwise be lost. The result is published to the other workers. <see cref="Load"/> writes its repairs here, so the caller must have brought
+    /// the character lookup up to date since it read the rows, as for the guilds. World thread.
+    /// </summary>
+    public void ReloadFromStorage(IReadOnlyCollection<PetitionData> stored)
+    {
+        ArgumentNullException.ThrowIfNull(stored);
+        int[] known = [.. _petitions.Keys, .. stored.Select(p => p.Id)];
+        _petitions.Clear();
+        Load(stored);
+        foreach (Petition petition in _petitions.Values)
+        {
+            Publish(petition.Id, petition.ToData());
+        }
+
+        foreach (int petitionId in known.Distinct().Where(id => !_petitions.ContainsKey(id)))
+        {
+            Publish(petitionId, null);
         }
     }
 

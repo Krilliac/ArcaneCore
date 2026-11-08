@@ -198,6 +198,46 @@ public sealed class PlayerbotTravelFallbackRealTerrainTests : RealTerrainNavigat
         Assert.True(left <= 10f, $"stopped {left:F1} yards short of the point beyond the portal");
     }
 
+    // The Rut'theran boat port: the one TaxiPathNode.dbc stop of the ship path of Moonspray (gameobject 176244, type 15, data0 = taxi path 293)
+    // in the Rut'theran area, on map 1. Its keyframe lies at sea level (z 0), so the walk's goal is the dry dock floor
+    // PlayerbotShip.ResolveDockTarget finds in the rings up to DockSearchRadiiYards beside it.
+    private static readonly Vector3 RuttheranPort = new(8533.65f, 1025.05f, 0f);
+
+    // ResolveDockTarget answers the port itself while a tile is still being read; it is asked again until it names a dock.
+    private const int DockResolveAttempts = 200;
+
+    /// <summary>
+    /// Row 15/225: on the real mesh, a dry dock floor is found beside the Rut'theran port, and a bot that landed from the Darnassus portal
+    /// (trigger 527) walks to it on the ground below the tree and is not sent up trigger 542 (the landing is 3.9 yd outside its volume).
+    /// The walk itself runs through PlanToward and TryAdvance, not through PlayerbotTravel; the landing guard is covered by
+    /// <see cref="FromTheDarnassusPortalExit_WalkingPastThePortalVolume_DoesNotBounceTheBotUpTheTree"/> and the tracker unit tests.
+    /// </summary>
+    [RealTerrainBotFact]
+    public async Task FromTheDarnassusPortalExit_TheBotWalksToTheRuttheranDock_WithoutTakingThePortalUp()
+    {
+        await using Terrain terrain = await Terrain.StartAsync(services: PortalWorld);
+        await terrain.PlaceAsync(Landing, Kalimdor);
+        Vector3 dock = RuttheranPort;
+        for (int i = 0; i < DockResolveAttempts && dock == RuttheranPort; i++)
+        {
+            dock = await terrain.Host.OnWorldAsync(() => PlayerbotShip.ResolveDockTarget(terrain.Player.Map!, RuttheranPort,
+                new Vector3(terrain.Player.X, terrain.Player.Y, terrain.Player.Z)));
+            if (dock != RuttheranPort) break;
+            await Task.Delay(20);
+            await terrain.Host.World.AdvanceClockAsync(100);
+        }
+
+        output.WriteLine($"port {RuttheranPort}, dock target {dock}");
+        float portToDock = Vector2.Distance(new(RuttheranPort.X, RuttheranPort.Y), new(dock.X, dock.Y));
+        Assert.True(dock != RuttheranPort, $"no dry dock floor was found beside the Rut'theran port {RuttheranPort}");
+        Assert.True(portToDock <= 38f, $"the dock {dock} lies {portToDock:F1} yd from the port, beyond the 38 yd search");
+        float left = await terrain.WalkTowardAsync(dock, 5f, 120_000, output);
+        Vector3 end = await terrain.Host.OnWorldAsync(() => new Vector3(terrain.Player.X, terrain.Player.Y, terrain.Player.Z));
+        output.WriteLine($"left {left:F1} yd; the bot ends at {end}");
+        Assert.True(end.Z < 500f && Vector3.Distance(end, DarnassusExit) > 100f, $"the bot was sent up trigger 542 on its way to the dock (ends at {end})");
+        Assert.True(left <= 5f, $"stopped {left:F1} yards from the Rut'theran dock {dock}");
+    }
+
     [RealTerrainBotFact]
     public async Task WalkingIntoThePortalOnPurpose_StillTakesIt()
     {

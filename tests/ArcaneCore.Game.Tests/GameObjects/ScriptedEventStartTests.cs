@@ -68,18 +68,19 @@ public sealed class ScriptedEventStartTests
     public void GooberEvent_RunsOncePerPlayer_AndEachPlayerStartsItsOwn()
     {
         // A player is a unit, so the run is SCRIPT_EXEC_PARAM_UNIQUE_BY_SOURCE (TYPEMASK_CREATURE_OR_GAMEOBJECT includes TYPEMASK_UNIT):
-        // the same player at a second object with the same event is the same run; another player's use is a run of its own.
-        (GameObjectTypeRig rig, CreatureMapSystem creatures) = Create(GoSpawn(1, EventGoober, 3, 0), GoSpawn(2, EventGoober, 0, 3));
+        // the same player at a second object with the same event is the same run; another player's use is a run of its own. The used goober is
+        // in use, so a repeat click on it is refused at the opcode (SpellHandler.cpp:295-296) and the other player takes a third one.
+        (GameObjectTypeRig rig, CreatureMapSystem creatures) = Create(GoSpawn(1, EventGoober, 3, 0), GoSpawn(2, EventGoober, 0, 3), GoSpawn(3, EventGoober, -3, 0));
         (Player first, _) = rig.Join(1);
         (Player second, _) = rig.Join(2);
         GameObject[] goobers = [.. rig.System.GameObjects.Where(g => g.Entry == EventGoober)];
 
         Assert.Equal(GameObjectUseResult.Ok, rig.System.Use(first, goobers[0].Guid));
         Assert.Equal(1, creatures.PendingDbScriptSteps);
-        Assert.Equal(GameObjectUseResult.Ok, rig.System.Use(first, goobers[0].Guid));
+        Assert.Equal(GameObjectUseResult.InUse, rig.System.Use(first, goobers[0].Guid));
         Assert.Equal(GameObjectUseResult.Ok, rig.System.Use(first, goobers[1].Guid));
         Assert.Equal(1, creatures.PendingDbScriptSteps);
-        Assert.Equal(GameObjectUseResult.Ok, rig.System.Use(second, goobers[0].Guid));
+        Assert.Equal(GameObjectUseResult.Ok, rig.System.Use(second, goobers[2].Guid));
         Assert.Equal(2, creatures.PendingDbScriptSteps);
     }
 

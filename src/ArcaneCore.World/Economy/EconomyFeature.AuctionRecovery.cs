@@ -1,6 +1,8 @@
 using ArcaneCore.Game.Economy;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Economy;
 using ArcaneCore.Kernel.Items;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Economy;
@@ -23,6 +25,170 @@ public sealed partial class EconomyFeature
     /// <summary>World-thread test probe for the recovery deadline after a completed read.</summary>
     internal long? AuctionRecoveryNotBeforeMs(uint auctionId)
         => _auctionRecoveries.TryGetValue(auctionId, out AuctionRecovery? recovery) ? recovery.NotBeforeMs : null;
+
+    // True from Attach on a clustered node that did not hold the Economy lease then: the auction cache was read at Attach and the holder has written since,
+    // so it is replaced by a fresh snapshot the first time this node finds the lease held (world thread).
+    private bool _auctionCacheStale;
+    private bool _auctionRefreshing;
+
+    // A failed snapshot read is not tried again before this feature-clock time, and each further failure in a row waits longer: the read also rereads the whole character identity table, so a store outage must not be hit on every sweep or bot tick (world thread).
+    private long _auctionRefreshNotBeforeMs;
+    private int _auctionRefreshFailures;
+
+    // Auction ids this node's own commits, forwarded commits or deletion resyncs changed since the snapshot read began: the snapshot may predate them, so it never replaces these (world thread).
+    private readonly HashSet<uint> _auctionsTouchedDuringRefresh = [];
+
+    /// <summary>World-thread test probe: a takeover snapshot read has started and not finished.</summary>
+    internal bool AuctionRefreshInFlight => _auctionRefreshing;
+
+    /// <summary>World-thread test probe: the feature-clock time before which a failed takeover snapshot is not read again (0 = none).</summary>
+    internal long AuctionRefreshNotBeforeMs => _auctionRefreshNotBeforeMs;
+
+    private void NoteAuctionTouched(uint auctionId)
+    {
+        if (_auctionRefreshing)
+        {
+            _auctionsTouchedDuringRefresh.Add(auctionId);
+        }
+    }
+
+    private void NoteAuctionChangesTouched(IReadOnlyList<EconomyChange> changes)
+    {
+        if (!_auctionRefreshing)
+        {
+            return;
+        }
+
+        foreach (EconomyChange change in changes)
+        {
+            switch (change)
+            {
+                case InsertAuction insert:
+                    _auctionsTouchedDuringRefresh.Add(insert.Auction.Id);
+                    break;
+                case UpdateAuction update:
+                    _auctionsTouchedDuringRefresh.Add(update.Expected.Id);
+                    break;
+                case DeleteAuction delete:
+                    _auctionsTouchedDuringRefresh.Add(delete.Expected.Id);
+                    break;
+            }
+        }
+    }
+
+    /// <summary>
+    /// World thread: whether the auction cache is current for this node's holding of the Economy lease. Always true on a node that held the lease at attach (or runs no keeper).
+    /// On a node that took the lease over later it is false until a fresh snapshot of the auctions has replaced the cache: the first call that finds the lease held starts the read
+    /// (off the world thread), and the expiry sweep, the recovery sweep and the auction bot act only once this is true. A failed read is tried again by the first call after a backoff (1 s, doubling per failure in a row, at most <see cref="MaxRetryMs"/>).
+    /// </summary>
+    public bool EnsureAuctionCacheCurrent()
+    {
+        if (!_auctionCacheStale)
+        {
+            return true;
+        }
+
+        if (HoldsEconomyLease && Enabled && !_stopping && NowMs >= _auctionRefreshNotBeforeMs)
+        {
+            BeginAuctionRefresh();
+        }
+
+        return false;
+    }
+
+    private void BeginAuctionRefresh()
+    {
+        if (_auctionRefreshing)
+        {
+            return;
+        }
+
+        _auctionRefreshing = true;
+        // Operations already in flight commit during the read, so their ids count as touched from the start.
+        _auctionsTouchedDuringRefresh.Clear();
+        _auctionsTouchedDuringRefresh.UnionWith(_busyAuctions);
+        Read(async (store, ct) =>
+        {
+            // Rows and escrow from one snapshot, the id seed read after it (as Attach does), so every row seen is at or below the seed.
+            AuctionSnapshot snapshot = await store.GetAuctionSnapshotAsync(new AuctionSnapshotFilter(), ct).ConfigureAwait(false);
+            EconomyIdSeed seed = await store.GetIdSeedAsync(ct).ConfigureAwait(false);
+
+            // The sweeps treat a character the directory does not know as gone (an unknown seller's unsold item is destroyed, an unknown sender's letter is not returned), and this node's directory has none of what other
+            // workers created since it started. So it is brought up to date before the cache counts as current, and after the rows, which can only name characters stored before them. A failed read leaves the cache stale.
+            if (_directory is { } directory)
+            {
+                await using AsyncServiceScope scope = _scopes.CreateAsyncScope();
+                await directory.RefreshAsync(scope.ServiceProvider.GetRequiredService<ICharacterStore>(), ct).ConfigureAwait(false);
+            }
+
+            return (Snapshot: snapshot, Seed: seed);
+        }, result =>
+        {
+            _auctionRefreshing = false;
+            if (_stopping || !_auctionCacheStale)
+            {
+                _auctionsTouchedDuringRefresh.Clear();
+                return;
+            }
+
+            ApplyAuctionSnapshot(result.Snapshot, result.Seed);
+            _auctionsTouchedDuringRefresh.Clear();
+            _auctionCacheStale = false;
+            _auctionRefreshFailures = 0;
+            _auctionRefreshNotBeforeMs = 0;
+            _logger.LogInformation("Auction cache reloaded after taking over the economy lease: {Auctions} auctions ({Reserved} reserved)", _auctions.Count, _auctionRecoveries.Count);
+        }, () =>
+        {
+            _auctionRefreshing = false;
+            _auctionsTouchedDuringRefresh.Clear();
+            _auctionRefreshFailures++;
+            _auctionRefreshNotBeforeMs = NowMs + Math.Min(1000L << Math.Min(_auctionRefreshFailures - 1, 9), MaxRetryMs);
+        });
+    }
+
+    /// <summary>World thread: replace the auction cache with <paramref name="snapshot"/> (rows the cache holds and the snapshot lacks are gone; a row whose escrow item does not match is reserved, as at Attach) and raise the id allocators.</summary>
+    private void ApplyAuctionSnapshot(AuctionSnapshot snapshot, EconomyIdSeed seed)
+    {
+        RaiseTo(ref _lastMailId, seed.MaxMailId);
+        RaiseTo(ref _lastAuctionId, seed.MaxAuctionId);
+        RaiseTo(ref _lastTextId, seed.MaxItemTextId);
+        HashSet<uint> present = [.. snapshot.Auctions.Select(a => a.Id)];
+        // Ids a local commit changed after the read began are newer than the snapshot: the cache keeps them (a node-local listing the snapshot lacks stays listed, a bid or cancel is not rolled back).
+        foreach (uint gone in _auctions.Keys.Where(id => !present.Contains(id) && !_auctionsTouchedDuringRefresh.Contains(id)).ToList())
+        {
+            _auctions.Remove(gone);
+            _expiryBackoff.Remove(gone);
+            _auctionRecoveries.Remove(gone);
+            _busyAuctions.Remove(gone);
+        }
+
+        foreach (AuctionRecord auction in snapshot.Auctions)
+        {
+            if (_auctionsTouchedDuringRefresh.Contains(auction.Id))
+            {
+                continue;
+            }
+
+            if (snapshot.Escrow.TryGetValue(auction.ItemGuid, out ItemInstanceData? item) && EscrowMatches(auction, item))
+            {
+                if (!_auctions.TryGetValue(auction.Id, out AuctionView? previous) || previous.Auction != auction)
+                {
+                    _expiryBackoff.Remove(auction.Id);
+                }
+
+                _auctions[auction.Id] = new AuctionView(auction, item);
+                if (_auctionRecoveries.Remove(auction.Id))
+                {
+                    _busyAuctions.Remove(auction.Id);
+                }
+            }
+            else
+            {
+                _auctions.Remove(auction.Id);
+                ReserveMismatchedAuction(auction);
+            }
+        }
+    }
 
     private long _recoveryReads;
 
@@ -85,7 +251,7 @@ public sealed partial class EconomyFeature
     internal void RecoverAuctions()
     {
         // The recovery timer is not the sweep: a node that is not the economy lease holder never settles a reserved auction either.
-        if (_stopping || !HoldsEconomyLease)
+        if (_stopping || !HoldsEconomyLease || !EnsureAuctionCacheCurrent())
         {
             return;
         }

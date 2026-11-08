@@ -1,5 +1,7 @@
+using System.Diagnostics;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.Kernel.Safety;
 
 namespace ArcaneCore.Game.Entities;
 
@@ -11,6 +13,7 @@ namespace ArcaneCore.Game.Entities;
 /// position may only be read or written there.
 /// </para>
 /// </summary>
+[WorldThreadOnly]
 public abstract class WorldObject
 {
     private readonly uint[] _values;
@@ -44,9 +47,12 @@ public abstract class WorldObject
         SetFloat(UpdateFields.ObjectFieldScaleX, 1.0f);
     }
 
+    /// <summary>Immutable after construction, so readable from any thread.</summary>
+    [AnyThread]
     public ObjectGuid Guid { get; }
 
-    /// <summary>The <see cref="Game.TypeId"/> written in create blocks.</summary>
+    /// <summary>The <see cref="Game.TypeId"/> written in create blocks (immutable, readable from any thread).</summary>
+    [AnyThread]
     public byte TypeId { get; }
 
     public int ValuesCount => _values.Length;
@@ -280,6 +286,7 @@ public abstract class WorldObject
 
     public bool HasFlag(int index, uint flag) => (_values[index] & flag) != 0;
 
+    [StackTraceHidden]
     public void SetUInt32(int index, uint value)
     {
         if (_values[index] != value)
@@ -289,8 +296,10 @@ public abstract class WorldObject
         }
     }
 
+    [StackTraceHidden]
     public void SetInt32(int index, int value) => SetUInt32(index, unchecked((uint)value));
 
+    [StackTraceHidden]
     public void SetFloat(int index, float value)
     {
         if (!Invariant.Check(float.IsFinite(value),
@@ -306,6 +315,7 @@ public abstract class WorldObject
     /// Set a 64-bit (GUID) field. Both halves are marked changed together: the client ignores
     /// a 64-bit value whose halves arrive separately (vmangos Object::SetUInt64Value).
     /// </summary>
+    [StackTraceHidden]
     public void SetUInt64(int index, ulong value)
     {
         uint low = (uint)value;
@@ -319,6 +329,7 @@ public abstract class WorldObject
         }
     }
 
+    [StackTraceHidden]
     public void SetByte(int index, int byteOffset, byte value)
     {
         int shift = byteOffset * 8;
@@ -326,6 +337,7 @@ public abstract class WorldObject
         SetUInt32(index, updated);
     }
 
+    [StackTraceHidden]
     public void SetUInt16(int index, int shortOffset, ushort value)
     {
         int shift = shortOffset * 16;
@@ -333,8 +345,10 @@ public abstract class WorldObject
         SetUInt32(index, updated);
     }
 
+    [StackTraceHidden]
     public void SetFlag(int index, uint flag) => SetUInt32(index, _values[index] | flag);
 
+    [StackTraceHidden]
     public void RemoveFlag(int index, uint flag) => SetUInt32(index, _values[index] & ~flag);
 
     /// <summary>
@@ -352,6 +366,7 @@ public abstract class WorldObject
     /// Queue a values update of <paramref name="index"/> although its stored value did not change,
     /// because a <see cref="ViewerFieldFilter"/> answer changed (vmangos ForceValuesUpdateAtIndex).
     /// </summary>
+    [StackTraceHidden]
     public void ForceFieldUpdate(int index) => MarkChanged(index);
 
     /// <summary>Forget pending changes (after a values flush, or for values a create block already carried).</summary>
@@ -363,8 +378,12 @@ public abstract class WorldObject
     /// </summary>
     internal virtual Map? ValuesUpdateMap => Map;
 
+    [StackTraceHidden]
     private void MarkChanged(int index)
     {
+        // Runtime backstop for [WorldThreadOnly] (the analyzer is the compile-time half): a field change on an object in a map from
+        // another thread is recorded in the fault ledger, never thrown.
+        Map?.CheckWorldThread("WorldObject.MarkChanged");
         _changed.SetBit(index);
         if (!IsQueuedForUpdate && ValuesUpdateMap is { } map)
         {

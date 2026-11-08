@@ -60,7 +60,7 @@ public sealed class PlayerbotEconomyPaceAndReportWorldTests : PlayerbotEconomyWo
     {
         await using ScenarioTestWorld world = await StartAsync();
         await world.UseFlatFloorAsync();
-        await RunAsync(world, "economy-walks", async c =>
+        await RunWithRoomAsync(world, "economy-walks", async c =>
         {
             EconomyFeature economy = c.Services.GetRequiredService<EconomyFeature>();
             ScenarioBot bot = await c.LoginAsync("Econwalk");
@@ -148,13 +148,26 @@ public sealed class PlayerbotEconomyPaceAndReportWorldTests : PlayerbotEconomyWo
         });
     }
 
+    /// <summary>
+    /// <see cref="PlayerbotEconomyWorldTestBase.RunAsync"/> with a whole-run limit of five minutes instead of the default 90 s, so the per-wait limits
+    /// given to <c>FinishAsync</c> (120 s and 180 s) can be reached before the run itself is cut off.</summary>
+    private static async Task RunWithRoomAsync(ScenarioTestWorld world, string name, Func<ScenarioContext, Task> body)
+    {
+        ScenarioReport report = await world.RunAsync(new Script(name, body), new ScenarioRunOptions
+        {
+            StepTimeout = ScenarioTestWorld.DefaultStepTimeout,
+            MaxDuration = TimeSpan.FromMinutes(5),
+        });
+        Assert.True(report.Passed, report.ToString());
+    }
+
     // --- the money goal, the hourly caps and the surplus consumables ------------------------------------------------
 
     [Fact]
     public async Task Visit_MoneyGoal_ListsEveryVisitAndBeyondTheUsualCap_WhenTheBotSavesForMoreThanItHas()
     {
         await using ScenarioTestWorld world = await StartAsync();
-        await RunAsync(world, "economy-money-goal", async c =>
+        await RunWithRoomAsync(world, "economy-money-goal", async c =>
         {
             EconomyFeature economy = c.Services.GetRequiredService<EconomyFeature>();
             ScenarioBot bot = await c.LoginAsync("Econgoal");
@@ -172,7 +185,7 @@ public sealed class PlayerbotEconomyPaceAndReportWorldTests : PlayerbotEconomyWo
             await c.ReadAsync(() => { driver.Economy.SpendBudget = budget; return true; });
 
             await StartVisitAsync(c, driver);
-            await FinishAsync(c, driver, 1);
+            await FinishAsync(c, driver, 1, TimeSpan.FromSeconds(180));
 
             ScenarioContext.ExpectEqual(5, await c.ReadAsync(() => driver.Economy.ListingsPlaced), "listings placed: 2 slots + 3 for the money goal");
             ScenarioContext.ExpectEqual(5, await c.ReadAsync(() => economy.Auctions.Count(v => v.Auction.SellerId == (int)bot.Guid.Low)), "auctions of the bot");

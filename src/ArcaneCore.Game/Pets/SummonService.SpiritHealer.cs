@@ -129,6 +129,13 @@ public sealed partial class SummonService
             }
         }
 
+        // PET_SAVE_REAGENTS saves the pet out of the current slot (PET_SAVE_NOT_IN_SLOT, Pet.cpp:1023+): a demon refunded here must not stay the row a login
+        // restores, or the next login would bring it back for the shard that was just given back.
+        if (pet.GetOwner() is { } refunded)
+        {
+            AbandonSavedDemon(refunded, pet);
+        }
+
         Unsummon(pet);
     }
 

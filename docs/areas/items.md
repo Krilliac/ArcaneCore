@@ -38,7 +38,7 @@ For the build-5875 bags, bank and move-error audit, see [inventory-bags.md](inve
 - **Unknown entry.** SMSG_ITEM_QUERY_SINGLE_RESPONSE with only `entry | 0x80000000` (vmangos), not a full empty block.
 - **`patch` column dropped.** vmangos keys `item_template` on `(entry, patch)` for progression. We load one row per entry (latest patch content when imported).
 - **Moves send values updates.** A moved item gets a values update (`ITEM_FIELD_CONTAINED`, the slot fields of its old and new holder); the create block goes to the owner once, the first time the item exists for the client (login or `SMSG_ITEM_PUSH_RESULT`). vmangos may re-send create blocks on some bag moves (`Bag::StoreItem` / `SendCreateUpdateToPlayer`); not needed for correctness here.
-- **No SMSG_OPEN_CONTAINER** after auto-equipping a bag; vmangos does not send one either (cmangos does in some builds).
+- **SMSG_OPEN_CONTAINER** is sent after `CMSG_AUTOEQUIP_ITEM` puts a bag into a bag slot, as vmangos does (`HandleAutoEquipItemOpcode`, ItemHandler.cpp:225-227); other equips and moves do not send it.
 - **Unloadable rows are kept.** vmangos deletes inventory rows it cannot place (bad slot, missing template) with an error log. We keep them in memory and write them back on save, so a content import mistake does not destroy items.
 - **Two rows in one own slot.** `character_inventory` is keyed by item guid only, so two rows can name the same (character, bag 0, slot). Both reads agree on which one wins: rows come by bag, slot, item guid; the load places the first row the slot accepts (`PlayerInventory.CanOccupyOwnSlot`: the item's allowed equip slots, a bag in a bag slot, a key in the keyring) and keeps the rest as unloadable rows. The character list (`GetEquippedEntriesAsync`) applies the same rule through its `canOccupy` callback, so it shows the item the world will wear, and falls back to the lowest item guid when no row is accepted.
 
@@ -92,7 +92,7 @@ Known gaps and UNVERIFIED points:
 - UNVERIFIED: whether retail 1.12.1 weights the slots on a hit taken or done. Both reference cores pick uniformly over all 19 slots (vmangos `Unit.cpp:882`, `Unit.cpp:892`; mangos-classic `Unit.cpp:1228`, `:1244`) and no per-slot weights were found in the other cores searched; the code follows them.
 - UNVERIFIED: whether retail wears the weapon only for white swings, whether a ranged weapon wears on ranged hits, and whether environmental damage (falling, lava) wears armor; the code follows the reference core for the last (self damage is damage taken).
 - `DurabilityLossChance.Absorb`, `.Parry` and `.Block` are modelled since the economy-items lane (see below), off by default because vmangos does not have them; the slots they wear are a reconstruction, since no reference core still reads them. The `SPELL_ATTR_EX3_NO_DURABILITY_LOSS` exception is not modelled.
-- A spell partial block (`RollSpellPartialBlock`) reduces damage but raises no `PROC_EX_BLOCK` proc bit, so block-triggered procs do not fire on blocked spells; and the deferred next-swing `ATTACKERSTATEUPDATE` path still reports blocked=0 (needs `SpellSystem.Seams.cs`). Both are follow-ups.
+- A spell partial block (`RollSpellPartialBlock`) raises `PROC_EX_BLOCK` on the hit's procs (`ProcFlagRules.ExtendMask`, `blocked`), and the deferred next-swing `ATTACKERSTATEUPDATE` carries the blocked amount and the rolled-block and block hit flags (`MeleeSpellDamageComponent.Blocked`, `SpellSystem.MeleeSpellPackets.cs`; pinned by `QueuedMeleeBlockTests`).
 
 ### Deliberate differences
 
@@ -105,10 +105,10 @@ Known gaps and UNVERIFIED points:
 ### Not delivered (needs another lane's primitive, data or a decision)
 
 - Exact persisted item-cooldown owner metadata for relog/UI reconstruction: current server rows preserve durations/category IDs, while `ItemId` and effective item-category ownership remain pending. References: `SpellHandler.cpp:36-140`, `Spell.cpp:4991-5046, 7109-7175`, `Player.cpp:22139-22214`; proposed contract is documented in `docs/integration/item-use-20261004.md` and the cooldown reconnaissance report.
-- Random properties are delivered by the economy-items lane (code path; the content needs the developer-supplied ItemRandomProperties.dbc and an `item_enchantment_template` dump). CMSG_USE_ITEM, item charges and consumption, the item cooldown pick, bind-on-use and the consumable refusal are delivered (`SpellSystem.HandleItemUse`, docs/integration/item-use-20261004.md); ON_EQUIP item spells and item sets are delivered (next section); the enchantment engine is the crafting lane's (docs/areas/crafting.md), and weapon chance-on-hit spells and enchantment combat spells proc through `SpellSystem.ItemCombatProcs`.
+- Random properties are delivered by the economy-items lane (code path; the content needs the developer-supplied ItemRandomProperties.dbc and the `item_enchantment_template` rows of the world database, imported from the content dump). CMSG_USE_ITEM, item charges and consumption, the item cooldown pick, bind-on-use and the consumable refusal are delivered (`SpellSystem.HandleItemUse`, docs/integration/item-use-20261004.md); ON_EQUIP item spells and item sets are delivered (next section); the enchantment engine is the crafting lane's (docs/areas/crafting.md), and weapon chance-on-hit spells and enchantment combat spells proc through `SpellSystem.ItemCombatProcs`.
 - Item loot containers (`CMSG_OPEN_ITEM`, `generated_loot`), lockboxes: need coordination with the loot-service owner (group-loot-xp).
 - Food/drink sit and `MOD_REGEN` (aura 84), elixir exclusivity. The equip cooldown is delivered (see "Equip cooldown" below). The combat weapon-swap GCD and the 15-minute conjured rule are delivered by the economy-items lane; REAL_DURATION does not exist in 1.12.
-- Gift wrapping and page text are delivered by the economy-items lane (classic-db papers use the cmangos paper-to-gift pairs; page text needs a `page_text` dump).
+- Gift wrapping and page text are delivered by the economy-items lane (classic-db papers use the cmangos paper-to-gift pairs; page text needs `page_text` rows in the world database, imported from the content dump).
 - Spell `SummonChangeItem` (item transform keeping enchantments).
 
 ### Real-client acceptance still pending
@@ -169,30 +169,28 @@ The auction outbid notification and bidder list are in [economy fidelity](../int
 
 | Setting | Content | Without it |
 |---|---|---|
-| `PageText:DumpPath` | A vmangos or cmangos classic-db world dump (plain or .gz) with `page_text` (entry, text, next_page); only that table is read. The full classic-db z2815 dump loads its 1427 pages in about 1 s. | Every page answers "Item page missing." |
+| world table `page_text` (world schema 70) | Rows (entry, text, next_page) imported from a vmangos or cmangos classic-db world dump by `arcane-content-importer import` or `refresh`. The world reads the table once at start (the classic-db z2815 dump has 1427 pages). | Every page answers "Item page missing." |
 | `ItemRandomProperties:DbcPath` | The developer-supplied build-5875 ItemRandomProperties.dbc (16 fields, strict). | No random properties. |
-| `ItemRandomProperties:EnchantmentTemplateDumpPath` | A world dump with `item_enchantment_template` (entry, ench, chance; vmangos rows filtered to patch 10). z2815: 772 entries, about 1 s. | No random properties. |
+| world table `item_enchantment_template` (world schema 70) | Rows (entry, ench, chance) imported from a world dump by `arcane-content-importer import` or `refresh`; vmangos rows are filtered to patch 10 at import. z2815: 772 entries. | No random properties. |
 
 ### Optional client data (one command)
 
 `tools/content/set-optional-data.ps1 -AppSettings <appsettings.json> -DbcDirectory <refs-root>\client-dbc-5875-effective [-Dump <dump>]` (or
 `refresh-world-content.ps1 ... -AppSettings <appsettings.json>`, which runs it after the content refresh) checks every file (WDBC header and
-build-5875 field count, the directory's `SHA256SUMS`, both tables present in the dump), keeps the old `appsettings.json` as a `.bak` and sets:
+build-5875 field count, the directory's `SHA256SUMS`), keeps the old `appsettings.json` as a `.bak` and sets:
 
 | Key | File (`<refs-root>`\client-dbc-5875-effective, patch-2 over patch over dbc) | Rows | Feature |
 |---|---|---|---|
 | `ItemSets:DbcPath` | ItemSet.dbc (patch-2) | 172 sets | item set bonuses |
 | `ItemRandomProperties:DbcPath` | ItemRandomProperties.dbc (patch) | 2012 suffixes | random suffixes |
-| `ItemRandomProperties:EnchantmentTemplateDumpPath` | the classic-db dump (`item_enchantment_template`) | 772 entries | random suffixes |
 | `Enchanting:SpellItemEnchantmentDbcPath` | SpellItemEnchantment.dbc (patch-2) | 1460 enchantments | enchanting, and the stats of suffix enchantments (slots 3-5) |
-| `PageText:DumpPath` | the classic-db dump (`page_text`) | 1427 pages | readable items and text objects |
 | `CharacterCreation:CharSectionsDbcPath` | CharSections.dbc (patch) | 3603 available rows | the appearance check of a new character |
 | `CharacterCreation:CharacterFacialHairStylesDbcPath` | CharacterFacialHairStyles.dbc (patch) | 136 styles | the appearance check of a new character |
 
-Each is read once at startup (not hot-reloadable); a configured file that cannot be read refuses startup. With all seven the world logs none
-of the five "not set" warnings. 1.12.1 has no barber shop, so CharSections serves character creation only.
+Each is read once at startup (not hot-reloadable); a configured file that cannot be read refuses startup. With all five (and the `page_text` and `item_enchantment_template` rows imported) the world logs none
+of the "not set" warnings. 1.12.1 has no barber shop, so CharSections serves character creation only.
 
-`page_text` and `item_enchantment_template` are read from dumps because a world-database table for them needs a world schema number this lane did not have; moving them into the world database is a follow-up (a table module plus a content-import spec). Until then the world reads them from the dump at every start (about 2 s in all for z2815).
+`page_text` and `item_enchantment_template` are world-database tables (world schema **70**, `ItemTextWorldDataModule`). The importer (`ItemTextDumpImporter`, content-import spec entries for both tables) fills them on `import` and `refresh`; the world reads them through `IPageTextStore` and `IItemEnchantmentTemplateStore` once at start. The former dump keys (the page text dump path and the enchantment template dump path) are retired, so the world no longer parses a dump at start. A database upgraded to 70 has no rows until the content dump is imported or refreshed; the update files are `sql/updates/world/<provider>/0070_ItemTextWorldDataModule.sql`.
 
 ### Schema
 

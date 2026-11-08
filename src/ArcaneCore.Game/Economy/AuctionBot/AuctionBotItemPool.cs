@@ -48,6 +48,20 @@ public sealed class AuctionBotItemPool
         => configuredMaxItemLevel != 0 ? configuredMaxItemLevel : maxRequiredLevel >= DefaultMaxLevel ? uint.MaxValue : maxRequiredLevel + 5;
 
     /// <summary>
+    /// The levels that count for the dynamic cap: every online level, or with <paramref name="ignoreGmAccounts"/> only those of characters whose
+    /// account is not a staff account (cMaNGOS AuctionHouseBot.Level.IgnoreGmAccounts). When that leaves nobody but someone is online (only
+    /// staff), the levels of the staff characters count, so the cap follows the highest GM level (cMaNGOS AuctionHouseBot.cpp:498-502, "No
+    /// non-GM players online. Fallback max required level (including GMs)").
+    /// </summary>
+    public static IEnumerable<uint> CountedOnlineLevels(IEnumerable<(uint Level, bool IsGmAccount)> online, bool ignoreGmAccounts)
+    {
+        ArgumentNullException.ThrowIfNull(online);
+        (uint Level, bool IsGmAccount)[] all = [.. online];
+        uint[] counted = [.. all.Where(o => !ignoreGmAccounts || !o.IsGmAccount).Select(o => o.Level)];
+        return counted.Length == 0 ? all.Select(o => o.Level).ToArray() : counted;
+    }
+
+    /// <summary>
     /// The dynamic required level cap (cMaNGOS UpdateDynamicMaxLevel): the highest of <paramref name="onlineLevels"/>, kept within 1-255;
     /// with nobody online the cap in force (<paramref name="current"/>) stays.
     /// </summary>

@@ -22,9 +22,9 @@ public interface ISpellBonusCoefficients
 /// value as a mask (the 1.12 build). Order and rounding follow vmangos: the caster side runs when a direct effect lands
 /// or an over-time aura is created, the target side on every tick.
 /// <para>
-/// Damage done versus the victim's creature type (auras 168, 59, 180) is applied, and equipped-item restricted damage auras are left out of
-/// spells as the reference does. Not modelled (documented limits): the paladin seal exception for weapon-restricted percent auras, class script
-/// modifiers, Ignite, totems/pets using their owner, weapon-based periodic damage, and the melee class SCHOOL_DAMAGE spells' MeleeDamageBonusDone
+/// Damage done versus the victim's creature type (auras 168, 59, 180) is applied, equipped-item restricted damage auras are left out of
+/// spells as the reference does, and Ignite's damage over time skips the done side (its amount is a share of a crit that already took it). Not modelled (documented limits): the paladin seal exception for weapon-restricted percent auras,
+/// totems/pets using their owner's done auras (the class script modifiers and the talent spell mods do use the owner), weapon-based periodic damage, and the melee class SCHOOL_DAMAGE spells' MeleeDamageBonusDone
 /// (they take only the DAMAGE spell mod; weapon damage spells use <see cref="Combat.MeleeDamageBonus"/>).
 /// </para>
 /// </summary>
@@ -32,13 +32,14 @@ public sealed class SpellBonusModule(SpellSystem spells) : ISpellAmountModifier
 {
     private const int SpiritStat = 4;
 
-    // vmangos SpellDefines.h SPELLFAMILY_*, SpellClassMask.h CF_MAGE_FIRE_WARD (3), CF_MAGE_FROST_WARD (8), CF_PRIEST_POWER_WORD_SHIELD (0); Shadow Ward is
+    // vmangos SpellDefines.h SPELLFAMILY_*, SpellClassMask.h CF_MAGE_FIRE_WARD (3), CF_MAGE_FROST_WARD (8), CF_MAGE_IGNITE (27), CF_PRIEST_POWER_WORD_SHIELD (0); Shadow Ward is
     // identified by icon 207 and category 56 (SpellAuras.cpp:5782, inside a SPELLFAMILY_WARLOCK case; the real rows carry family 0).
     private const uint MageFamily = 3;
     private const uint WarlockFamily = 5;
     private const uint PriestFamily = 6;
     private const int FireWardFlag = 3;
     private const int FrostWardFlag = 8;
+    private const int IgniteFlag = 27;
     private const int PowerWordShieldFlag = 0;
     private const uint ShadowWardIcon = 207;
     private const uint ShadowWardCategory = 56;
@@ -164,8 +165,10 @@ public sealed class SpellBonusModule(SpellSystem spells) : ISpellAmountModifier
     private float Done(bool heal, float amount, Unit caster, Unit target, SpellInfo spell, int mask, EffectiveCoefficient coefficient, uint stack, SpellModOp modOp)
     {
         // A unit standing in for a game object brings no done side: the object has no auras or spell mods (SpellCaster.cpp:1457-1700 read unit
-        // auras only, and a game object is not a unit).
+        // auras only, and a game object is not a unit). "Ignite damage already includes modifiers" (SpellCaster.cpp:1571-1573): the check sits in the
+        // damage formula only, SpellHealingBonusDone has none.
         if (SpellBonusFormulas.IgnoresCasterModifiers(spell)
+            || (!heal && spell.IsFitToFamily(MageFamily, IgniteFlag))
             || (heal && spell.DamageClass == SpellDamageClass.None && spell.IsPassive)
             || spells.IsGameObjectStandIn(caster))
         {

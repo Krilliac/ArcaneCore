@@ -157,7 +157,7 @@ public sealed partial class QuestNpcServices
         {
             if (refusal.Message is { } reason)
             {
-                Send(player, WorldOpcode.SmsgQuestgiverQuestInvalid, QuestPackets.QuestInvalid(reason));
+                QuestInvalid(player, quest.Id, reason);
             }
 
             return false;
@@ -206,7 +206,7 @@ public sealed partial class QuestNpcServices
                 // CanTakeQuest(qInfo, true) (QuestHandler.cpp:179) tells the member why it was not offered the quest.
                 if (refusal.Message is { } reason)
                 {
-                    Send(member, WorldOpcode.SmsgQuestgiverQuestInvalid, QuestPackets.QuestInvalid(reason));
+                    QuestInvalid(member, quest.Id, reason);
                 }
 
                 continue;
@@ -252,7 +252,7 @@ public sealed partial class QuestNpcServices
         {
             if (refusal.Message is { } reason)
             {
-                Send(player, WorldOpcode.SmsgQuestgiverQuestInvalid, QuestPackets.QuestInvalid(reason));
+                QuestInvalid(player, quest.Id, reason);
             }
 
             return;

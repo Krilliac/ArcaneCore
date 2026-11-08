@@ -27,6 +27,28 @@ public sealed class PlayerbotDungeonFitTests
         Assert.Equal(new PlayerbotDungeonBand(56, 62), PlayerbotDungeonFit.BandOf(Stratholme, 55, [])); // 58-60 +-2
     }
 
+    [Theory]
+    [InlineData(509u)] // Ruins of Ahn'Qiraj
+    [InlineData(531u)] // Temple of Ahn'Qiraj
+    [InlineData(533u)] // Naxxramas
+    public void BandOf_ForARaidMapWithoutACataloguePlan_KeepsThePlusMinusTwoFallback(uint raidMap)
+    {
+        // Raid maps take the same +-2 fallback around the recommended level 60 as every other instance (CHANGELOG, Unreleased).
+        PlayerbotDungeonBand band = PlayerbotDungeonFit.BandOf(raidMap, 60, []);
+        Assert.Equal(new PlayerbotDungeonBand(58, 62), band);
+        Assert.True(band.Holds(58));
+        Assert.False(band.Holds(57));
+        Assert.False(band.Holds(63));
+    }
+
+    [Fact]
+    public void BareRuins_NamesNoDungeon_ButAq20StillDoes()
+    {
+        Assert.Null(ArcaneCore.World.Playerbots.Chat.PlayerbotDungeons.Named("lfm ruins", 60));
+        Assert.Equal(509u, ArcaneCore.World.Playerbots.Chat.PlayerbotDungeons.Named("lfm aq20", 60)?.MapId);
+        Assert.Equal(509u, ArcaneCore.World.Playerbots.Chat.PlayerbotDungeons.Named("raq tonight", 60)?.MapId);
+    }
+
     [Fact]
     public void BandOf_UsesTheCatalogueBandsOfTheMap_AsTheirUnion()
     {

@@ -6,7 +6,7 @@ used to record differences. Code: `src/ArcaneCore.Game/Combat/Duel/` (state, rul
 points in shared files: [integration/duels.md](../integration/duels.md).
 
 Evidence: automated tests against the references cited below and synthetic clients over loopback. **Not verified against a
-real 1.12.1 client** (charter 1.3); the client checklist at the end is what a client pass has to confirm.
+real 1.12.1 client** (see [real-client acceptance](../guide/client-acceptance.md)); the client checklist at the end is what a client pass has to confirm.
 
 ## Delivered scope
 
@@ -57,6 +57,7 @@ Defaults are the vmangos values; a different value is a deliberate deviation.
 * Both vmangos quirks of `EffectDuel` that corrupt state are not copied: it deletes the target's duel object even when it belongs to a third
   player (unreachable on retail data because the cast check refuses a target in a duel), and a self challenge is not refused server-side
   (here: `BAD_TARGETS`).
+* A far teleport mid-duel that cannot enter its map returns the player to the origin, then to the bind point, each as a new far teleport (loading screen and own worldport ack) when the map id differs from the one the client loaded (vmangos `HandleReturnOnTeleportFail`, Player.cpp:2122-2135).
 * Team numbers: whichever participant the map tick reaches first gets team 1 (as in vmangos); tests only assert `{1, 2}`.
 * mangos-classic differences recorded, not adopted: `ForceHealthAndPowerUpdate` around duels, `PLAYER_DUEL_TEAM`-based reactions, copying the duel team
   to charmed units, the 50/40 yd distances (selectable by option), and blocking the logout request while dueling (vmangos only blocks it while in combat,
@@ -70,7 +71,8 @@ Defaults are the vmangos values; a different value is a deliberate deviation.
 
 * **Pets, guardians, totems, charmed units.** They exist: the clamp, the hostility rule and the PvP-pulse exemption resolve a unit to its
   player through `GetAffectingPlayer` (the summoned-by / charmed-by fields), with `IPlayerControlledUnit` as the fallback for a stand-in that publishes neither.
-  Not done: `CombatStopWithPets` still only stops the unit it is given, not its controlled units; pet hostility through the owner on the `CanAttack` path of
+  `DuelService` ends combat through `MapCombat.CombatStopWithPets`, which stops the unit, its pet, guardians and charm.
+  Not done: pet hostility through the owner on the `CanAttack` path of
   creatures; copying `PLAYER_DUEL_TEAM` to a charmed player.
 * **Transports** are delivered with the transport lane (see [transports](transports.md)): `SPELL_FAILED_NOT_ON_TRANSPORT` unless both stand on the same
   ship, `DuelInfo.TransportGuid`, and leaving the ship is leaving the duel area.

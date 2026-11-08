@@ -88,10 +88,12 @@ source is another forward edit, or restart. Edits are not tick-atomic.
 * **`.hotcode` / `.hotmodule` say "There is no such command".** Your account is not an Administrator, or the lane is
   off. The dev account is an Administrator; the runner enables both lanes for its own processes only.
 * **The world refuses to start (exit 78, `refuses to start`)**: `HotCodeGuard`. Read the message: hot reload was
-  requested outside Development / Staging, or the runtime is set up for hot reload without
+  requested outside Development / Staging (Staging is treated like Development on purpose, so the allowlist is not mandatory there), or the runtime is set up for hot reload without
   `World:HotCode:Enabled` (a debugger session sets `DOTNET_MODIFIABLE_ASSEMBLIES` too).
 * **`.hotmodule load X` answers `refused by the module allowlist`.** The dll's SHA-256 is not in
-  `modules-allowlist.txt`: run `scripts\dev-module.ps1` (it builds and approves), or add the hash yourself.
+  `modules-allowlist.txt`: run `scripts\dev-module.ps1` (it builds and approves `<name>.dll`), or add the hash yourself. If the
+  message starts with `dependency '<x>.dll' refused`, a private dependency dll is the one that is unlisted: `dev-module.ps1`
+  does not approve dependencies, so run `scripts\hotmodule-hash.ps1 -Name <name> -Dll <path of x.dll> -Allowlist <modules-allowlist.txt>` for it.
 * **`Unloaded modules not yet freed by the runtime: 1`.** The runtime has not collected the unloaded module yet; the
   host never forces a GC. It reached 0 here only after a collection (a hot-edited command that called `GC.Collect()`
   took it from 1 to 0); a count that stays above 0 after collections means module code is holding a reference.
@@ -210,7 +212,7 @@ client that sits in the loading screen forever beyond the `ack-timeout`; the hum
 
 | Key | Default | Meaning |
 |---|---|---|
-| `Enabled` | `false` | Opt in. Accepted only when the host environment is Development or Staging. |
+| `Enabled` | `false` | Opt in. Accepted only when the host environment is Development or Staging. Staging is deliberately treated as Development (no mandatory allowlist); keep a Staging instance away from untrusted operators. |
 | `AuditLogPath` | empty | Append-only file, one tab-separated line per decision (`start-allowed`, `start-refused`). Not tamper-proof: it is written by the same account the server runs as. Lines are queued and written by a background writer in order; the queue is flushed at process exit. |
 | `MaxConsecutiveFaults` | `50` | Fault breaker, effective only while `Enabled`: a map updater that throws in this many consecutive ticks is skipped (and logged once at error level) until the next applied code edit, or a restart, instead of failing every tick. `0` disables it. An explicit `World:MaxConsecutiveUpdaterFaults` wins. The vanilla default of that setting is `0`: unchanged behavior. |
 
@@ -405,7 +407,8 @@ A text file of SHA-256 hashes, one per line. A module is loaded only if the hash
   whose first token is not 64 hex digits, reported with its line number) refuses every module. A malformed line is
   never skipped: a typo must not silently shrink the list you reviewed. An empty list (only comments) allows nothing.
 * **Read on every load and reload**, so approving a new build needs no restart. The hash is taken from the very
-  bytes that are then loaded (no second read), so the file cannot be swapped between check and load.
+  bytes that are then loaded (no second read), so the file cannot be swapped between check and load. Private dependency
+  dlls are checked the same way when the runtime asks for them.
 * **Empty key (the default)**: no hash check; any dll that is in the module directory can be loaded by an
   Administrator. That is the behaviour of a Development or Staging run with no allowlist, and startup logs a warning
   saying so. It is **not** accepted for a Production instance: `AllowAnyEnvironment=true` outside Development / Staging
@@ -544,8 +547,12 @@ On the local live server, `tools/ops/live/redeploy.ps1` does the copy and the `.
 project changed and nothing else needs a restart, through the World's control pipe; it never adds a hash, so approve the build first
 ([Redeploy prefers hot reload](../ops/redeploy.md)).
 
-The allowlist covers `<name>.dll` only. A private dependency dll copied into the module folder is **not** hashed (and is loaded
-with the module), so keep the module directory writable only by the operator, or ship the module as one self-contained dll.
+With an allowlist configured, the allowlist covers `<name>.dll` **and every private dependency dll** the module loads from its
+folder: each is hashed from the bytes that are loaded and must be listed too (`scripts\hotmodule-hash.ps1` defaults to `<ModuleDirectory>\<Name>\<Name>.dll`, so a dependency needs `-Dll <path>`; or
+`sha256sum`). An unlisted dependency is never loaded, the load or reload is rejected (`dependency '<x>.dll' refused by the module
+allowlist: ...`) and the running version stays in force; a dependency that would only load later, at run time, is refused the
+same way (the load throws inside the module). Assemblies the server already has (ArcaneCore.*, the framework) resolve to the
+server's copy and are not hashed. Without an allowlist nothing is hashed, so keep the module directory writable only by the operator.
 
 ### Unload: what is proven and what is not
 

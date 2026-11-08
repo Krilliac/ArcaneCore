@@ -367,18 +367,38 @@ public sealed class PublicHubTests
         Assert.Equal("rate-limited", limited["code"]!.GetValue<string>());
     }
 
+    // The csrf in these frames is the visitor's own valid one, so only the op can make the hub refuse: with the op check relaxed, the
+    // frame would authenticate and the socket would stay open.
     [Theory]
-    [InlineData("""{"op":1,"csrf":"x"}""")]
-    [InlineData("""{"op":{},"csrf":"x"}""")]
-    public async Task AnAuthFrameWhoseOpIsNotAString_IsClosedAsUnauthorized(string frame)
+    [InlineData("1")]
+    [InlineData("{}")]
+    [InlineData("null")]
+    [InlineData("[\"auth\"]")]
+    public async Task AnAuthFrameWhoseOpIsNotAString_IsClosedAsUnauthorized_EvenWithAValidCsrf(string opJson)
     {
         await using PublicRig rig = await PublicRig.StartAsync();
-        using ClientWebSocket socket = await rig.ConnectAsync(await rig.VisitAsync());
+        Visitor visitor = await rig.VisitAsync();
+        using ClientWebSocket socket = await rig.ConnectAsync(visitor);
 
+        string frame = $$"""{"op":{{opJson}},"csrf":"{{visitor.Csrf}}"}""";
         await socket.SendAsync(Encoding.UTF8.GetBytes(frame), WebSocketMessageType.Text, true, CancellationToken.None);
 
         Assert.Null(await socket.ReceiveTextAsync());
         Assert.Equal((WebSocketCloseStatus)4401, socket.CloseStatus);
+    }
+
+    [Fact]
+    public async Task AnAuthFrameWithAStringOp_AndAValidCsrf_IsAccepted()
+    {
+        await using PublicRig rig = await PublicRig.StartAsync();
+        Visitor visitor = await rig.VisitAsync();
+        using ClientWebSocket socket = await rig.ConnectAsync(visitor);
+
+        await socket.SendJsonAsync(new JsonObject { ["op"] = "auth", ["csrf"] = visitor.Csrf });
+        await socket.SendJsonAsync(new JsonObject { ["op"] = "ping" });
+
+        Assert.NotNull(await socket.ReceiveUntilAsync("pong"));
+        Assert.Null(socket.CloseStatus);
     }
 
     // ---- connections -------------------------------------------------------------------------------------------------------------

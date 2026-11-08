@@ -27,6 +27,87 @@ public sealed class PersistentPetWorldTests
     }
 
     [Fact]
+    public async Task Feature_WiresTheSavedDemonsRead_AndAWarlocksLoginReadsThemFromTheStore()
+    {
+        var store = new MemoryPetStore();
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services =>
+            services.AddSingleton<IPersistentPetStore>(store));
+        var pets = host.WorldServices.GetRequiredService<ArcaneCore.World.Pets.PetsFeature>();
+        var feature = host.WorldServices.GetRequiredService<ArcaneCore.World.Pets.PersistentPetFeature>();
+        Assert.NotNull(pets.Service.LoadDemonsPersistence);
+
+        // the seam reads the store (a demon dismissed before the logout is a saved row, not the current one)
+        IReadOnlyList<PersistentPetSnapshot> viaSeam = await pets.Service.LoadDemonsPersistence!(77, CancellationToken.None);
+        Assert.Equal(91u, Assert.Single(viaSeam).PetNumber);
+        Assert.Equal(1, store.DemonReads);
+
+        // the login: OnPlayerLoadingAsync reads the demons for a warlock, and for no other class
+        await WithScopeAsync(host, async scope =>
+        {
+            using var stream = new MemoryStream();
+            var session = new WorldSession(stream, "127.0.0.1:41101", scope.ServiceProvider, host.Opcodes, host.World, host.Registry,
+                new WorldSessionOptions(), NullLogger.Instance);
+            await LoadAsync(feature, session, Class.Warlock);
+            Assert.Equal(2, store.DemonReads);
+            await LoadAsync(feature, session, Class.Hunter);
+            Assert.Equal(2, store.DemonReads);
+        });
+    }
+
+    [Fact]
+    public async Task Feature_WiresThePetWriteFenceToTheRetirementRegistry()
+    {
+        // PersistentPetFeature.Attach: WritesRetired asks the registry under the pet queue's name (counting each drop there), WritesSealed follows its seal.
+        var registry = new ArcaneCore.World.Persistence.CharacterRetirementRegistry();
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services =>
+        {
+            services.AddSingleton<IPersistentPetStore>(new MemoryPetStore());
+            services.AddSingleton(registry);
+        });
+        var pets = host.WorldServices.GetRequiredService<ArcaneCore.World.Pets.PetsFeature>();
+        Func<int, bool> retired = Assert.IsAssignableFrom<Func<int, bool>>(pets.Service.WritesRetired);
+        Func<bool> sealedNow = Assert.IsAssignableFrom<Func<bool>>(pets.Service.WritesSealed);
+
+        Assert.False(retired(42));
+        Assert.Equal(0, registry.DroppedCount("SummonService"));
+        registry.Retire([42]);
+        Assert.True(retired(42));
+        Assert.False(retired(43));
+        Assert.Equal(1, registry.DroppedCount("SummonService"));
+
+        Assert.False(sealedNow());
+        registry.Seal();
+        Assert.True(sealedNow());
+        registry.Unseal();
+        Assert.False(sealedNow());
+    }
+
+    [Fact]
+    public async Task Feature_WithNoRetirementRegistry_LeavesTheFenceSeamsNull()
+    {
+        // The test host does not register a registry (AddWorldDaemon does), so nothing is ever retired or sealed.
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services =>
+            services.AddSingleton<IPersistentPetStore>(new MemoryPetStore()));
+        var pets = host.WorldServices.GetRequiredService<ArcaneCore.World.Pets.PetsFeature>();
+
+        Assert.Null(pets.Service.WritesRetired);
+        Assert.Null(pets.Service.WritesSealed);
+    }
+
+    private static async Task WithScopeAsync(WorldTestHost host, Func<AsyncServiceScope, Task> body)
+    {
+        await using AsyncServiceScope scope = host.WorldServices.CreateAsyncScope();
+        await body(scope);
+    }
+
+    private static async Task LoadAsync(ArcaneCore.World.Pets.PersistentPetFeature feature, WorldSession session, Class cls)
+    {
+        var record = new CharacterRecord { Id = 77, AccountId = 1, Name = "Loader", Race = 1, Class = (byte)cls, Level = 10 };
+        var player = new Player(record, new PlayerAppearance(49, 1, PowerType.Mana, 60, 0, 60, 100, 100, 100), new NullPlayerSession());
+        await feature.OnPlayerLoadingAsync(session, record, player);
+    }
+
+    [Fact]
     public async Task StopAsync_UnsubscribesTheLoginAndLogoutHandlers()
     {
         await using WorldTestHost host = WorldTestHost.Start(configureServices: services =>
@@ -91,5 +172,14 @@ public sealed class PersistentPetWorldTests
 
         public Task DeleteAsync(int characterId, CancellationToken cancellationToken = default)
             => Task.CompletedTask;
+
+        public int DemonReads;
+
+        public Task<IReadOnlyList<PersistentPetSnapshot>> LoadDemonsAsync(int characterId, CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref DemonReads);
+            return Task.FromResult<IReadOnlyList<PersistentPetSnapshot>>(
+                [new PersistentPetSnapshot(characterId, 91, 416, 10, 0, 60, 10, 0, 1, [], [], IsCurrent: false, Name: "Saved", CreatedBySpell: 688)]);
+        }
     }
 }

@@ -123,6 +123,17 @@ public sealed class PlayerbotRecoveryDecisionTests
         => Assert.Equal(Enum.Parse<Healer>(expected),
             PlayerbotRecovery.DecideSpiritHealer(healer, inReach, graveyardKnown: false, stalled: true, bodyRunLeft, detourLeft));
 
+    /// <summary>
+    /// A death loop's healer in sight that the walk cannot reach (Sentinel Hill 15.5 yd, Ratchet 8.4 yd; live 2026-10-16) is the fault, which
+    /// relocates onto the healer, never the body the bot keeps dying at; a healer nobody asked for keeps the corpse run.
+    /// </summary>
+    [Theory]
+    [InlineData(true, "Fault")]
+    [InlineData(false, "ResumeCorpseRun")]
+    public void DecideSpiritHealer_WhenStalledAtARequestedHealer_DoesNotGoBackToTheBody(bool requested, string expected)
+        => Assert.Equal(Enum.Parse<Healer>(expected), PlayerbotRecovery.DecideSpiritHealer(healerKnown: true, healerInReach: false,
+            graveyardKnown: true, stalled: true, bodyRunLeft: true, detourLeft: false, healerRequested: requested));
+
     /// <summary>A stalled walk from where the server itself would accept the activation (a ledge the mesh does not quite reach) activates.</summary>
     [Theory]
     [InlineData(true, true, "Activate")]

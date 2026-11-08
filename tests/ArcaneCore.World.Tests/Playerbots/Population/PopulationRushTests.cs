@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Population;
@@ -210,30 +211,52 @@ public sealed class PopulationRushTests
     }
 
     [Fact]
-    public async Task WhileTheRushIsPausedOrRunning_TheBudgetStillParksOwnedBots()
+    public async Task WhileTheRushIsPaused_TheBudgetStillParksOwnedBots()
     {
-        await using PopulationTestHost world = await StartAsync(o =>
-        {
-            o.Population.IntervalSeconds = 2;
-            o.Population.ConfirmWindows = 1;
-            o.Population.MinRunSeconds = 0;
-            o.MaxBots = 8;
-        });
+        await using PopulationTestHost world = await StartAsync(ShedOptions);
         Assert.Null(world.Feature.StartRush(6, 1));
 
         // Slow the world only once the rush has made a bot: a brake that trips first leaves nothing to shed, and a paused rush never resumes.
         await WaitRushAsync(world, r => r.State == "running" && r.Created >= 1, "the rush to create its first bot");
-        await using var slow = new SlowWorld(world, 120);
+        await using var slow = new SlowWorld(world, 120); // over the 90 ms ceiling: the brake pauses the rush
 
         await WaitRushAsync(world, r => r.State == "paused" && r.Created >= 1, "the brake to pause the rush");
+        await AssertABotWasParkedAsync(world);
+        Assert.Equal("paused", world.Feature.RushStatus.State);
+    }
+
+    [Fact]
+    public async Task WhileTheRushIsRunning_TheBudgetStillParksOwnedBots()
+    {
+        await using PopulationTestHost world = await StartAsync(ShedOptions);
+        Assert.Null(world.Feature.StartRush(6, 1));
+
+        await WaitRushAsync(world, r => r.State == "running" && r.Created >= 1, "the rush to create its first bot");
+        await using var slow = new SlowWorld(world, 75); // over the 60 ms budget but under the 90 ms ceiling: the rush keeps running while the budget sheds
+
+        await AssertABotWasParkedAsync(world);
+        Assert.Equal("running", world.Feature.RushStatus.State);
+    }
+
+    private static void ShedOptions(PlayerbotOptions o)
+    {
+        o.Population.IntervalSeconds = 2;
+        o.Population.ConfirmWindows = 1;
+        o.Population.MinRunSeconds = 0;
+        o.MaxBots = 8;
+    }
+
+    // A park, not a bot that has merely not reached Running yet. Only the population feature's OwnedParked proves it: a created bot's row starts
+    // Stopped (ManagedPlayerbotFeature publishes it at creation), so a Stopped bot in the snapshot says nothing about a shed pass.
+    private static async Task AssertABotWasParkedAsync(PopulationTestHost world)
+    {
         DateTime deadline = DateTime.UtcNow.AddSeconds(30);
-        while (world.RunningCount >= world.Feature.RushStatus.Created)
+        while (world.Feature.Status.OwnedParked < 1)
         {
-            Assert.True(DateTime.UtcNow < deadline, $"no bot was shed: {world.RunningCount} running of {world.Feature.RushStatus.Created} created");
+            Assert.True(DateTime.UtcNow < deadline,
+                $"no bot was parked: {world.RunningCount} running of {world.Feature.RushStatus.Created} created, status parked {world.Feature.Status.OwnedParked}");
             await Task.Delay(100);
         }
-
-        Assert.True(world.Feature.RushStatus.Created > world.RunningCount);
     }
 
     [Fact]

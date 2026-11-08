@@ -40,14 +40,16 @@ public sealed class SmartAiGossipTests
     private sealed class Rig : IDisposable
     {
         private readonly SmartRig _rig;
+        private readonly QuestSeam _quests = new();
 
         public Rig(IEnumerable<SmartScriptRow> rows, NpcFlags flags = NpcFlags.Gossip)
         {
-            _rig = SmartRig.Start(rows);
+            _rig = SmartRig.Start(rows, scriptQuests: _quests);
             Creature wolf = _rig.Wolf;
             Npc = new NpcInfo(wolf.Guid, wolf.Entry, 1, flags, _rig.Map.MapId, _rig.Player.X + 1, _rig.Player.Y, _rig.Player.Z, 0.5f, true, false, false, false, MenuId);
             Services = new QuestNpcServices(new QuestStore(QuestContent.Empty), new NpcStore(Content()),
                 new QuestNpcDependencies(Creatures: new Lookup(Npc)), new QuestNpcOptions(), new Sink(), () => 100, NullLogger.Instance);
+            _quests.Services = Services;
             Services.CompleteLoad(Services.Track(_rig.Player), new CharacterQuestData([], []));
             _rig.Session.Clear();
         }
@@ -70,6 +72,24 @@ public sealed class SmartAiGossipTests
         }
 
         public void Dispose() => _rig.Dispose();
+
+        /// <summary>The world's seam (ScriptQuestEvents) reduced to what CLOSE_GOSSIP needs: it reaches the quest service the rig builds after the AI services.</summary>
+        private sealed class QuestSeam : IScriptQuestEvents
+        {
+            public QuestNpcServices? Services { get; set; }
+
+            public void GossipClosed(Player player) => Services?.ForgetGossipMenu(player);
+
+            public void AreaExploredOrEventHappens(Player player, uint questId) { }
+
+            public void FailQuest(Player player, uint questId) { }
+
+            public void KilledMonsterCredit(Player player, uint creatureEntry, ObjectGuid source) { }
+
+            public void GroupEventFailHappens(Player player, uint questId) { }
+
+            public IReadOnlyList<Player> GroupMembersOf(Player player) => [];
+        }
 
         private sealed class Lookup(NpcInfo npc) : ICreatureLookup
         {
@@ -204,5 +224,82 @@ public sealed class SmartAiGossipTests
         long selectBefore = FaultLedger.Shared.Snapshot().Where(s => s.Site == "npc.gossip-select-ai").Sum(s => s.Count);
         rig.Services.GossipSelectOption(rig.Smart.Player, rig.Npc.Guid, 0, null);
         Assert.Equal(selectBefore + 1, FaultLedger.Shared.Snapshot().Where(s => s.Site == "npc.gossip-select-ai").Sum(s => s.Count));
+    }
+
+    private static int Completes(Rig rig)
+    {
+        int count = 0;
+        foreach ((WorldOpcode op, byte[] _) in rig.Smart.Session.Sent)
+        {
+            if (op == WorldOpcode.SmsgGossipComplete) count++;
+        }
+
+        return count;
+    }
+
+    [Fact]
+    public void CloseGossip_FromEvent62_ClosesTheWindow_AndALaterSelectionOfTheOldMenuIsRefused()
+    {
+        using var rig = new Rig(
+        [
+            CreatureRow(WolfEntry, 0, SmartEvent.GossipSelect, SmartAction.CloseGossip, SmartTarget.ActionInvoker, e1: MenuId, e2: 1),
+            CreatureRow(WolfEntry, 1, SmartEvent.GossipSelect, SmartAction.Cast, SmartTarget.ActionInvoker, e1: MenuId, e2: 0, a1: SelectSpell),
+        ]);
+
+        rig.Services.GossipHello(rig.Smart.Player, rig.Npc.Guid);
+        rig.Services.GossipSelectOption(rig.Smart.Player, rig.Npc.Guid, 1, null);
+        Assert.Equal(1, Completes(rig));
+
+        // The menu was forgotten with the window (GossipDef.cpp:241), so a stale CMSG_GOSSIP_SELECT_OPTION for line 0 does nothing.
+        rig.Services.GossipSelectOption(rig.Smart.Player, rig.Npc.Guid, 0, null);
+        Assert.Empty(rig.Smart.Spells.Casts);
+        Assert.Equal(1, Completes(rig));
+    }
+
+    [Fact]
+    public void CloseGossip_FromEvent64_ClosesTheWindow_AndALaterSelectionOfTheOldMenuIsRefused()
+    {
+        using var rig = new Rig(
+        [
+            CreatureRow(WolfEntry, 0, SmartEvent.GossipHello, SmartAction.CloseGossip, SmartTarget.ActionInvoker),
+            CreatureRow(WolfEntry, 1, SmartEvent.GossipSelect, SmartAction.Cast, SmartTarget.ActionInvoker, e1: MenuId, e2: 0, a1: SelectSpell),
+        ]);
+
+        rig.Services.GossipHello(rig.Smart.Player, rig.Npc.Guid);
+        Assert.Equal(1, Completes(rig));
+
+        rig.Services.GossipSelectOption(rig.Smart.Player, rig.Npc.Guid, 0, null);
+        Assert.Empty(rig.Smart.Spells.Casts);
+    }
+
+    [Fact]
+    public void CloseGossip_FromALinkedRow_ClosesTheWindow_AndALaterSelectionOfTheOldMenuIsRefused()
+    {
+        using var rig = new Rig(
+        [
+            CreatureRow(WolfEntry, 0, SmartEvent.GossipSelect, SmartAction.SetEventPhase, SmartTarget.Self, e1: MenuId, e2: 1, a1: 2, link: 1),
+            CreatureRow(WolfEntry, 1, SmartEvent.Link, SmartAction.CloseGossip, SmartTarget.ActionInvoker),
+            CreatureRow(WolfEntry, 2, SmartEvent.GossipSelect, SmartAction.Cast, SmartTarget.ActionInvoker, e1: MenuId, e2: 0, a1: SelectSpell),
+        ]);
+
+        rig.Services.GossipHello(rig.Smart.Player, rig.Npc.Guid);
+        rig.Services.GossipSelectOption(rig.Smart.Player, rig.Npc.Guid, 1, null);
+        Assert.Equal(1, Completes(rig));
+        Assert.Equal(2u, rig.Smart.Script.Phase);
+
+        rig.Services.GossipSelectOption(rig.Smart.Player, rig.Npc.Guid, 0, null);
+        Assert.Empty(rig.Smart.Spells.Casts);
+    }
+
+    [Fact]
+    public void AClosedMenu_OfTheQuestService_IsForgotten_SoAStaleSelectionIsRefused()
+    {
+        using var rig = new Rig([CreatureRow(WolfEntry, 0, SmartEvent.GossipSelect, SmartAction.Cast, SmartTarget.ActionInvoker, e1: MenuId, e2: 0, a1: SelectSpell)]);
+
+        rig.Services.GossipHello(rig.Smart.Player, rig.Npc.Guid);
+        rig.Services.QuestgiverCancel(rig.Smart.Player);
+        rig.Services.GossipSelectOption(rig.Smart.Player, rig.Npc.Guid, 0, null);
+
+        Assert.Empty(rig.Smart.Spells.Casts);
     }
 }

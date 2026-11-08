@@ -23,7 +23,7 @@ namespace ArcaneCore.Game.Creatures;
 /// </para>
 /// <para>
 /// The stop form ends after the move-type byte (MonsterMoveStop = 1) in vmangos; gtker
-/// models the flags/duration/points trailer as always present. Servers win (charter), so the
+/// models the flags/duration/points trailer as always present. The server's behaviour wins, so the
 /// short form is sent; see docs/areas/creatures.md.
 /// </para>
 /// </summary>

@@ -157,5 +157,18 @@ internal sealed class CharmCastCheck(CharmService service) : ISpellCastCheck
     }
 
     /// <summary>vmangos Pet::Unsummon(PET_SAVE_NOT_IN_SLOT) of the caster's pet before the charm (SPELL_ATTR_EX_DISMISS_PET_FIRST).</summary>
-    private void DismissPet(Creature pet) => service.Summons?.Unsummon(pet, PetUnsummonReason.Dismissed);
+    private void DismissPet(Creature pet)
+    {
+        if (service.Summons is not { } summons)
+        {
+            return;
+        }
+
+        if (pet.GetOwner() is { } owner)
+        {
+            summons.AbandonSavedDemon(owner, pet); // the warlock's own demon leaves the current slot (PET_SAVE_NOT_IN_SLOT) and keeps its saved state by entry
+        }
+
+        summons.Unsummon(pet, PetUnsummonReason.Dismissed);
+    }
 }

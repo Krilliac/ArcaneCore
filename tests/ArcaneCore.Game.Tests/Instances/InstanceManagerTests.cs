@@ -5,6 +5,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Instances;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Instances;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
@@ -361,8 +362,14 @@ public sealed class InstanceManagerTests
         f.ClearAll();
         f.Tick();
         Assert.Same(map, c.Map);
-        Assert.Equal(0u, d.Map!.MapId); // returned to where the teleport started
         Assert.Equal([(byte)1], Assert.Single(f.Sent(d, WorldOpcode.SmsgTransferAborted))); // TRANSFER_ABORT_MAX_PLAYERS
+        // The way back is a far teleport with a new loading screen (the client loaded the dungeon's map id, the origin is map 0).
+        Assert.Null(d.Map);
+        Assert.Equal(TeleportStage.Far, f.Teleports.StageOf(d));
+        Assert.True(f.Teleports.HandleWorldportAck(d));
+        f.Tick();
+        Assert.NotNull(d.Map);
+        Assert.Equal(0u, d.Map.MapId); // returned to where the teleport started
         Assert.Equal(3, map.PlayerCount);
 
         // Now the trigger itself refuses.
@@ -409,9 +416,13 @@ public sealed class InstanceManagerTests
         f.ClearAll();
         f.Tick();
         Assert.Same(map, c.Map);
-        Assert.NotNull(d.Map); // d's arrival ran in the same tick, after c's
-        Assert.Equal(0u, d.Map.MapId);
+        Assert.Null(d.Map); // d's arrival ran in the same tick, after c's: it was refused and waits for the loading screen back to map 0
+        Assert.Equal(TeleportStage.Far, f.Teleports.StageOf(d));
         Assert.Equal([(byte)1], Assert.Single(f.Sent(d, WorldOpcode.SmsgTransferAborted))); // TRANSFER_ABORT_MAX_PLAYERS
+        Assert.True(f.Teleports.HandleWorldportAck(d));
+        f.Tick();
+        Assert.NotNull(d.Map);
+        Assert.Equal(0u, d.Map.MapId);
         Assert.Equal(3, map.PlayerCount);
     }
 

@@ -119,15 +119,15 @@ public sealed class SessionAnomalyTests
         await client.CollectAsync();
         using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Key == key);
 
-        await client.SendAsync(WorldOpcode.CmsgSkillBuyStep, []); // a real gameplay request with no handler
-        await client.SendAsync(WorldOpcode.CmsgNewSpellSlot, []); // named, not gameplay
+        WorldSession.NoteUnhandledOpcode(WorldOpcode.CmsgOpeningCinematic); // the classifier for a gameplay-listed opcode (the real path needs an unhandled one; none is left)
+        await client.SendAsync(WorldOpcode.MsgChannelStart, []); // named, not gameplay
         await client.SendAsync(WorldOpcode.CmsgPvpPortObsolete, []); // obsolete: never reported
         await WorldTestHost.WaitForAsync(
-            () => capture.Notices.Any(n => n.Subject == "CMSG_SKILL_BUY_STEP") && capture.Notices.Any(n => n.Subject == "CMSG_NEW_SPELL_SLOT"),
+            () => capture.Notices.Any(n => n.Subject == "CMSG_OPENING_CINEMATIC") && capture.Notices.Any(n => n.Subject == "MSG_CHANNEL_START"),
             "both unhandled opcodes to be reported");
 
-        Assert.Equal(AnomalySeverity.Warning, capture.Notices.First(n => n.Subject == "CMSG_SKILL_BUY_STEP").Severity);
-        Assert.Equal(AnomalySeverity.Info, capture.Notices.First(n => n.Subject == "CMSG_NEW_SPELL_SLOT").Severity);
+        Assert.Equal(AnomalySeverity.Warning, capture.Notices.First(n => n.Subject == "CMSG_OPENING_CINEMATIC").Severity);
+        Assert.Equal(AnomalySeverity.Info, capture.Notices.First(n => n.Subject == "MSG_CHANNEL_START").Severity);
         Assert.DoesNotContain(capture.Notices, n => n.Subject.Contains("OBSOLETE", StringComparison.OrdinalIgnoreCase));
     }
 

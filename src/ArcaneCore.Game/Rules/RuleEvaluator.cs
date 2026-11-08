@@ -45,7 +45,13 @@ public sealed class RuleEvaluator(Random random)
     /// <summary>Where traced evaluations go; without a sink nothing is traced.</summary>
     public IRuleTraceSink? TraceSink { get; init; }
 
-    /// <summary>What this evaluator counted; a host that runs several evaluators on one thread may hand them one shared instance.</summary>
+    /// <summary>
+    /// True when an action may fire the event that is already running for the same subject (the creature host: cmangos delivers an AI event
+    /// to the sender synchronously and blocks only the row that is running). An Update for a subject that is already inside an Update is still refused. The nesting limit (<see cref="MaxFireNesting"/>) still applies.
+    /// </summary>
+    public bool AllowSameEventNesting { get; init; }
+
+    /// <summary>What this evaluator counted; a host that runs several evaluators may hand them one shared instance, across threads too (the counters use Interlocked).</summary>
     public RuleEvaluatorCounters Counters { get; init; } = new();
 
     /// <summary>Finds a delayed run's invoker again when the run resumes; without one a resumed run has no invoker.</summary>
@@ -133,7 +139,9 @@ public sealed class RuleEvaluator(Random random)
 
     private bool Enter(RuleSubjectState state, short eventType)
     {
-        for (int i = 0; i < _active; i++)
+        // AllowSameEventNesting lets an action re-fire the running event, but an Update must never nest in an Update of the same subject: it would walk the pending runs twice.
+        bool refuseSame = !AllowSameEventNesting || eventType == UpdateKey;
+        for (int i = 0; i < _active && refuseSame; i++)
         {
             if (ReferenceEquals(_activeStates[i], state) && _activeEvents[i] == eventType)
             {

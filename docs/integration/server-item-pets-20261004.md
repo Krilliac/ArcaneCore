@@ -60,7 +60,8 @@ actual client.
 
 Behavior is checked against pinned vmangos and mangos-classic source, with
 wow_messages supplying the 5875 request layout. WoWWiki 1.12.1 and Wowhead
-Classic were added to the charter/roadmap reference policy at the user's request.
+Classic were added to the reference policy at the user's request (the charter that held that policy is since retired; the policy is in
+[contributing](../guide/contributing.md#retired-rules) and the roadmap).
 
 The next bounded slices are listed in [next slices](next-slices-20261004.md):
 item cooldown packet metadata, pet cooldown persistence, and consumable

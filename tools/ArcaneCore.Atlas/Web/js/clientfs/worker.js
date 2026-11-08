@@ -2,13 +2,17 @@
 //   ping      -> 'pong'
 //   validate  {folder}                         -> validateClientFolder result
 //   tile      {archives, layer, map, x, y}     -> {state, detail, parts: [Uint8Array]} (Api.tile's state names)
+//   texture   {archives, key}                  -> Uint8Array, an ATX1 texture baked from the MCNK named by a `cft:` key
+//   model     {archives, kind, path}           -> the parsed M2 ('m2'), its animation tables ('m2-animation'), WMO root ('wmo-root') or WMO group ('wmo-group') file (m2.js, wmo.js)
 // Requests are {id, op, ...payload}; replies are {id, ok: true, result, reads} or {id, ok: false, error: {code, message}}.
 // `reads` (present only when above 0) is the number of archive range reads the job made (the page's "archive reads" counter).
 // The Worker is started from /app/js/clientfs/worker.js, which the page's script-src 'self' (and the public listener's
 // worker-src 'self') allows; it fetches nothing and posts nothing but results back to the page.
 
 import { buildTile } from './adt.js';
+import { LAYER_TERRAIN_TEX, bakeTexture, buildTexturedTile } from './terrain-tex.js';
 import { ClientFsError } from './limits.js';
+import { readModel, transferables } from './model.js';
 import { createChain, loadOrder, openArchive, stats } from './mpq.js';
 import { validateClientFolder } from './validate.js';
 
@@ -44,8 +48,18 @@ const handlers = {
     validate: async ({ folder }) => ({ value: await validateClientFolder(folder) }),
     tile: async ({ archives, layer, map, x, y }) => {
         const chain = await chainOf(archives);
-        const tile = await buildTile(chain, layer, map, x, y);
+        const tile = layer === LAYER_TERRAIN_TEX ? await buildTexturedTile(chain, map, x, y) : await buildTile(chain, layer, map, x, y);
         return { value: tile, transfer: tile.parts.map((p) => p.buffer) };
+    },
+    texture: async ({ archives, key }) => {
+        const chain = await chainOf(archives);
+        const bytes = await bakeTexture(chain, key);
+        return { value: bytes, transfer: [bytes.buffer] };
+    },
+    model: async ({ archives, kind, path }) => {
+        const chain = await chainOf(archives);
+        const model = await readModel(chain, kind, path);
+        return { value: model, transfer: transferables(model) };
     },
 };
 

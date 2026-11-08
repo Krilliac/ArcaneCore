@@ -110,6 +110,20 @@ public sealed class EventAiRuleConverterTests
     }
 
     [Fact]
+    public void SetSpellListWithANegativeListId_IsReported_AndNeverClamped()
+    {
+        EventAiConversion conversion = Convert(
+            Row(1, action: new CreatureAiAction(60, 0, 0, 0)),
+            Row(2, action: new CreatureAiAction(60, -1, 0, 0)));
+
+        RuleRecord kept = OnlyRule(conversion);
+        Assert.Equal((1 << 30) + 1, kept.Id);
+        EventAiConversionIssue issue = Assert.Single(conversion.Issues);
+        Assert.Equal((2u, EventAiConversionOutcome.Unconvertible), (issue.SourceId, issue.Outcome));
+        Assert.Contains("negative", issue.Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ARepeatMaximumBelowTheMinimum_BecomesAOneShotRow()
     {
         EventAiConversion conversion = Convert(Row(1, eventType: 8, p3: 5000, p4: 1000));
@@ -171,6 +185,16 @@ public sealed class EventAiRuleConverterTests
     }
 
     [Fact]
+    public void ActionSetSpellSet_BecomesTheRuleActionWithItsListId()
+    {
+        EventAiConversion conversion = Convert(Row(1, action: new CreatureAiAction(60, 4242, 0, 0)));
+
+        Assert.Empty(conversion.Issues);
+        RuleActionRecord action = Assert.Single(conversion.Content.Actions, a => a.ActionType == CreatureRuleIds.ActionSetSpellList);
+        Assert.Equal(4242, action.Param1);
+    }
+
+    [Fact]
     public void UnsupportedTypes_AreReportedByIdAndReason_AndNothingIsWritten()
     {
         EventAiConversion conversion = Convert(
@@ -205,6 +229,19 @@ public sealed class EventAiRuleConverterTests
         Assert.Contains("chance 150 written as 100", conversion.Issues[0].Reason, StringComparison.Ordinal);
         Assert.Contains("SET_PHASE 40 written as 31", conversion.Issues[1].Reason, StringComparison.Ordinal);
         Assert.Contains("SET_PHASE -3 written as 0", conversion.Issues[2].Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ARowWithTwoAdjustments_CountsOnceInAdjusted_ButReportsBoth()
+    {
+        EventAiConversion conversion = Convert(Row(1, chance: 150, action: new CreatureAiAction(22, 40, 0, 0)), Row(2));
+
+        Assert.Equal(2, conversion.Converted);
+        Assert.Equal(2, conversion.Issues.Count);
+        Assert.All(conversion.Issues, i => Assert.Equal(1u, i.SourceId));
+        Assert.Equal(1, conversion.Adjusted);
+        Assert.Contains(conversion.Issues, i => i.Reason.Contains("chance 150 written as 100", StringComparison.Ordinal));
+        Assert.Contains(conversion.Issues, i => i.Reason.Contains("SET_PHASE 40 written as 31", StringComparison.Ordinal));
     }
 
     [Fact]

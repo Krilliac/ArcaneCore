@@ -3,6 +3,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Characters.Pets;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 using Xunit;
 
@@ -20,6 +21,25 @@ public sealed class PersistentPetOffThreadTests
         player.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Hunter);
         Assert.Equal(SpellCastResult.CastOk, kit.Cast(player, PetTestKit.PetSpell));
         return (kit, player);
+    }
+
+    [Fact]
+    public void QueueDetachedPetSave_CaptureFailure_ReportsAPersistenceAnomaly_AndWritesNothing()
+    {
+        (PetTestKit kit, Player player) = HunterWithPet();
+        using (kit)
+        {
+            int writes = 0;
+            kit.Service.SaveDetachedPersistence = (_, _) => { Interlocked.Increment(ref writes); return Task.CompletedTask; };
+            kit.Service.DetachedCaptureOverride = _ => throw new InvalidOperationException("synthetic capture failure");
+            using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Key == "pet/persistence-fault" && n.Subject == "character 1");
+
+            // The capture runs synchronously on the calling thread, before the first await of the queued save.
+            kit.Service.QueueDetachedPetSave(player);
+
+            Assert.Equal(1, capture.Count("pet/persistence-fault"));
+            Assert.Equal(0, Volatile.Read(ref writes));
+        }
     }
 
     [Fact]
@@ -157,6 +177,77 @@ public sealed class PersistentPetOffThreadTests
             await kit.Service.FlushCharacterAsync(1).WaitAsync(HangBound);
             await kit.Service.StopAsync().WaitAsync(HangBound);
             Assert.Equal(0, Volatile.Read(ref saves));
+        }
+    }
+
+    /// <summary>One overall deadline for a wedge check; a wedged queue slot never completes, so the wait must fail the test instead of hanging it.</summary>
+    private static readonly TimeSpan WedgeDeadline = TimeSpan.FromSeconds(10);
+
+    private sealed class SaveProbeException(string message) : Exception(message);
+
+    [Fact]
+    public async Task SaveFailingWithOutOfMemory_DoesNotWedgeTheCharactersQueue()
+    {
+        (PetTestKit kit, Player player) = HunterWithPet();
+        using (kit)
+        {
+            kit.Service.SavePersistence = (_, _) => Task.FromException(new OutOfMemoryException("simulated"));
+            kit.Service.QueueCurrentPetSave(player);
+
+            // The queue slot completes with the out-of-memory failure; a slot that never completes would hang every later barrier.
+            await Assert.ThrowsAsync<OutOfMemoryException>(() => kit.Service.FlushCharacterAsync(1)).WaitAsync(WedgeDeadline);
+
+            int saves = 0;
+            kit.Service.SavePersistence = (_, _) => { Interlocked.Increment(ref saves); return Task.CompletedTask; };
+            kit.Service.QueueCurrentPetSave(player);
+            await kit.Service.FlushCharacterAsync(1).WaitAsync(WedgeDeadline);
+            Assert.Equal(1, Volatile.Read(ref saves));
+        }
+    }
+
+    [Fact]
+    public async Task DeleteFailingWithOutOfMemory_DoesNotWedgeTheCharactersQueue()
+    {
+        (PetTestKit kit, Player player) = HunterWithPet();
+        using (kit)
+        {
+            kit.Service.DeletePersistence = (_, _) => Task.FromException(new OutOfMemoryException("simulated"));
+            kit.Service.QueueDeletePet(player);
+
+            await Assert.ThrowsAsync<OutOfMemoryException>(() => kit.Service.FlushCharacterAsync(1)).WaitAsync(WedgeDeadline);
+
+            // A later delete runs although its predecessor completed with the out-of-memory failure, and a stop drain still finishes.
+            int deleted = 0;
+            kit.Service.DeletePersistence = (_, _) => { Interlocked.Increment(ref deleted); return Task.CompletedTask; };
+            kit.Service.QueueDeletePet(player);
+            await kit.Service.FlushCharacterAsync(1).WaitAsync(WedgeDeadline);
+            Assert.True(Volatile.Read(ref deleted) >= 1);
+            await kit.Service.StopAsync().WaitAsync(WedgeDeadline);
+        }
+    }
+
+    [Fact]
+    public async Task OneQueuedSaveFailure_IsRecordedAndReportedOnce()
+    {
+        (PetTestKit kit, Player player) = HunterWithPet();
+        using (kit)
+        {
+            string message = "probe " + Guid.NewGuid();
+            string probeType = typeof(SaveProbeException).FullName!;
+            using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Subsystem == "pet" && n.Detail == message);
+            long faultsBefore = FaultLedger.Shared.Snapshot().Where(s => s.ExceptionType == probeType).Sum(s => s.Count);
+            int calls = 0;
+            kit.Service.SavePersistence = (_, _) => Interlocked.Increment(ref calls) == 1
+                ? Task.FromException(new SaveProbeException(message))
+                : Task.CompletedTask;
+
+            kit.Service.QueueCurrentPetSave(player); // fails once; the barrier below then retries the retained snapshot, which succeeds
+            await kit.Service.FlushCharacterAsync(1).WaitAsync(WedgeDeadline);
+            await kit.Service.StopAsync().WaitAsync(WedgeDeadline);
+
+            Assert.Equal(2, Volatile.Read(ref calls));
+            Assert.Single(capture.Notices);
+            Assert.Equal(1, FaultLedger.Shared.Snapshot().Where(s => s.ExceptionType == probeType).Sum(s => s.Count) - faultsBefore);
         }
     }
 }

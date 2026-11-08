@@ -76,25 +76,74 @@ public sealed class EfHonorStore(CharacterDbContext db, Func<CancellationToken, 
 
         try
         {
-            foreach (HonorCpRecord row in rows)
+            // Pass 0 skips the rows already stored under their operation id. A concurrent attempt that commits between that check and this
+            // insert trips the unique index; pass 1 re-checks and then finds them stored.
+            for (int pass = 0; ; pass++)
             {
-                db.Set<HonorCpRow>().Add(new HonorCpRow
+                IReadOnlyList<HonorCpRecord> fresh = await WithoutStoredAsync(characterId, rows, cancellationToken).ConfigureAwait(false);
+                if (fresh.Count == 0)
                 {
-                    CharacterId = characterId,
-                    VictimType = row.VictimType,
-                    VictimId = row.VictimId,
-                    Cp = HonorRounding.OneDecimal(row.Cp),
-                    Date = row.Date,
-                    Type = row.Type,
-                });
-            }
+                    return;
+                }
 
-            await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                foreach (HonorCpRecord row in fresh)
+                {
+                    db.Set<HonorCpRow>().Add(new HonorCpRow
+                    {
+                        CharacterId = characterId,
+                        VictimType = row.VictimType,
+                        VictimId = row.VictimId,
+                        Cp = HonorRounding.OneDecimal(row.Cp),
+                        Date = row.Date,
+                        Type = row.Type,
+                        OperationId = row.OperationId == Guid.Empty ? null : row.OperationId.ToString("D"),
+                    });
+                }
+
+                try
+                {
+                    await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                    return;
+                }
+                catch (DbUpdateException) when (pass == 0 && fresh.Any(r => r.OperationId != Guid.Empty))
+                {
+                    db.ChangeTracker.Clear();
+                }
+            }
         }
         finally
         {
             db.ChangeTracker.Clear();
         }
+    }
+
+    /// <summary>
+    /// <paramref name="rows"/> without the ones whose operation id is stored, and without a second row of the same id in the batch. Rows
+    /// without an id are always kept.
+    /// </summary>
+    private async Task<IReadOnlyList<HonorCpRecord>> WithoutStoredAsync(int characterId, IReadOnlyList<HonorCpRecord> rows, CancellationToken cancellationToken)
+    {
+        string[] ids = [.. rows.Where(r => r.OperationId != Guid.Empty).Select(r => r.OperationId.ToString("D")).Distinct()];
+        HashSet<string> seen = [];
+        for (int offset = 0; offset < ids.Length; offset += ChunkSize)
+        {
+            List<string> chunk = [.. ids[offset..Math.Min(ids.Length, offset + ChunkSize)]];
+            seen.UnionWith(await db.Set<HonorCpRow>().AsNoTracking()
+                .Where(r => r.CharacterId == characterId && r.OperationId != null && chunk.Contains(r.OperationId))
+                .Select(r => r.OperationId!)
+                .ToListAsync(cancellationToken).ConfigureAwait(false));
+        }
+
+        List<HonorCpRecord> fresh = [];
+        foreach (HonorCpRecord row in rows)
+        {
+            if (row.OperationId == Guid.Empty || seen.Add(row.OperationId.ToString("D")))
+            {
+                fresh.Add(row);
+            }
+        }
+
+        return fresh;
     }
 
     public async Task ResetAsync(int characterId, CancellationToken cancellationToken = default)
@@ -233,12 +282,12 @@ public sealed class EfHonorStore(CharacterDbContext db, Func<CancellationToken, 
     public async Task ApplyMaintenanceAsync(HonorMaintenanceBatch batch, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(batch);
-        LeaseFencedWrite.RequireFence(leaseFences, RealmAuthorityScopes.Maintenance);
+        RealmLeaseFence? heldFence = LeaseFencedWrite.RequireFence(leaseFences, RealmAuthorityScopes.Maintenance);
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             // A takeover between the runner's check and this write is caught here, in the transaction that would double count the week.
-            if (leaseFences?.FenceFor(RealmAuthorityScopes.Maintenance) is { } fence)
+            if (heldFence is { } fence)
             {
                 await LeaseFencedWrite.EnsureHeldAsync(db, fence, cancellationToken).ConfigureAwait(false);
             }

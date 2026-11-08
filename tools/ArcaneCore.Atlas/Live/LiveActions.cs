@@ -155,6 +155,9 @@ public sealed class LiveActions
     /// <summary>How long a <c>caps</c> answer is reused (seconds).</summary>
     public const int CapsSeconds = 5;
 
+    /// <summary>How long a refused <c>caps</c> answer is remembered (seconds), so a burst of calls asks the daemon once.</summary>
+    public const int CapsRefusalSeconds = 2;
+
     private const int MaxPending = 16;
 
     private readonly Func<IFeedRequester?> _requester;
@@ -166,6 +169,8 @@ public sealed class LiveActions
     private readonly Dictionary<string, Pending> _pending = new(StringComparer.OrdinalIgnoreCase);
     private ActionCaps? _caps;
     private DateTimeOffset _capsAt;
+    private string? _capsRefusal;
+    private DateTimeOffset _capsRefusalAt;
     private string? _character;
 
     /// <summary>Creates the action layer.</summary>
@@ -225,12 +230,25 @@ public sealed class LiveActions
             {
                 return cached;
             }
+
+            if (!force && _capsRefusal is { } refusal && (now - _capsRefusalAt).TotalSeconds < CapsRefusalSeconds)
+            {
+                throw new CommandException(CommandException.Failed, refusal);
+            }
         }
 
         JsonObject reply = await SendAsync(new JsonObject { ["op"] = "caps" }, cancellationToken).ConfigureAwait(false);
         if (!IsOk(reply))
         {
-            throw new CommandException(CommandException.Failed, $"the world daemon refused caps: {Text(reply, "code") ?? "refused"}: {Text(reply, "message") ?? "it gave no reason"}");
+            // Only the daemon's own refusal is remembered. A missing connection or a timeout is not: the next call must try again at once.
+            string refusal = $"the world daemon refused caps: {Text(reply, "code") ?? "refused"}: {Text(reply, "message") ?? "it gave no reason"}";
+            lock (_gate)
+            {
+                _capsRefusal = refusal;
+                _capsRefusalAt = now;
+            }
+
+            throw new CommandException(CommandException.Failed, refusal);
         }
 
         bool serverCatalog = reply["catalog"] is JsonValue c && c.TryGetValue(out bool hasCatalog) && hasCatalog;
@@ -270,6 +288,7 @@ public sealed class LiveActions
         {
             _caps = caps;
             _capsAt = now;
+            _capsRefusal = null;
         }
 
         return caps;

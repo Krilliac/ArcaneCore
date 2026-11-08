@@ -1,6 +1,7 @@
 using System.Net.Sockets;
 using System.Text;
 using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.Kernel.Ops.ServerConsole;
 using ArcaneCore.Kernel.Ops.Watchdog;
 using ArcaneCore.Kernel.Ops.Watchdog.Heartbeat;
 using Microsoft.Extensions.Logging;
@@ -449,5 +450,45 @@ public sealed class HeartbeatTests
         Assert.True(sink.Beat());
         Assert.Equal("heartbeat 2026-01-02T03:04:05.000Z pid=99 ready\nheartbeat 2026-01-02T03:04:05.000Z pid=99 alive\n", output.ToString());
         plan.Sink.Dispose();
+    }
+
+    // A supervised child must beat with no Ops:Watchdog configuration at all: the supervisor arms its hang watch on the first authenticated alive beat.
+    [Fact]
+    public void Plan_UnderTheSupervisorProtocol_WithTheDefaultWatchdogConfig_BeatsOnStdout_EveryTenSeconds_WithTheToken()
+    {
+        var options = new WatchdogOptions();
+        Assert.True(options.Enabled);
+        Assert.Equal(HeartbeatMode.Auto, options.Heartbeat.Mode);
+        Assert.Equal(0, options.Heartbeat.IntervalSeconds);
+        var stdout = new StringWriter();
+        Func<string, string?> env = Env((SupervisorProtocol.EnvironmentVariable, "1"), (SupervisorProtocol.TokenEnvironmentVariable, "run-token"));
+
+        HeartbeatPlan plan = HeartbeatPlan.Resolve(options.Heartbeat, env, 4242, "/tmp", stdout);
+
+        Assert.IsType<TextWriterHeartbeatSink>(plan.Sink);
+        Assert.Equal(10, plan.IntervalSeconds);
+        HeartbeatWriter writer = new(options.Heartbeat, [], WatchdogTestKit.NewRegistry(), _log, () => plan);
+        writer.Start();
+        writer.Check(_clock.NowMicros);
+        string[] lines = stdout.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(2, lines.Length);
+        Assert.True(SupervisorProtocol.TryParseHeartbeat(lines[0], out SupervisorHeartbeatState ready, out string readyToken));
+        Assert.True(SupervisorProtocol.TryParseHeartbeat(lines[1], out SupervisorHeartbeatState alive, out string aliveToken));
+        Assert.Equal(SupervisorHeartbeatState.Ready, ready);
+        Assert.Equal(SupervisorHeartbeatState.Alive, alive);
+        Assert.Equal("run-token", readyToken);
+        Assert.Equal("run-token", aliveToken);
+        Assert.Equal(1, writer.Sent);
+    }
+
+    [Fact]
+    public void Plan_WithoutTheSupervisorProtocol_UnderTheDefaultWatchdogConfig_WritesNothingOnStdout()
+    {
+        var stdout = new StringWriter();
+
+        HeartbeatPlan plan = HeartbeatPlan.Resolve(new WatchdogOptions().Heartbeat, Env(), 4242, "/tmp", stdout);
+
+        Assert.IsType<NullHeartbeatSink>(plan.Sink);
+        Assert.Equal(string.Empty, stdout.ToString());
     }
 }

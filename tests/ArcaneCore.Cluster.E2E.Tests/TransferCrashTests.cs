@@ -101,6 +101,7 @@ public sealed class TransferCrashTests(ITestOutputHelper output)
                 StartingItemEntry = StartItemEntry,
                 FirstGatewayEnvironment = new Dictionary<string, string>
                 {
+                    ["Gateway__Transfers__TestStageHold"] = "true",
                     ["ARCANECORE_TEST_TRANSFER_HOLD_STAGE"] = stage.ToString(),
                     ["ARCANECORE_TEST_TRANSFER_HOLD_DIR"] = holdDirectory,
                 },
@@ -309,6 +310,8 @@ public sealed class TransferCrashTests(ITestOutputHelper output)
                 try
                 {
                     await using WorldClient fresh = await cluster.ConnectGatewayClientAsync(budget.Token);
+                    // A silent attempt is retried: keep the tool's own 5 s per attempt, not this suite's 30 s hang bound, so the 90 s budget holds about 15 tries.
+                    fresh.OperationTimeout = ProtocolIO.DefaultOperationTimeout;
                     var replacement = new ScenarioConnection(fresh);
                     MockCharacter again = Assert.Single(await replacement.EnumerateAsync(budget.Token));
                     Assert.Equal(characterGuid, again.Guid);

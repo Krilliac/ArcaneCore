@@ -199,7 +199,9 @@ public sealed class ScholomanceInstance(Map instance) : ScriptedInstance(instanc
             _kirtonosTimer = 5_000;
         }
 
-        return false; // a database script, not a ScriptDev2 GOUse: the use goes on
+        // This port stands for dbscripts_on_go_use 2890009 (guid of the brazier), so the database row must not run as well: it would
+        // close the gate and summon a second Kirtonos. True takes the use over for that script only; the button still toggles.
+        return go.Entry == GoBrazierOfTheHerald;
     }
 
     public override bool OnSpellEvent(Unit caster, uint eventId)

@@ -5,6 +5,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Npc;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Diagnostics;
@@ -15,6 +16,7 @@ using ArcaneCore.World.Features;
 using ArcaneCore.World.Items;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Persistence;
+using ArcaneCore.World.Pets;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -132,7 +134,13 @@ public sealed class NpcServicesFeature(IServiceProvider services, ILogger<NpcSer
         }
 
         Flights = new TaxiFlightSystem(npcs, tables.PathNodes, MountDisplay, () => _world?.NowMs ?? 0, logger,
-            player => services.GetService<SpellFeature>()?.System.RemoveAurasByType(player, AuraType.Mounted));
+            player =>
+            {
+                // vmangos WorldSession::SendDoFlight (TaxiHandler.cpp:113-114): the flight start ends Feign Death, then the spell mount goes.
+                SpellSystem? spells = services.GetService<SpellFeature>()?.System;
+                spells?.BreakSuccessfulFeignDeath(player);
+                spells?.RemoveAurasByType(player, AuraType.Mounted);
+            });
         Flights.FlightEnded += OnFlightEnded;
         Flights.Landed += OnFlightLanded;
         return dependencies with
@@ -273,7 +281,7 @@ public sealed class NpcServicesFeature(IServiceProvider services, ILogger<NpcSer
             }
         }
         if (player.IsAlive && mount != 0 && Flights?.ResumeFlight(player, route, mount,
-            (p, cost) => services.GetService<QuestNpcFeature>()?.Services.TryCharge(p, cost) == true) == true)
+            (p, cost) => services.GetService<QuestNpcFeature>()?.Services.ChargeFlightLeg(p, cost) == true) == true)
         {
             return;
         }
@@ -338,7 +346,22 @@ public sealed class NpcServicesFeature(IServiceProvider services, ILogger<NpcSer
 
     private void OnFlightLanded(Player player, uint destination) => _world?.SavePlayer(player);
 
-    private void OnFlightEnded(Player player) => ClearSavedRoute(player);
+    private void OnFlightEnded(Player player)
+    {
+        ClearSavedRoute(player);
+        ResummonPetAfterFlight(player);
+    }
+
+    /// <summary>
+    /// FlightPathMovementGenerator::Finalize clears the flight state and calls Player::Unmount (WaypointMovementGenerator.cpp:359-362), and Unmount's
+    /// ResummonPetTemporaryUnSummonedIfAny (Player.cpp:18251) brings back a pet the owner could not have during the flight, such as the warlock's demon
+    /// remembered at a login in the air (SummonService.RestoreCurrentDemon). A landing and an aborted flight both end there; a logout's saved route does not.
+    /// Posted, so it runs in the next tick's commands phase: <see cref="TaxiFlightSystem"/> finishes a flight in the map update (the parallel maps phase, and
+    /// SummonService's memory is world-wide) and also inside <see cref="Map.RemovePlayer"/>, while the leaving player still has its map. By the time the
+    /// command runs that player is out of the world, so the pet stays remembered and the far teleport's end brings it back (PetTeleportFollow).
+    /// </summary>
+    private void ResummonPetAfterFlight(Player player)
+        => _world?.Post(() => (services.GetService<SummonService>() ?? services.GetService<PetsFeature>()?.Service)?.ResummonTemporarilyUnsummonedPet(player));
 
     private void ClearSavedRoute(Player player)
     {

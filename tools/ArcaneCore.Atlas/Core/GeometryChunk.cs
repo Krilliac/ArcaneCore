@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ArcaneCore.Atlas.Core.Materials;
+using ArcaneCore.Kernel.Safety;
 
 namespace ArcaneCore.Atlas.Core;
 
@@ -519,6 +520,7 @@ public sealed class GeometryBuilder(string layerId, TileKey tile, WorldPoint ori
 /// triangleCount, material, tag), then the JSON, which also carries <c>"materials"</c> and <c>"model"</c> when present.
 /// Every array starts on a 4-byte boundary so the browser can view it in place.
 /// </summary>
+[AuditedUnsafe("MemoryMarshal.AsBytes/Cast reinterpret float, uint, Vector2 and Vector3 arrays as bytes and back for the ATG1 wire form; the element types are blittable, both directions refuse a non-little-endian host, reads are bounds-checked by Slice (truncated data throws) and copy with ToArray, writes copy into a destination sized by Write")]
 public static class GeometryWire
 {
     public const uint Magic = 0x31475441;

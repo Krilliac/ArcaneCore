@@ -84,7 +84,8 @@ public sealed class PlayerbotElevatorRideTests(ITestOutputHelper output)
     /// destination begins a lift ride instead of a walk into the cliff. The brain walks the bot to the landing beside a car at the foot,
     /// it waits, steps aboard when the car stands there, reports itself on the car (MOVEFLAG_ONTRANSPORT, the car's GUID, at the car's
     /// position) all the way up, and steps off onto the plateau; the destination then walks on from there. No step of the bot is a jump
-    /// farther than stepping aboard or off, and the anticheat, judging the bot as a client, finds nothing.
+    /// farther than stepping aboard or off, and the anticheat, judging the bot as a client, finds nothing: the walk to the lift went
+    /// through the distance budget, and the same bot overrunning it afterwards is scored (<see cref="BotAntiCheatTestKit"/>).
     /// </summary>
     [Fact]
     public async Task ABotInThousandNeedles_RidesTheGreatLiftUp_ToRatchet()
@@ -164,6 +165,9 @@ public sealed class PlayerbotElevatorRideTests(ITestOutputHelper output)
         Assert.True(await world.OnWorldAsync(() => PlayerbotMotion.IsActive(world.Player)), "not walking towards Ratchet");
         foreach (AntiCheatFinding finding in findings) output.WriteLine($"anticheat: {finding.Type} {finding}");
         Assert.DoesNotContain(findings, f => f.Type is AntiCheatViolation.Flag or AntiCheatViolation.Speed or AntiCheatViolation.Teleport);
+
+        // The canyon floor to the cars at the foot is 85 yards and more, all of it steps on the ground.
+        await BotAntiCheatTestKit.AssertJudgedThenOverrunIsScoredAsync(world.Host, world.Session, anticheat, findings, atLeastYards: 60f);
     }
 
     /// <summary>
@@ -432,7 +436,7 @@ public sealed class PlayerbotElevatorRideTests(ITestOutputHelper output)
         Assert.Equal(128, options.MaxPathPoints);
         ElevatorLift lift = await world.GreatLiftAsync();
         Vector3 start = new(lift.Centre.X - (ElevatorNetwork.NearLiftYards + 850f), lift.Centre.Y, ElevatorTestWorld.BottomFloor);
-        await world.OnWorldAsync(() => WorldCollision.Of(world.Host.World).Install(pathfinder: new DensePathfinder()));
+        await world.OnWorldAsync(() => WorldCollision.Of(world.Host.World).Install(pathfinder: new ElevatorTestWorld.DensePathfinder()));
         await world.PlaceAsync(start);
         (bool began, PlayerbotRoute? walk) = await world.OnWorldAsync(() =>
             (PlayerbotElevator.TryBegin(world.Session, world.Player, ElevatorTestWorld.Ratchet, options, out PlayerbotRoute? route), route));
@@ -458,7 +462,7 @@ public sealed class PlayerbotElevatorRideTests(ITestOutputHelper output)
         const float y = -1839f - 1000f; // the Great Lift stands at y -1839: a thousand yards along the cliff from it
         Vector3 ratchet = ElevatorTestWorld.Ratchet; // 3,800 yards from here, to the south-east: the lift lies the other way
         await using ElevatorTestWorld host = await ElevatorTestWorld.StartAsync(creatures: RatchetEnder());
-        await host.OnWorldAsync(() => WorldCollision.Of(host.Host.World).Install(pathfinder: new DensePathfinder()));
+        await host.OnWorldAsync(() => WorldCollision.Of(host.Host.World).Install(pathfinder: new ElevatorTestWorld.DensePathfinder()));
         await host.PlaceAsync(new Vector3(ElevatorTestWorld.Cliff - 20f, y, ElevatorTestWorld.BottomFloor));
         await host.OnWorldAsync(() => host.Player.Level = 10);
         var suspensions = new PlayerbotSuspensions();
@@ -515,26 +519,6 @@ public sealed class PlayerbotElevatorRideTests(ITestOutputHelper output)
         Assert.NotNull(trip);
         Assert.Equal(ElevatorLevel.Low, trip.From);
         Assert.True(atBegin <= ElevatorNetwork.NearLiftYards, $"the trip began {atBegin:F0} yards from the lift");
-    }
-
-    /// <summary>The fixture's mesh with a point every yard on one side of the cliff, as a real mesh has: a route holds as many points as yards, and a query past <see cref="PathOptions.MaxPoints"/> answers the first of them (an incomplete path).</summary>
-    private sealed class DensePathfinder : IPathfinder
-    {
-        private readonly ElevatorTestWorld.CliffPathfinder _cliff = new();
-
-        public bool Enabled => true;
-
-        public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
-        {
-            PathResult sparse = _cliff.FindPath(mapId, start, end, options);
-            if (sparse.Type != PathType.Normal || sparse.Points.Count < 2) return sparse;
-            Vector3 from = sparse.Points[0], to = sparse.Points[^1];
-            int count = Math.Max(2, (int)MathF.Ceiling(Vector3.Distance(from, to)) + 1);
-            int kept = Math.Min(count, Math.Max(2, options?.MaxPoints ?? PathOptions.DefaultMaxPoints));
-            var points = new Vector3[kept];
-            for (int i = 0; i < kept; i++) points[i] = Vector3.Lerp(from, to, i / (float)(count - 1));
-            return new PathResult(kept < count ? PathType.Incomplete : PathType.Normal, points);
-        }
     }
 
     /// <summary>The mesh of a world that joins everything: a straight line.</summary>

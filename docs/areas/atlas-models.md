@@ -15,7 +15,7 @@ committed or served beyond the loopback host.
 | Lane | Scope | Status |
 |---|---|---|
 | A1 | Formats, texture pipeline, ATG1 v2, material framework, display tables, minimal M2 model package, commands and endpoints | delivered (this page) |
-| A2 | Textured terrain (`ref.terrain.tex`) | pending, see [atlas-terrain-textures](atlas-terrain-textures.md) |
+| A2 | Textured terrain (`ref.terrain.tex`) | browser path delivered by lane Y39 (baked from the visitor's client files), see [atlas-terrain-textures](atlas-terrain-textures.md) |
 | A3 | Textured WMO and static M2 doodads (`ref.wmo.tex`, `ref.m2.tex`) | pending, see [atlas-model-materials](atlas-model-materials.md) |
 | A4 | Live creature and game-object models, animation | pending, see [atlas-live-models](atlas-live-models.md) |
 | A5 | Player and bot characters | pending, see [atlas-live-models](atlas-live-models.md) |
@@ -54,15 +54,14 @@ the unit, read back as `(short)(tag >> 16)`), not its shader id (+0x02).
 ## Browser (`Web/js/materials/`, `renderer.js`, `viewport.js`)
 
 Files: `materials/index.js` (the registry: `registerMaterialKind(impl)`, `materialKind(kind)`), `materials/generic.js` (the real
-`generic` kind and the blend and flag tables), `materials/textures.js` (`TextureStore`) and the stubs `terrain.js` (lane A2), `model.js`
-(A3), `skinned.js` (A4) and `character.js` (A5), each exporting an empty `register()` that the index calls after it is defined. A lane
+`generic` kind and the blend and flag tables), `materials/textures.js` (`TextureStore`) and `terrain.js`, `model.js` (kinds `wmo` and `m2`), `skinned.js` and `character.js` (lane Y39, built with `derived.js` on the generic program), each exporting a `register()` that the index calls after it is defined. A lane
 fills its stub by calling `registerMaterialKind` from its own `register()`; it edits neither the index nor the renderer. A kind nobody
 registered draws as `generic`. An `impl` is `{kind, programs(gl, shaderLib), layout(streams), bind(gl, program, material, ctx, textures),
 pass(material)}`: `pass` answers `'opaque'`, `'alphakey'` or `'blend'`, which is how the renderer orders the material pass, and `bind`
 sets the state and uniforms of one batch (returning false skips it). The renderer builds the `generic` program through
 `impl.programs` and its vertex array from `impl.layout`.
 
-`TextureStore` fetches `/api/bin/texture`, uploads RGBA8 or S3TC levels, keeps a byte budget (`textureBudgetMb`, default 384) with
+`TextureStore` fetches `/api/bin/texture` (through `js/clientsource.js`, which sends `cft:` baked terrain keys to the client-file reader), uploads RGBA8 or S3TC levels, keeps a byte budget (`textureBudgetMb`, default 384) with
 two-frame pinning (textures used this frame or the last are never evicted to make room for a generated array; at the end of a frame the
 budget is a hard limit, so there only this frame's textures are protected and a texture used one frame ago goes after every older one),
 evicts least recently used first, dedupes in-flight requests (four at a time) and answers at once with a placeholder

@@ -133,7 +133,8 @@ internal static class TramTestData
 
 /// <summary>
 /// A world with the tram fixture (<see cref="TramTestData"/>), the manual clock, flat floors and straight-line paths, and one managed
-/// bot (a human warrior). Time moves only through <see cref="AdvanceAsync"/>.
+/// bot (a human warrior). Time moves only through <see cref="AdvanceAsync"/>, for the bot's packets too (<see cref="WorldSession.ManagedReceiveClock"/>): the
+/// anticheat judges them on the clock the bot walks by.
 /// </summary>
 internal sealed class TramTestWorld : IAsyncDisposable
 {
@@ -141,6 +142,7 @@ internal sealed class TramTestWorld : IAsyncDisposable
     {
         Host = host;
         Session = session;
+        session.ManagedReceiveClock = () => host.World.NowMs;
     }
 
     public WorldTestHost Host { get; }

@@ -41,6 +41,28 @@ public sealed class TransportBoardingTests
         Assert.False(system.TakeJustBoarded(player));
     }
 
+    /// <summary>
+    /// A far teleport to another worker takes the player off the ship at once, and the client hears nothing until the gateway answers, up to 10 s later. It keeps sending OnTransport moves
+    /// with the ship's guid and offset, and each one is a client that stands on the ship: the first boards it again, so a refused teleport leaves the player aboard with no anomaly.
+    /// </summary>
+    [Fact]
+    public void MovementAboard_AfterARemoteTeleportTookThePlayerOff_BoardsAgain()
+    {
+        WorldRuntime world = ManualWorld();
+        TransportSystem system = Install(world, Ferry);
+        ShipTransport ferry = system.FindByEntry(Ferry)!;
+        Player player = TestWorld.CreatePlayer(1, 100, 0, new FakeSession(1));
+        world.AddPlayer(player);
+        ClientMoves(world, player, Aboard(ferry, 4f, -1f, 6f));
+        ferry.RemovePassenger(player); // TeleportService.TeleportToRemoteMap, once the router took the request
+        Assert.Null(player.Transport);
+
+        ClientMoves(world, player, Aboard(ferry, 4f, -1f, 6f));
+
+        Assert.Same(ferry, player.Transport);
+        Assert.Equal([player], ferry.Passengers);
+    }
+
     [Fact]
     public void MovementAboard_AfterBoarding_ClearsTheJustBoardedMark()
     {

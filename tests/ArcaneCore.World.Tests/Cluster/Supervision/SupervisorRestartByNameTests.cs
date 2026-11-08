@@ -89,7 +89,11 @@ public sealed class SupervisorRestartByNameTests : IDisposable
     [InlineData("--a --Cluster:Worker:Standby=true", false, "--a")]
     [InlineData("--Cluster:Worker:Standby=true", false, "")]
     [InlineData("--a --b", false, "--a --b")]
-    public void StandbyArgument_IsAppendedAndRemovedAtTheEnd(string arguments, bool standby, string expected)
+    [InlineData("--a --Cluster:Worker:Standby=true --b --c", false, "--a --b --c")]
+    [InlineData("--Cluster:Worker:Standby=true --b", false, "--b")]
+    [InlineData("--a --Cluster:Worker:Standby=true --Cluster:Worker:Standby=true --b", false, "--a --b")]
+    [InlineData("--a --Cluster:Worker:Standby=truex --b", false, "--a --Cluster:Worker:Standby=truex --b")]
+    public void StandbyArgument_IsAppendedWhenMissing_AndRemovedWhereverItStands(string arguments, bool standby, string expected)
     {
         Assert.Equal(expected, ClusterHostSupervisor.WithStandbyArgument(arguments, standby));
     }
@@ -132,6 +136,23 @@ public sealed class SupervisorRestartByNameTests : IDisposable
         await rig.Supervisor.RestartProcessAsync(Worker, standby: false);
 
         Assert.Equal(["--w", "--w --Cluster:Worker:Standby=true", "--w"], rig.ArgumentsOf(Worker));
+        Assert.False(rig.Supervisor.GetSnapshot(Worker).Standby);
+        Assert.Equal(SupervisedProcessState.Running, rig.Supervisor.GetSnapshot(Worker).State);
+    }
+
+    // Row Y4-1: a worker that is only configured as a standby (the argument is in its Arguments, never moved at runtime) reports Standby == false, so
+    // restarting it with standby:false is a promotion request and relaunches it as the active world without the argument.
+    [Fact]
+    public async Task RestartByName_NotAsStandby_OfAWorkerConfiguredAsAStandby_PromotesItAndDropsTheArgument()
+    {
+        await using Rig rig = new(configuredWorkerArguments: "--w --Cluster:Worker:Standby=true");
+        await rig.Supervisor.StartProcessAsync("gateway");
+        await rig.Supervisor.StartProcessAsync(Worker);
+        Assert.False(rig.Supervisor.GetSnapshot(Worker).Standby); // configured, never promoted: the snapshot does not say standby
+
+        await rig.Supervisor.RestartProcessAsync(Worker, standby: false);
+
+        Assert.Equal(["--w --Cluster:Worker:Standby=true", "--w"], rig.ArgumentsOf(Worker));
         Assert.False(rig.Supervisor.GetSnapshot(Worker).Standby);
         Assert.Equal(SupervisedProcessState.Running, rig.Supervisor.GetSnapshot(Worker).State);
     }
@@ -321,13 +342,13 @@ public sealed class SupervisorRestartByNameTests : IDisposable
         private readonly ArgumentRecordingLauncher _recording;
         private readonly StringWriter _console = new();
 
-        public Rig(string? statePath = null)
+        public Rig(string? statePath = null, string configuredWorkerArguments = "--w")
         {
             Launcher = new ScriptedLauncher();
             _recording = new ArgumentRecordingLauncher(Launcher);
             var options = new ClusterSupervisorOptions { MinClusterProcesses = 1 };
             options.Processes["gateway"] = new SupervisedProcessConfig { Name = "gateway", Role = SupervisedRoles.Gateway, ExecutablePath = "x", Arguments = "--g", RequiredMemoryMb = 1, StartOrder = 0 };
-            options.Processes[Worker] = new SupervisedProcessConfig { Name = Worker, Role = SupervisedRoles.Worker, ExecutablePath = "x", Arguments = "--w", RequiredMemoryMb = 1, StartOrder = 1 };
+            options.Processes[Worker] = new SupervisedProcessConfig { Name = Worker, Role = SupervisedRoles.Worker, ExecutablePath = "x", Arguments = configuredWorkerArguments, RequiredMemoryMb = 1, StartOrder = 1 };
             Delays.AutoComplete = ManualDelays.IsBackoff;
             Supervisor = new ClusterHostSupervisor(
                 options, _recording, new SupervisedOutputMultiplexer(_console), new FixedMemoryProbe(), Delays.Delay, Clock,

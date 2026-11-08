@@ -84,6 +84,33 @@ public sealed class PopulationOwnershipTests
     }
 
     [Fact]
+    public void ACapacityWeightedShare_FollowsTheSpawnCounts_AndTheWorkersSharesStillAddUpToTheTarget()
+    {
+        var east = new PopulationMapScope(Owning(0), [0, 1]);
+        var kalimdor = new PopulationMapScope(Owning(1), [0, 1]);
+        static int Capacity(uint map) => map == 0 ? 300 : 100;
+        Assert.Equal(75, east.ShareOf(100, Capacity));
+        Assert.Equal(25, kalimdor.ShareOf(100, Capacity));
+        foreach (int target in new[] { 0, 1, 2, 3, 7, 10, 999, 1001 })
+        {
+            int east1 = east.ShareOf(target, Capacity), kalimdor1 = kalimdor.ShareOf(target, Capacity);
+            Assert.Equal(target, east1 + kalimdor1);
+            Assert.True(east1 >= kalimdor1);
+        }
+    }
+
+    [Fact]
+    public void ACapacityWeightedShare_FallsBackToTheEvenSplit_WithoutAnyCapacity()
+    {
+        var east = new PopulationMapScope(Owning(0), [0, 1]);
+        var kalimdor = new PopulationMapScope(Owning(1), [0, 1]);
+        Assert.Equal(east.ShareOf(1001), east.ShareOf(1001, null));
+        Assert.Equal(east.ShareOf(1001), east.ShareOf(1001, _ => 0));
+        Assert.Equal(kalimdor.ShareOf(1001), kalimdor.ShareOf(1001, _ => 0));
+        Assert.Equal(1001, east.ShareOf(1001, _ => 0) + kalimdor.ShareOf(1001, _ => 0));
+    }
+
+    [Fact]
     public void AWorkerWithoutAContinent_IsEmpty_AndHasNoShare()
     {
         var instances = new PopulationMapScope(InstancesOnly(), [0, 1]);

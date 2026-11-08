@@ -26,6 +26,8 @@ public sealed partial class QuestNpcFeature
     private readonly Lock _settlementGate = new();
     private readonly Dictionary<int, QuestSettlement> _settlements = [];
     private readonly CancellationTokenSource _settlementStop = new();
+    private readonly Queue<int> _queuedOrder = new();
+    private readonly Dictionary<int, QueuedReward> _queuedRewards = [];
     private bool _settlementsStopping;
     private Task? _settlementsStopped;
 
@@ -36,6 +38,36 @@ public sealed partial class QuestNpcFeature
             lock (_settlementGate)
             {
                 return _settlements.Count;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Turn-ins waiting for one of the <see cref="MaxConcurrentSettlements"/> slots, one per character (a repeated choice replaces the
+    /// waiting one), so the queue is never longer than the number of online players.
+    /// </summary>
+    public int QueuedSettlementCount
+    {
+        get
+        {
+            lock (_settlementGate)
+            {
+                return _queuedRewards.Count;
+            }
+        }
+    }
+
+    /// <summary>
+    /// The characters with a quest settlement in flight, online or not: a settlement outlives its session (it is adopted by the world after a disconnect), so a cluster handoff names these
+    /// (<c>CharacterPersistenceBarrier.OpenCharacterIdsAsync</c>) and flushes behind each. A snapshot, any thread. Not an <see cref="ArcaneCore.World.Characters.ICharacterSettlementBarrier"/>: login and delete wait on this feature directly.
+    /// </summary>
+    public IReadOnlyCollection<int> SettlingCharacters
+    {
+        get
+        {
+            lock (_settlementGate)
+            {
+                return [.. _settlements.Keys];
             }
         }
     }
@@ -90,8 +122,17 @@ public sealed partial class QuestNpcFeature
 
             if (_settlements.Count >= MaxConcurrentSettlements)
             {
-                _logger.LogWarning("quest reward settlement capacity reached; character {Character} remains active", id);
-                Services.RefuseUnsettledReward(player, questId);
+                // Queue the choice instead of refusing it: it runs, re-validated against the player's state then, when a slot frees.
+                if (_queuedRewards.TryAdd(id, new QueuedReward(session, player, guid, questId, choice)))
+                {
+                    _queuedOrder.Enqueue(id);
+                }
+                else
+                {
+                    _queuedRewards[id] = new QueuedReward(session, player, guid, questId, choice);
+                }
+
+                _logger.LogDebug("quest reward settlement capacity reached; character {Character} queued behind {Active} settlements", id, _settlements.Count);
                 return;
             }
 
@@ -313,6 +354,38 @@ public sealed partial class QuestNpcFeature
                 _settlements.Remove(id);
                 operation.Completion.TrySetResult();
             }
+
+            if (publishLive)
+            {
+                StartQueuedRewards();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Start waiting turn-ins, oldest first, while a settlement slot is free. World thread (the tail of <see cref="FinalizeSettlement"/>
+    /// with publishLive). Each goes through <see cref="ChooseReward"/> again, so a player who logged out, moved away or lost the quest
+    /// meanwhile is dropped by the same checks a fresh request meets.
+    /// </summary>
+    private void StartQueuedRewards()
+    {
+        while (true)
+        {
+            QueuedReward? next;
+            lock (_settlementGate)
+            {
+                if (_settlementsStopping || _settlements.Count >= MaxConcurrentSettlements || !_queuedOrder.TryDequeue(out int id))
+                {
+                    return;
+                }
+
+                if (!_queuedRewards.Remove(id, out next))
+                {
+                    continue;
+                }
+            }
+
+            ChooseReward(next.Session, next.Player, next.Guid, next.QuestId, next.Choice);
         }
     }
 
@@ -321,6 +394,8 @@ public sealed partial class QuestNpcFeature
         lock (_settlementGate)
         {
             _settlementsStopping = true;
+            _queuedOrder.Clear();
+            _queuedRewards.Clear();
             return _settlementsStopped ??= StopSettlementsCoreAsync();
         }
     }
@@ -410,6 +485,8 @@ public sealed partial class QuestNpcFeature
             && pair.First.Item.Charges.SequenceEqual(pair.Second.Item.Charges)
             && pair.First.Item.Enchantments.SequenceEqual(pair.Second.Item.Enchantments));
     }
+
+    private sealed record QueuedReward(WorldSession Session, Player Player, ObjectGuid Guid, uint QuestId, uint Choice);
 
     private enum RewardOutcome { NotStarted, Before, After, Unknown }
 

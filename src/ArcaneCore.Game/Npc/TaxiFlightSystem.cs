@@ -54,7 +54,7 @@ public sealed class TaxiFlightSystem : ITaxiFlights, IMapUpdater
     /// <param name="mountDisplay">Mount creature entry → display id (vmangos ObjectMgr::GetTaxiMountDisplayId; 0 = unknown).</param>
     /// <param name="nowMs">World time in milliseconds (movement timestamps).</param>
     /// <param name="logger">Diagnostics.</param>
-    /// <param name="beforeFlight">Removes a scripted flight's old spell mount after the route is validated.</param>
+    /// <param name="beforeFlight">Runs once the route is validated and paid, before the flight starts: ends Feign Death and removes a scripted flight's old spell mount.</param>
     public TaxiFlightSystem(NpcStore npcs, TaxiPathNodeCatalog pathNodes, Func<uint, uint> mountDisplay, Func<uint> nowMs, ILogger? logger = null, Action<Player>? beforeFlight = null)
     {
         _npcs = npcs;
@@ -71,7 +71,10 @@ public sealed class TaxiFlightSystem : ITaxiFlights, IMapUpdater
     /// <summary>Raised when an in-progress flight is aborted before reaching its destination (external teleport, drift, or explicit abort).</summary>
     public event Action<Player, uint>? Aborted;
 
-    /// <summary>Raised when a route finishes or is interrupted, so its persisted resume state can be cleared.</summary>
+    /// <summary>
+    /// Raised when a route finishes or is interrupted, after the flight flags are cleared, so its persisted resume state can be cleared and a pet the owner
+    /// could not have in the air comes back (NpcServicesFeature; vmangos FlightPathMovementGenerator::Finalize -> Player::Unmount). Not raised for a logout that keeps the route.
+    /// </summary>
     public event Action<Player>? FlightEnded;
 
     /// <summary>Whether the player's last flight was aborted before reaching its destination (consumed once read).</summary>
@@ -134,8 +137,8 @@ public sealed class TaxiFlightSystem : ITaxiFlights, IMapUpdater
             return false;
         }
 
-        // vmangos Player::ActivateTaxiPathTo removes a spell mount before a scripted flight
-        // (Player.cpp:17889-17893). The flight-master path already rejects a mounted player.
+        // The before-flight step: vmangos SendDoFlight ends Feign Death (TaxiHandler.cpp:113-114), and Player::ActivateTaxiPathTo removes a
+        // spell mount before a scripted flight (Player.cpp:17889-17893). The flight-master path already rejects a mounted player.
         _beforeFlight?.Invoke(player);
 
         var flight = new Flight(player, map, hops, nodes.ToArray(), pathIds.ToArray(), legCosts.ToArray(), chargeLeg)
@@ -151,6 +154,8 @@ public sealed class TaxiFlightSystem : ITaxiFlights, IMapUpdater
         // Unit::Mount + FlightPathMovementGenerator::Initialize.
         player.SetUInt32(UpdateFields.UnitFieldMountdisplayid, display);
         player.UnitFlags |= UnitFlags.RemoveClientControl | UnitFlags.TaxiFlight;
+        // FlightPathMovementGenerator::Reset (WaypointMovementGenerator.cpp:394): every threat list holding the player parks it offline for the flight.
+        ArcaneCore.Game.Combat.Threat.HostileRefs.SetOnlineOfflineState(player, false);
         if (!resuming)
         {
             player.Session.Send(WorldOpcode.SmsgActivatetaxireply, NpcPackets.ActivateTaxiReply(ActivateTaxiReply.Ok).AsSpan());
@@ -512,6 +517,13 @@ public sealed class TaxiFlightSystem : ITaxiFlights, IMapUpdater
         _flights.Remove(player.Guid);
         player.SetUInt32(UpdateFields.UnitFieldMountdisplayid, 0);
         player.UnitFlags &= ~(UnitFlags.RemoveClientControl | UnitFlags.TaxiFlight);
+        if (!player.IsGameMaster)
+        {
+            // FlightPathMovementGenerator::Finalize with the route ended (WaypointMovementGenerator.cpp:366-368): the player is a threat target again.
+            // A game master stays offline (Player::SetGameMaster); vmangos would bring it back online here.
+            ArcaneCore.Game.Combat.Threat.HostileRefs.SetOnlineOfflineState(player, true);
+        }
+
         if (player.IsInWorld && ReferenceEquals(player.Map, flight.Map))
         {
             byte[] stop = CreatureMovePackets.BuildStop(player.Guid, player.X, player.Y, player.Z, ++_splineId);

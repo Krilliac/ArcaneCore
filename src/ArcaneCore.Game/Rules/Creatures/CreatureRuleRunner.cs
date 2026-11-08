@@ -145,7 +145,7 @@ public sealed class CreatureRuleRunner : IRuleSubject, IRuleSpeaker, IRuleCaster
         _ai = ai;
         _catalog = catalog;
         Context = ai.Engine.Context;
-        _evaluator = new RuleEvaluator(new HostRandom(this)) { Conditions = new Gate(this) };
+        _evaluator = new RuleEvaluator(new HostRandom(this)) { Conditions = new Gate(this), AllowSameEventNesting = true };
         _state = null!;
         Rebuild();
     }
@@ -507,6 +507,18 @@ public sealed class CreatureRuleRunner : IRuleSubject, IRuleSpeaker, IRuleCaster
         List<int> ready = _ready[current];
         if (ready.Count == 0)
         {
+            return;
+        }
+
+        if (!StackGuard.TryEnter("creature-rules.process"))
+        {
+            // A rule chain too deep for the stack: drop the queued rules so none stays in progress for good (as the EventAI engine does).
+            foreach (int slot in ready)
+            {
+                _inProgress[slot] = false;
+            }
+
+            ready.Clear();
             return;
         }
 

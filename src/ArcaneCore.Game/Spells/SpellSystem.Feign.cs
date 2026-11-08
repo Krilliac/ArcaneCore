@@ -98,6 +98,19 @@ public sealed partial class SpellSystem
         }
     }
 
+    /// <summary>
+    /// The guarded form every vmangos site uses, <c>if (HasUnitState(UNIT_STATE_FEIGN_DEATH)) RemoveSpellsCausingAura(SPELL_AURA_FEIGN_DEATH)</c>:
+    /// the aura goes only when the feign succeeded (<see cref="IsFeigningDeath"/>); a resisted feign is left in place, as there.
+    /// </summary>
+    public void BreakSuccessfulFeignDeath(Unit unit)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        if (IsFeigningDeath(unit))
+        {
+            BreakFeignDeath(unit);
+        }
+    }
+
     /// <summary>The aura handler for AuraType.FeignDeath (registered by <see cref="RangedHandlers"/>).</summary>
     internal void ApplyFeignDeath(SpellAuraHolder holder, SpellAura aura, bool apply)
     {

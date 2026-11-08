@@ -11,4 +11,10 @@ public interface ICharacterSettlementBarrier
 {
     /// <summary>Completes once no settlement involving the character is in flight (storage and publication).</summary>
     Task WaitForSettlementAsync(int characterId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The characters with a settlement in flight right now, so a cluster handoff can name them (<c>CharacterPersistenceBarrier.OpenCharacterIdsAsync</c>) and wait for each. The default reports none,
+    /// which is right for a barrier that cannot enumerate its settlements; the handoff then still waits for every character it knows from another queue or the freeze. Any thread.
+    /// </summary>
+    IReadOnlyCollection<int> SettlingCharacters => [];
 }

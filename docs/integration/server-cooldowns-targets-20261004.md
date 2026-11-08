@@ -41,5 +41,5 @@ external MariaDB/PostgreSQL provider matrix remain pending. No live service,
 push, merge or deployment was performed.
 
 Pinned vanilla source references remain authoritative. WoWWiki 1.12.1 and
-Wowhead Classic support version-checked historical research under the charter's
-corroboration policy.
+Wowhead Classic support version-checked historical research under the reference
+policy in [contributing](../guide/contributing.md).

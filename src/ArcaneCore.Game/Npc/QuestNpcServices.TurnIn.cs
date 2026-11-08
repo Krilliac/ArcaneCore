@@ -211,7 +211,18 @@ public sealed partial class QuestNpcServices
 
         if (quest.Template.RewOrReqMoney < 0 && player.Money < (uint)-(long)quest.Template.RewOrReqMoney)
         {
-            Send(player, WorldOpcode.SmsgQuestgiverQuestInvalid, QuestPackets.QuestInvalid(QuestInvalidReason.NotEnoughMoney));
+            QuestInvalid(player, quest.Id, QuestInvalidReason.NotEnoughMoney);
+            return false;
+        }
+
+        // Player.cpp:12730-12736: a player flagged NO_PLAY_TIME (World:LimitPlayTime) is refused the reward, with the unhealthy-time warning when msg.
+        if ((player.Flags & PlayerFlags.NoPlayTime) != 0)
+        {
+            if (msg)
+            {
+                PlayTimeLimit.SendUnhealthyWarning(player);
+            }
+
             return false;
         }
 
@@ -296,7 +307,7 @@ public sealed partial class QuestNpcServices
     public void RefuseUnsettledReward(Player player, uint questId)
     {
         ArgumentNullException.ThrowIfNull(player);
-        Send(player, WorldOpcode.SmsgQuestgiverQuestFailed, QuestPackets.QuestFailed(questId, QuestInvalidReason.DontHaveReq));
+        QuestTurnInFailed(player, questId, QuestInvalidReason.DontHaveReq);
         CloseGossip(player);
     }
 
@@ -317,10 +328,10 @@ public sealed partial class QuestNpcServices
         switch (result)
         {
             case ItemInventoryResult.InventoryFull:
-                Send(player, WorldOpcode.SmsgQuestgiverQuestFailed, QuestPackets.QuestFailed(questId, QuestInvalidReason.InventoryFull));
+                QuestTurnInFailed(player, questId, QuestInvalidReason.InventoryFull);
                 break;
             case ItemInventoryResult.CantCarryMoreOfThis:
-                Send(player, WorldOpcode.SmsgQuestgiverQuestFailed, QuestPackets.QuestFailed(questId, QuestInvalidReason.DuplicateItem));
+                QuestTurnInFailed(player, questId, QuestInvalidReason.DuplicateItem);
                 break;
             default:
                 player.Inventory.SendEquipError(result, null, null, entry: failedEntry);

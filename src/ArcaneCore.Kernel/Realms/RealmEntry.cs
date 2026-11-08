@@ -69,7 +69,11 @@ public sealed class RealmEntry
 
     public RealmFlags Flags { get; set; } = RealmFlags.None;
 
-    /// <summary>Population hint (0.0 low .. higher = busier).</summary>
+    /// <summary>
+    /// Population hint: the seeded value until a world reports in. With realm liveness on, the world (or the gateway, in a split) resets it to 0 and then
+    /// writes sessions / player limit * 2 (0 is empty, 2 is full) when <c>World:Realm:PlayerLimit</c> is above 0; with a limit of 0 nothing is written after
+    /// the reset. Bot sessions count, so 2 is not a ceiling.
+    /// </summary>
     public float Population { get; set; }
 
     /// <summary>Realm category id (timezone grouping) for the build-5875 list layout.</summary>

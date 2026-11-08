@@ -26,6 +26,9 @@ public sealed partial class SpellSystem
     /// </summary>
     private GameObject? _castingObject;
 
+    /// <summary>Whether the <see cref="CastForGameObject"/> under way is a <c>GameObject::Use</c> spell (a goober's or spell caster's), cast not triggered by vmangos.</summary>
+    private bool _castingObjectUse;
+
     /// <summary>
     /// Cast <paramref name="spellId"/> at <paramref name="target"/> for the object <paramref name="source"/>, triggered, from the object's position:
     /// by <paramref name="unitCaster"/> when the object acts for a unit (a trap's owner, vmangos <c>owner->CastSpell(target, spell, true, ..., goGuid)</c>),
@@ -43,8 +46,13 @@ public sealed partial class SpellSystem
     /// hit, resist and armor rolls use the stand-in's level and skills (its own, so no level difference) instead of the object's level; the
     /// damage-taken hooks (aura breaks, pushback) see the stand-in as the attacker, and an aura the cast applies remembers the stand-in as its
     /// caster (its ticks run the target side only, as for any caster).
+    /// <para>
+    /// <paramref name="objectUse"/> marks a <c>GameObject::Use</c> spell (a goober's or spell caster's): vmangos casts it with <c>triggered = false</c>
+    /// (GameObject.cpp:1403, 2001-2005), so its SMSG_SPELL_GO is sent even without a spell visual (<see cref="SpellCast.IsObjectUse"/>). The cast
+    /// itself still runs as an object cast: no cost, cast time or range check. A trap's spell stays triggered (GameObject.cpp:535-537, 1495-1497).
+    /// </para>
     /// </summary>
-    public SpellCastResult CastForGameObject(GameObject source, uint spellId, Unit target, Unit? unitCaster)
+    public SpellCastResult CastForGameObject(GameObject source, uint spellId, Unit target, Unit? unitCaster, bool objectUse = false)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(target);
@@ -57,10 +65,12 @@ public sealed partial class SpellSystem
         Unit? previousStandIn = _objectStandIn;
         byte previousLevel = _objectStandInLevel;
         GameObject? previousCastingObject = _castingObject;
+        bool previousObjectUse = _castingObjectUse;
         Relations = new GameObjectCasterRelations(previous, source, target);
         _objectStandIn = target;
         _objectStandInLevel = ObjectLevel(source);
         _castingObject = source;
+        _castingObjectUse = objectUse;
         try
         {
             return CastFromObject(target, spellId, target, source: (source.X, source.Y, source.Z));
@@ -71,6 +81,7 @@ public sealed partial class SpellSystem
             _objectStandIn = previousStandIn;
             _objectStandInLevel = previousLevel;
             _castingObject = previousCastingObject;
+            _castingObjectUse = previousObjectUse;
         }
     }
 

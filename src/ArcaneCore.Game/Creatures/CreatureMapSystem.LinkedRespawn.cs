@@ -56,11 +56,16 @@ public sealed partial class CreatureMapSystem
 
         if (isMaster && _linkEventsInUse.Add(source.Guid))
         {
+            // A linked event can respawn, despawn or summon creatures while it walks them, so it walks a pooled copy; each nested event rents its own.
+            int count = _creatures.Count;
+            Creature[] snapshot = System.Buffers.ArrayPool<Creature>.Shared.Rent(count);
+            _creatures.Values.CopyTo(snapshot, 0);
             try
             {
                 uint mask = EventMask(e);
-                foreach (Creature slave in _creatures.Values.ToArray())
+                for (int i = 0; i < count; i++)
                 {
+                    Creature slave = snapshot[i];
                     if (ReferenceEquals(slave, source) || slave.Summon is { Kind: SummonKind.Pet }) continue;
                     if (LinkOf(slave) is not { } info || (info.Flags & mask) == 0) continue;
                     bool linked = info.Template is { } t
@@ -71,6 +76,7 @@ public sealed partial class CreatureMapSystem
             }
             finally
             {
+                System.Buffers.ArrayPool<Creature>.Shared.Return(snapshot, clearArray: true);
                 _linkEventsInUse.Remove(source.Guid);
             }
         }
@@ -198,10 +204,15 @@ public sealed partial class CreatureMapSystem
         bool isMaster = _linkMasterGuids!.Contains(sourceSpawn.Guid) || _linkMasterEntries!.Contains(source.Entry);
         if (isMaster && instance?.CarriesAggroLinking(source.Entry) != true && _linkEventsInUse.Add(source.Guid))
         {
+            // A linked event can respawn, despawn or summon creatures while it walks them, so it walks a pooled copy; each nested event rents its own.
+            int count = _creatures.Count;
+            Creature[] snapshot = System.Buffers.ArrayPool<Creature>.Shared.Rent(count);
+            _creatures.Values.CopyTo(snapshot, 0);
             try
             {
-                foreach (Creature slave in _creatures.Values.ToArray())
+                for (int i = 0; i < count; i++)
                 {
+                    Creature slave = snapshot[i];
                     if (ReferenceEquals(slave, source) || slave.Summon is { Kind: SummonKind.Pet }) continue;
                     if (LinkOf(slave) is not { } info || (info.Flags & LinkAggroOnAggro) == 0) continue;
                     bool linked = info.Template is { } t
@@ -212,6 +223,7 @@ public sealed partial class CreatureMapSystem
             }
             finally
             {
+                System.Buffers.ArrayPool<Creature>.Shared.Return(snapshot, clearArray: true);
                 _linkEventsInUse.Remove(source.Guid);
             }
         }

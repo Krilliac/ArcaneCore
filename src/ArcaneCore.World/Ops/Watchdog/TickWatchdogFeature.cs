@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Ops.Watchdog;
@@ -378,8 +379,17 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
         return text.ToString();
     }
 
+    /// <summary>
+    /// The completed-hang detail's tail: the terrain/vmap file read and dropped prefetch totals (cumulative since start, not a per-hang delta; a read that blocked
+    /// the hang is in them by now, because it is recorded when the read returns) then the save queue backlog.
+    /// </summary>
     private string AppendSaveQueue(string text)
     {
+        if (SyncTileReadCounters.DescribeProcess() is { Length: > 0 } fileReads)
+        {
+            text += "; " + fileReads;
+        }
+
         if (services.GetService<CharacterSaveQueue>() is { } saves)
         {
             return text + string.Create(CultureInfo.InvariantCulture, $"; save queue depth {saves.Pending}, oldest pending {saves.OldestPendingAge.TotalMilliseconds:F0} ms");
@@ -390,7 +400,7 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
 
     /// <summary>
     /// Watchdog thread, only when a hang or overrun line is about to be logged: where the tick is (in progress), or the phase split
-    /// and slowest features of the slowest recent slow tick (after the fact), then the character save queue's backlog.
+    /// and slowest features of the slowest recent slow tick (after the fact), then the terrain/vmap file read totals and the character save queue's backlog.
     /// </summary>
     private string Describe(WorldRuntime world, bool inProgress)
     {
@@ -432,6 +442,11 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
                     }
                 }
             }
+        }
+
+        if (SyncTileReadCounters.DescribeProcess() is { Length: > 0 } fileReads)
+        {
+            text.Append("; ").Append(fileReads);
         }
 
         if (services.GetService<CharacterSaveQueue>() is { } saves)

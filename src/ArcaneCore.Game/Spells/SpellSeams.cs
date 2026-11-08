@@ -181,7 +181,9 @@ public sealed class HealthOnlyDamageSink : IDamageSink
 /// Default <see cref="ITeleportSink"/>: a near teleport within the unit's map. Players get
 /// MSG_MOVE_TELEPORT_ACK (vmangos Player::TeleportTo near branch →
 /// MovementPacketSender::SendTeleportToController) and are relocated at once; the client's
-/// acknowledgement handler is the movement area's (docs/integration/spells.md).
+/// acknowledgement handler is the movement area's (docs/integration/spells.md). A creature of a
+/// map system goes through <see cref="Creatures.CreatureMapSystem.NearTeleport"/> (vmangos Unit::NearTeleportTo,
+/// Objects/Unit.cpp:9801-9825): it stops and its observers get MSG_MOVE_TELEPORT.
 /// </summary>
 public sealed class NearTeleportSink : ITeleportSink
 {
@@ -197,6 +199,12 @@ public sealed class NearTeleportSink : ITeleportSink
         if (unit.Map is not { } map || map.MapId != mapId)
         {
             return false;
+        }
+
+        if (unit is Creatures.Creature { System: { } system } creature)
+        {
+            system.NearTeleport(creature, x, y, z, orientation);
+            return true;
         }
 
         uint now = unit.Movement.Time;

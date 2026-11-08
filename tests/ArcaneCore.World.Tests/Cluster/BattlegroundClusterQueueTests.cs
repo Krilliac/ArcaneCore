@@ -125,7 +125,7 @@ public sealed class BattlegroundClusterQueueTests
 
         private readonly ServiceProvider _services;
 
-        public WorkerWorld(string workerId, IBattlegroundHolderLink holder, bool allowInstanceMaps = false)
+        public WorkerWorld(string workerId, IBattlegroundHolderLink holder, bool allowInstanceMaps = false, bool configureWorker = true)
         {
             ServiceCollection collection = new();
             collection.AddLogging();
@@ -145,7 +145,10 @@ public sealed class BattlegroundClusterQueueTests
             teleport.Teleports.ClusterFarRouter = Router;
             Feature = new BattlegroundFeature(_services, _services.GetRequiredService<IServiceScopeFactory>(), NullLoggerFactory.Instance);
             Feature.Attach(World);
-            Feature.ConfigureWorker(workerId, holder);
+            if (configureWorker)
+            {
+                Feature.ConfigureWorker(workerId, holder);
+            }
         }
 
         public WorldRuntime World { get; }
@@ -232,6 +235,62 @@ public sealed class BattlegroundClusterQueueTests
         }
     }
 
+    private const uint FallbackInstanceId = 1_000_000;
+
+    /// <summary>
+    /// Split stopgap, through the real feature (the manager's host is the cluster queue over the world host, as in production): a world that does not
+    /// own the Warsong Gulch map builds no match and does not throw <see cref="MapNotOwnedException"/> from the map it would have to create.
+    /// </summary>
+    [Fact]
+    public void AWorldWithoutInstanceMaps_BuildsNoMatch_AndDoesNotThrow()
+    {
+        using var world = new WorkerWorld(WorkerA, new NoHolder(), allowInstanceMaps: false, configureWorker: false);
+        RegisterWsg(world.Feature.Manager);
+
+        Battleground? created = null;
+        Exception? thrown = Record.Exception(() => created = world.Feature.Manager.CreateNewBattleground(BattlegroundType.WarsongGulch, 0));
+
+        Assert.Null(thrown);
+        Assert.Null(created);
+        // This rig has no InstanceFeature, so BattlegroundWorldHost allocates from its fallback counter (1_000_000, BattlegroundWorldHost._fallbackInstanceId).
+        // A guard moved below AllocateInstanceId/CreateMatchHost would register a match under that id.
+        Assert.Null(world.Feature.FindMatch(FallbackInstanceId));
+        Assert.False(world.World.Owns(WsgMap, FallbackInstanceId));
+    }
+
+    [Fact]
+    public void AWorldWithInstanceMaps_BuildsTheMatch()
+    {
+        using var world = new WorkerWorld(WorkerA, new NoHolder(), allowInstanceMaps: true, configureWorker: false);
+        RegisterWsg(world.Feature.Manager);
+
+        Battleground? created = world.Feature.Manager.CreateNewBattleground(BattlegroundType.WarsongGulch, 0);
+
+        Assert.NotNull(created);
+        Assert.NotNull(world.Feature.FindMatch(created.InstanceId));
+        Assert.True(world.World.Owns(WsgMap, created.InstanceId));
+    }
+
+    private sealed class NoHolder : IBattlegroundHolderLink
+    {
+        public void Submit(string workerId, BattlegroundCommand command)
+        {
+        }
+    }
+
+    private static void RegisterWsg(BattlegroundManager manager) => manager.RegisterTemplate(new BattlegroundTemplate
+    {
+        Type = BattlegroundType.WarsongGulch,
+        MapId = WsgMap,
+        Name = "Warsong Gulch",
+        MinPlayersPerTeam = 2,
+        MaxPlayersPerTeam = 10,
+        MinLevel = 10,
+        MaxLevel = 60,
+        AllianceStart = new BattlegroundStartLocation(1.5f, 2.5f, 3.5f, 0.5f),
+        HordeStart = new BattlegroundStartLocation(-1.5f, -2.5f, -3.5f, 1.5f),
+    });
+
     [Fact]
     public void PlayersQueuedOnTwoWorkers_AreMatchedByTheHolder_AndEachGetsTheInvite()
     {
@@ -265,6 +324,70 @@ public sealed class BattlegroundClusterQueueTests
 
         // The return point each worker sent with the join was stored for its players.
         Assert.Equal(4, rig.Local.EntryPoints.Count);
+    }
+
+    [Fact]
+    public void ABattlefieldListRequest_IsAnsweredWithTheHoldersInstanceIds_ToTheAskingWorkerOnly()
+    {
+        var rig = new Rig();
+        Battleground first = Assert.IsAssignableFrom<Battleground>(rig.Manager.CreateNewBattleground(BattlegroundType.WarsongGulch, 5));
+        Battleground second = Assert.IsAssignableFrom<Battleground>(rig.Manager.CreateNewBattleground(BattlegroundType.WarsongGulch, 5));
+        ObjectGuid master = ObjectGuid.Player(77);
+        rig.A.Login(new BattlegroundMember(Alliance[0], Team.Alliance, 60, InWorld: true, Deserter: false));
+        rig.A.RequestList(Alliance[0], master, BattlegroundType.WarsongGulch, 5);
+
+        Assert.Equal(2, rig.Holder.Pump());
+
+        BattlegroundListNotice notice = Assert.Single(rig.Links.To<BattlegroundListNotice>(WorkerA));
+        Assert.Empty(rig.Links.To<BattlegroundListNotice>(WorkerB));
+        Assert.Equal(Alliance[0], notice.Player);
+        Assert.Equal(master, notice.Source);
+        Assert.Equal(WsgMap, notice.MapId);
+        Assert.Equal((byte)5, notice.Bracket);
+        Assert.Equal(new[] { first.ClientInstanceId, second.ClientInstanceId }.OrderBy(i => i), notice.InstanceIds);
+        Assert.Equal(2, notice.InstanceIds.Count);
+    }
+
+    [Fact]
+    public void ABattlefieldListRequestFromTheHoldersOwnNode_SendsNoNotice()
+    {
+        var rig = new Rig();
+        rig.Manager.CreateNewBattleground(BattlegroundType.WarsongGulch, 5);
+        rig.Holder.Submit(HolderId, new BattlegroundListCommand(Alliance[0], ObjectGuid.Empty, BattlegroundType.WarsongGulch, 5));
+
+        Assert.Equal(1, rig.Holder.Pump());
+
+        Assert.Empty(rig.Links.Sent);
+    }
+
+    [Fact]
+    public void AWorkerThatIsGone_LosesItsPlayersQueueSlots_AndNobodyElse()
+    {
+        var rig = new Rig();
+        rig.QueueTwoWorkers();
+        Assert.True(rig.Manager.StateOf(Alliance[0]).InAnyQueue);
+
+        rig.Holder.Submit(WorkerA, new BattlegroundWorkerGoneCommand());
+        Assert.Equal(1, rig.Holder.Pump());
+
+        Assert.Equal(2, rig.Holder.RemotePlayerCount);
+        Assert.False(rig.Manager.StateOf(Alliance[0]).InAnyQueue);
+        Assert.False(rig.Manager.StateOf(Alliance[1]).InAnyQueue);
+        Assert.True(rig.Manager.StateOf(Horde[0]).InAnyQueue);
+        Assert.True(rig.Manager.StateOf(Horde[1]).InAnyQueue);
+    }
+
+    [Fact]
+    public void AWorkerGoneCommandNamingTheHoldersOwnNode_ChangesNothing()
+    {
+        var rig = new Rig();
+        rig.QueueTwoWorkers();
+
+        rig.Holder.Submit(HolderId, new BattlegroundWorkerGoneCommand());
+        rig.Holder.Pump();
+
+        Assert.Equal(4, rig.Holder.RemotePlayerCount);
+        Assert.True(rig.Manager.StateOf(Alliance[0]).InAnyQueue);
     }
 
     [Fact]

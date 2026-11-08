@@ -69,8 +69,9 @@ public sealed partial class LootService : IViewerFieldFilter
 
     // The content is immutable; the live reload (.reload all_loot, creature_loot_template, ...) swaps the whole of it on the
     // world thread, between ticks. Loot already generated keeps the items it rolled (vmangos rolls at corpse generation too).
-    private LootContent _content;
-    private LootGenerator _generator;
+    // Volatile: the reload swaps them on the world thread while a session thread may read Content or Generator (a reader sees the old or the new reference, never a stale one).
+    private volatile LootContent _content;
+    private volatile LootGenerator _generator;
 
     public LootContent Content => _content;
 
@@ -988,7 +989,11 @@ public sealed partial class LootService : IViewerFieldFilter
                 bag.ApplyRecord(updated);
                 PersistOwnerRelease(bag); // released while the take was in flight: store it now
                 byte[] removed = LootPackets.Removed(item.Slot);
-                if (item.IsQuestItem || item.IsPerPlayer)
+                if (item.IsQuestItem && !item.IsPerPlayer)
+                {
+                    SendQuestItemRemoved(bag, item, removed);
+                }
+                else if (item.IsQuestItem || item.IsPerPlayer)
                 {
                     if (actorCurrent)
                     {
@@ -1291,7 +1296,11 @@ public sealed partial class LootService : IViewerFieldFilter
         item.RollActive = false;
         item.Winner = default;
         byte[] removed = LootPackets.Removed(item.Slot);
-        if (item.IsQuestItem || item.IsPerPlayer)
+        if (item.IsQuestItem && !item.IsPerPlayer)
+        {
+            SendQuestItemRemoved(bag, item, removed);
+        }
+        else if (item.IsQuestItem || item.IsPerPlayer)
         {
             recipient.Session.Send(WorldOpcode.SmsgLootRemoved, removed);
         }
@@ -1307,6 +1316,21 @@ public sealed partial class LootService : IViewerFieldFilter
         RefreshLootable(bag);
         bag.Changed?.Invoke(bag);
         return InventoryResult.Ok;
+    }
+
+    /// <summary>
+    /// A quest item without the party-loot flag was taken (vmangos <c>Loot::NotifyQuestItemRemoved</c>): every viewer who was shown it loses
+    /// the slot, since it is gone for all of them.
+    /// </summary>
+    private static void SendQuestItemRemoved(LootBag bag, LootItem item, byte[] removed)
+    {
+        foreach (Player viewer in bag.Viewers)
+        {
+            if (item.AllowedLooters.Contains(viewer.Guid))
+            {
+                viewer.Session.Send(WorldOpcode.SmsgLootRemoved, removed);
+            }
+        }
     }
 
     /// <summary>
@@ -1379,6 +1403,13 @@ public sealed partial class LootService : IViewerFieldFilter
         {
             master.Session.Send(WorldOpcode.SmsgLootResponse, GroupLootPackets.LootErrorResponse(lootGuid, LootError.PlayerNotFound));
             return MasterGiveResult.TargetNotEligible;
+        }
+
+        // LootHandler.cpp:642-646: a recipient flagged NO_PLAY_TIME (World:LimitPlayTime) cannot be given loot.
+        if ((target.Flags & PlayerFlags.NoPlayTime) != 0)
+        {
+            master.Session.Send(WorldOpcode.SmsgLootResponse, GroupLootPackets.LootErrorResponse(lootGuid, LootError.MasterOther));
+            return MasterGiveResult.TargetOther;
         }
 
         InventoryResult stored = AwardItem(target, bag, item);
@@ -1483,6 +1514,13 @@ public sealed partial class LootService : IViewerFieldFilter
 
     private void GiveMoney(Player player, uint amount)
     {
+        // Player::LootMoney (Player.cpp:21793-21797): the play-time flags remove or halve what this player receives; the share notify still names the full share (LootHandler.cpp:322-323).
+        amount = PlayTimeLimit.ApplyToLootedMoney(player, amount);
+        if (amount == 0)
+        {
+            return;
+        }
+
         player.Money = (uint)Math.Min((ulong)player.Money + amount, MaxMoneyAmount);
         Quests?.MoneyLooted(player);
     }

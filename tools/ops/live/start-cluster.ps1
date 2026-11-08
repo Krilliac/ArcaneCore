@@ -203,9 +203,16 @@ if (($Standby -or $Transfers) -and -not $split) {
 }
 $images = @('Realm', 'World')
 if ($Gateway) { $images += 'Gateway' }
+# A real start needs every image. A plan prints what a start would do and is useful before the first deploy of a fresh home, so there a
+# missing image is a warning in the plan (the build line then reads "bin directory not found" or "unknown") and not a refusal.
+$missingImages = @()
 foreach ($name in $images) {
     $exe = Join-Path $bin "ArcaneCore.$name.exe"
-    if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw "$exe not found: deploy a build to the live home first (tools/ops/live/redeploy.ps1)." }
+    if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
+        $message = "$exe not found: deploy a build to the live home first (tools/ops/live/redeploy.ps1)."
+        if (-not $planOnly) { throw $message }
+        $missingImages += "WARNING: $message A real start would refuse."
+    }
 }
 if (-not (Test-Path -LiteralPath (Join-Path $LiveProfile 'appsettings.json') -PathType Leaf)) { throw "no appsettings.json in the profile directory $LiveProfile" }
 if ($MapWorker -and -not $Gateway) { throw '-MapWorker needs -Gateway: a map worker is the world a gateway links to (Cluster:Node:Role MapWorker needs Cluster:Worker:Enabled).' }
@@ -230,7 +237,7 @@ if ($split) {
         [pscustomobject]@{ Slug = 'EK'; NodeId = 'worker:EK'; Maps = @(0); AllowInstanceMaps = $false }
         [pscustomobject]@{ Slug = 'Kalimdor'; NodeId = 'worker:Kalimdor'; Maps = @(1); AllowInstanceMaps = $false }
         [pscustomobject]@{ Slug = 'instances'; NodeId = 'worker:instances'; AllowInstanceMaps = $true
-            Maps = @(33, 34, 36, 43, 47, 48, 70, 90, 109, 129, 189, 209, 229, 230, 249, 289, 309, 329, 349, 389, 409, 429, 469, 489, 509, 529, 531, 533) }
+            Maps = @(30, 33, 34, 35, 36, 43, 47, 48, 70, 90, 109, 129, 189, 209, 229, 230, 249, 289, 309, 329, 349, 369, 389, 409, 429, 449, 450, 469, 489, 509, 529, 531, 533) }
     )
     $portMap.Remove('World')
     for ($i = 0; $i -lt $splitWorlds.Count; $i++) {
@@ -524,7 +531,7 @@ foreach ($child in $children.Values) {
 if (-not $NoStatus) { $steps += New-StatusStep }
 if (-not $NoDebugger) { $steps += New-DebuggerStep '<supervisor pid>' }
 
-$launchWarnings = @($pgPlanWarnings)
+$launchWarnings = @($pgPlanWarnings) + $missingImages
 if ($HangCapture -eq 'Dump' -and $HangCaptureTimeoutSeconds -lt 120) {
     $launchWarnings += "WARNING: -HangCapture Dump with -HangCaptureTimeoutSeconds $HangCaptureTimeoutSeconds (under 120): a full dump of the World usually takes longer, so the supervisor kills the child before the dump is complete."
 }
@@ -558,12 +565,14 @@ Write-Host 'starting the cluster supervisor ...'
 $supervisorStep = New-SupervisorStep
 # The console inherits these; the secret is in this process's environment only for the duration of the call.
 $console = Invoke-WithLiveEnvironment -Variables $clusterEnvironment -ScriptBlock { Start-LiveWindow -CommandLine $supervisorStep.Command }
-$supervisor = Wait-LiveDaemonUp -Label 'the cluster supervisor (ArcaneCore.World)' -ParentPid $console.Id -ImageName 'ArcaneCore.World.exe' -TimeoutSec $StartTimeoutSec
+# The supervisor's own log carries its admission refusals (e.g. host memory below the reserve); a failed wait quotes it.
+$supervisorLog = Get-LiveDaemonLogPath -Role World -LiveHome $LiveHome -LiveProfile $LiveProfile -LogStem 'supervisor'
+$supervisor = Wait-LiveDaemonUp -Label 'the cluster supervisor (ArcaneCore.World)' -ParentPid $console.Id -ImageName 'ArcaneCore.World.exe' -TimeoutSec $StartTimeoutSec -LogPath $supervisorLog
 Write-Host "supervisor is up: pid $($supervisor.Id)"
 $running = @($supervisor)
 foreach ($child in $children.Values) {
     $port = $child.Port
-    $process = Wait-LiveDaemonUp -Label "child '$($child.Key)'" -ParentPid $supervisor.Id -ImageName ([IO.Path]::GetFileName($child.Executable)) -Port $port -TimeoutSec $StartTimeoutSec -WatchPid $supervisor.Id -ArgumentToken $child.WaitToken -FollowRelaunch
+    $process = Wait-LiveDaemonUp -Label "child '$($child.Key)'" -ParentPid $supervisor.Id -ImageName ([IO.Path]::GetFileName($child.Executable)) -Port $port -TimeoutSec $StartTimeoutSec -WatchPid $supervisor.Id -ArgumentToken $child.WaitToken -FollowRelaunch -LogPath $supervisorLog
     Write-Host "child '$($child.Key)' is up: pid $($process.Id), port $port"
     $running += $process
 }

@@ -5,6 +5,8 @@
 
 Both daemons build their configuration with the .NET generic host defaults: `appsettings.json` from the content root (the working directory the daemon starts in), then environment variables, then command-line arguments. The environment variable for a key is the key with each `:` replaced by `__` (a command-line argument uses `--Section:Key=value`), for example `World:GmCommands:LowerSecurity` is `World__GmCommands__LowerSecurity`. `ArcaneCore.World.exe check-config` validates the result and the daemon runs the same check at every start (exit code 78 when invalid).
 
+The same options are also split by area, one page per feature, in [config/README.md](config/README.md).
+
 How to read the tables:
 
 - **Default** is the value of a freshly constructed options object, so it cannot disagree with the code. A section that is absent from the file simply keeps every default.
@@ -61,7 +63,6 @@ How to read the tables:
 - [`Ops:Metrics`](#opsmetrics)
 - [`Ops:Observability`](#opsobservability)
 - [`Ops:Watchdog`](#opswatchdog)
-- [`PageText`](#pagetext)
 - [`PerformanceLog`](#performancelog)
 - [`Pets`](#pets)
 - [`Pets:Names`](#petsnames)
@@ -102,6 +103,7 @@ How to read the tables:
 - [`World:GmCommands:Boost`](#worldgmcommandsboost)
 - [`World:GmCommands:DebugDraw`](#worldgmcommandsdebugdraw)
 - [`World:GmCommands:FirstLoginTools`](#worldgmcommandsfirstlogintools)
+- [`World:GmTicketAssistant`](#worldgmticketassistant)
 - [`World:Guild`](#worldguild)
 - [`World:Honor`](#worldhonor)
 - [`World:HotCode`](#worldhotcode)
@@ -121,6 +123,7 @@ How to read the tables:
 - [`World:Weather`](#worldweather)
 - [`World:WorldStates`](#worldworldstates)
 - [`World:Zones`](#worldzones)
+- [List and map element fields](#list-and-map-element-fields)
 - [Keys read by name](#keys-read-by-name)
 - [Aliases and framework sections](#aliases-and-framework-sections)
 
@@ -137,7 +140,7 @@ How to read the tables:
 | `AntiCheat:Autoban:LaterBanSeconds` | `long` | `0` | - | Seconds of the third and every later ban (0 is permanent). Default 0 (permanent). |
 | `AntiCheat:Autoban:SecondBanSeconds` | `long` | `604800` | - | Seconds of the second ban (0 is permanent). Default 604800 (seven days). |
 | `AntiCheat:Autoban:Threshold` | `float` | `25` | - | Points at which the account is banned. Default 25: the third kick within five hours of the first (the fork's 30 with any decay at all needs a fourth kick). |
-| `AntiCheat:BaselineGapMs` | `int` | `3000` | - | A gap this long (milliseconds) between two movement packets starts a new baseline (loading screen, AFK). Default 3000. |
+| `AntiCheat:BaselineGapMs` | `int` | `3000` | - | Caps the time-skip credit (milliseconds): all the skips the evidence supports in ten seconds together earn at most this much. It also caps the time budget of any single step (a silence buys at most this much movement in one step) and, times four, the extra distance the multi-packet budget grants after a stall (the packets a stall held arrive together). A silence between two movement packets is never a free baseline; the step after it is judged against the time that passed. Default 3000. |
 | `AntiCheat:BurstPacketsPerSecond` | `int` | `50` | - | Movement packets per second, by the receive clock AND the client's own clock, that count as a burst. Default 50. |
 | `AntiCheat:ClientTimeRegressionMs` | `int` | `500` | - | A client timestamp that goes back by more than this many milliseconds is scored. Default 500. |
 | `AntiCheat:DecayPerSecond` | `float` | `2` | - | Score points forgotten per second, so occasional noise never adds up (fork AntiCheat.Score.DecayPerSec). Default 2. |
@@ -162,6 +165,7 @@ How to read the tables:
 | `AntiCheat:SpeedChangeGraceMs` | `int` | `2000` | - | After a speed change is acknowledged the previous (higher) speed still counts for this long, in milliseconds, plus the latency slack, so packets already in flight are never judged by the new speed. Default 2000. |
 | `AntiCheat:SpeedClock:CooldownMs` | `int` | `10000` | - | After firing it stays silent for this long (milliseconds). Default 10000. |
 | `AntiCheat:SpeedClock:Enabled` | `bool` | `true` | - | Run it. Default true. |
+| `AntiCheat:SpeedClock:LongTermDriftMs` | `int` | `0` | - | Long-term drift: when the client clock has gained this many milliseconds on the server's receive clock (the client time elapsed since the last restart of the count, a teleport or a previous fire, minus the real time elapsed, over every packet pair), a clock that runs fast by less than `TolerancePercent` is reported too. 0 switches it off, which is the default (the sliding window alone, as before); otherwise 1000 to 3600000. Honest play stays near zero: lag and the catch-up burst cancel. The excess is floored at minus twice the limit, so a stall (or two close together) longer than about three times the limit leaves an honest running player at or above the limit: choose the limit at no less than a third of the longest stall you expect (3000 survives a 9 second spike). |
 | `AntiCheat:SpeedClock:MaxGapMs` | `int` | `3000` | - | A pair further apart than this (milliseconds) is ignored (the player stood still or the client froze). Default 3000. |
 | `AntiCheat:SpeedClock:MinSamples` | `int` | `12` | - | Usable pairs needed before the window is judged. Default 12. |
 | `AntiCheat:SpeedClock:SustainWindows` | `int` | `3` | - | Consecutive hot evaluations before it fires. Default 3. |
@@ -188,6 +192,7 @@ How to read the tables:
 | `AuctionHouseBot:BuyValuePercent` | `uint` | `80` | - | The most the buyer pays, as a percent of the bot's own value of the item (cMaNGOS AuctionHouseBot.Buy.Value, 0-200, default 80). |
 | `AuctionHouseBot:DailyBuyBudgetCopper` | `uint` | `10000000` | - | Custody limit: most copper the buyer may pay out per UTC day, all houses together (MaNGOS Zero custody; 0 = the buyer never buys). |
 | `AuctionHouseBot:DailyItemBudget` | `uint` | `5000` | - | Custody limit: most items the bot may create into the houses per UTC day, all houses together (MaNGOS Zero custody; 0 = none). |
+| `AuctionHouseBot:DynamicIgnoreGmAccounts` | `bool` | `false` | - | With `DynamicMaxRequiredLevel`, leave characters of staff accounts (security above player) out of the highest-level count (cMaNGOS AuctionHouseBot.Level.IgnoreGmAccounts, default false). When only staff characters are online the highest of their levels is the fallback, as in cMaNGOS. |
 | `AuctionHouseBot:DynamicMaxRequiredLevel` | `bool` | `false` | - | Take the required level cap from the highest level of the characters online (cMaNGOS AuctionHouseBot.Level.DynamicMaxRequired, default false). With nobody online the cap in force stays; `MaxRequiredLevel` is the start value. |
 | `AuctionHouseBot:DynamicRefreshMinutes` | `uint` | `10` | - | Minutes between refreshes of the dynamic level cap (cMaNGOS AuctionHouseBot.Level.DynamicRefreshInterval, at least 1, default 10). |
 | `AuctionHouseBot:Enabled` | `bool` | `false` | - | Run the bot (default false). With false nothing is listed, bought or minted. |
@@ -322,8 +327,8 @@ How to read the tables:
 |---|---|---|---|---|
 | `Cluster:Fencing:AllowSqliteWorkerScope` | `bool` | `false` | - | With Scope=Worker, allows a SQLite characters database. Off by default: a split cluster needs PostgreSQL or MariaDB; only in-process tests set it. |
 | `Cluster:Fencing:ClaimWatchIntervalSeconds` | `int` | `10` | - | With fencing disabled, how often the world reads the characters ownership row to notice that a fenced world has claimed the database, in seconds (1 to 300). Independent of autosave; an unfenced world can keep writing for up to this long after a claim. |
-| `Cluster:Fencing:Enabled` | `bool` | `false` | - | Enable durable character ownership fencing at world startup; disabled by default. Mandatory in worker mode (Cluster:Worker:Enabled): a worker with fencing off refuses to start. Also required (startup check, exit 78) with Cluster:Node:Role other than Combined and for every world child of a Cluster:Supervisor that runs more than one world: an unfenced world skips the durable id allocator priming and collides on in-memory id counters. Each world of such a cluster needs its own OwnerNode and Cluster:Worker:NodeId, on a PostgreSQL or MariaDB characters database. |
-| `Cluster:Fencing:HeartbeatSeconds` | `int` | `10` | - | With Scope=Worker, how often the worker records that it is alive on its ownership row, in seconds (1 to 60). A reap only ever fires on a heartbeat older than ReapAfterSeconds. |
+| `Cluster:Fencing:Enabled` | `bool` | `false` | - | Enable durable character ownership fencing at world startup; disabled by default. Mandatory in worker mode (Cluster:Worker:Enabled): a worker with fencing off refuses to start. Also required (startup check, exit 78) with Cluster:Node:Role other than Combined and for every world child of a Cluster:Supervisor that runs more than one world: an unfenced world skips the durable id allocator priming and collides on in-memory id counters. Each world of such a cluster needs its own OwnerNode and Cluster:Worker:NodeId, on a PostgreSQL or MariaDB characters database. The gateway reads this key too: with it or Cluster:Worker:Enabled true, the write fence is attached to the gateway's own characters connection (the handoff and transfer journals). |
+| `Cluster:Fencing:HeartbeatSeconds` | `int` | `10` | - | With Scope=Worker, how often the worker records that it is alive on its heartbeat row, in seconds (1 to 60). A reap only ever fires on a heartbeat older than ReapAfterSeconds. |
 | `Cluster:Fencing:OwnerNode` | `string` | `"<machine-name>"` | - | The durable owner identity; defaults to the current machine name and must be stable while the world owns the database. Must be distinct for each world of a multi-world cluster (the supervisor check refuses a duplicate). |
 | `Cluster:Fencing:ReapAfterSeconds` | `int` | `150` | - | With Scope=Worker, the age of a worker row's last heartbeat before another worker may reap it as dead, in seconds (30 to 3600, and more than three heartbeats). Keep it above the advisory lock's stale-session timeout (about 4 x 30 s). |
 | `Cluster:Fencing:ReapDeadOwners` | `bool` | `true` | - | With Scope=Worker, whether a worker may reap a dead shard (lock free and heartbeat older than ReapAfterSeconds) so its characters become claimable; false leaves that to an operator. Ignored in Realm scope. |
@@ -345,7 +350,7 @@ How to read the tables:
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
 | `Cluster:NodeBridge:Enabled` | `bool` | `false` | - | `true` starts the node bridge: the World connects to each endpoint in `Endpoints`, logs node connection events and heartbeats, and syncs live worker placement. `false`, the default, does nothing at all: no sockets, no log lines, no background task. Read once when the daemon starts. |
-| `Cluster:NodeBridge:Endpoints` | `string` | `"worker:EK\|Worker\|127.0.0.1:19081\|0;worker:Kalimdor\|Worker\|127.0.0.1:19082\|1;worker:instances\|Worker\|127.0.0.1:19083\|33,34,36,43,47,48,70,90,109,129,189,209,229,230,249,289,309,329,349,389,409,429,469,489,509,529,531,533;gateway\|Gateway\|127.0.0.1:19084\|-;supervisor\|Supervisor\|127.0.0.1:19087\|-"` | - | The nodes the bridge monitors, as `;`-separated entries of `nodeId\|role\|host:port\|maps`, where `maps` is a comma list of map ids or `-` for a realm-wide node. The default is the five local nodes a split cluster runs: worker:EK 19081, worker:Kalimdor 19082, worker:instances 19083, gateway 19084, supervisor 19087. A blank value means the five default nodes; a launcher that starts other nodes sets this to exactly those. The ARCANECORE_CLUSTER_ENDPOINTS environment variable, when set, replaces it but does not turn the bridge on (a warning is logged when `Enabled` is false). Only read when `Enabled` is true. |
+| `Cluster:NodeBridge:Endpoints` | `string` | `"worker:EK\|Worker\|127.0.0.1:19081\|0;worker:Kalimdor\|Worker\|127.0.0.1:19082\|1;worker:instances\|Worker\|127.0.0.1:19083\|30,33,34,35,36,43,47,48,70,90,109,129,189,209,229,230,249,289,309,329,349,369,389,409,429,449,450,469,489,509,529,531,533;gateway\|Gateway\|127.0.0.1:19084\|-;supervisor\|Supervisor\|127.0.0.1:19087\|-"` | - | The nodes the bridge monitors, as `;`-separated entries of `nodeId\|role\|host:port\|maps`, where `maps` is a comma list of map ids or `-` for a realm-wide node. The default is the five local nodes a split cluster runs: worker:EK 19081, worker:Kalimdor 19082, worker:instances 19083, gateway 19084, supervisor 19087. A blank value means the five default nodes; a launcher that starts other nodes sets this to exactly those. The ARCANECORE_CLUSTER_ENDPOINTS environment variable, when set, replaces it but does not turn the bridge on (a warning is logged when `Enabled` is false). Only read when `Enabled` is true. |
 
 ## `Cluster:Peer`
 
@@ -390,9 +395,9 @@ How to read the tables:
 |---|---|---|---|---|
 | `Cluster:Worker:AllowInstanceMaps` | `bool` | `true` | - | With an OwnedMaps list: whether instance copies (dungeons, raids, battlegrounds) of maps outside the list also run on this worker. `true`, the default, lets a continent worker host the instances it hands out; `false` refuses them. Ignored while OwnedMaps is empty. |
 | `Cluster:Worker:BindAddress` | `string` | `"127.0.0.1"` | - | Address of the gateway listener. Keep it on loopback or a private network: the link is not encrypted. |
-| `Cluster:Worker:CharactersSchemaVersion` | `int` | `74` | - | Characters schema version both ends must agree on (an override label, used only while `VersionsFromDatabase` is false). |
-| `Cluster:Worker:ContentRevision` | `string` | `"world-schema-67"` | - | Content revision label both ends of the link must agree on; an override, used only while `VersionsFromDatabase` is false. |
-| `Cluster:Worker:Enabled` | `bool` | `false` | - | `true` opens the gateway listener (worker mode) and makes character fencing mandatory: Cluster:Fencing:Enabled must be true, and the characters write fence is attached either way. `false`, the default, is Combined mode: no listener, no change. |
+| `Cluster:Worker:CharactersSchemaVersion` | `int` | `77` | - | Characters schema version both ends must agree on (an override label, used only while `VersionsFromDatabase` is false). |
+| `Cluster:Worker:ContentRevision` | `string` | `"world-schema-72"` | - | Content revision label both ends of the link must agree on; an override, used only while `VersionsFromDatabase` is false. |
+| `Cluster:Worker:Enabled` | `bool` | `false` | - | `true` opens the gateway listener (worker mode) and makes character fencing mandatory: Cluster:Fencing:Enabled must be true, and the characters write fence is attached either way. `false`, the default, is Combined mode: no listener, no change. The gateway reads this key too, only to attach the write fence to its own characters connection (the handoff and transfer journals), as it does for Cluster:Fencing:Enabled. |
 | `Cluster:Worker:LinkSecret` | `string` | `""` | - | Shared secret a gateway proves (HMAC-SHA256 of a per-link challenge) before it may open sessions; must equal Gateway:LinkSecret. Required in worker mode on every bind address, loopback included: at least 16 characters, or the world refuses to start. An admitted gateway opens sessions for any account it authenticated, so treat the secret like a database password. |
 | `Cluster:Worker:NodeId` | `string` | `"world"` | - | This worker's node id in the link manifest (shown in the gateway's log). |
 | `Cluster:Worker:OwnedMaps` | `string` | `""` | - | The maps this worker owns, as a list of ids and inclusive ranges (`0,1,30-40`; separators comma, semicolon or space). Empty, the default, owns every map, which keeps the combined behaviour. With a list, the world never creates or enters a map outside it (login, teleport, spawn, bot travel refuse cleanly until redirects and far transfers to the owning worker exist), and the list is announced in the link manifest. Lists of different workers must not overlap (the supervisor's Processes:*:Maps check). |
@@ -400,7 +405,7 @@ How to read the tables:
 | `Cluster:Worker:RealmId` | `int` | `1` | - | Realm id both ends of the link must agree on. |
 | `Cluster:Worker:Standby` | `bool` | `false` | - | Standby (Tier 3b handoff target; needs Enabled): start the process, build its services and link to the gateway, but admit no session, claim no characters ownership, run no schema DDL, take no writer lock until promoted (promotion takes it and is refused while the old world holds it), open no World:Port listener, and attach no feature nor start the simulation until promoted by a handoff (features read the characters database, which the active world still owns). `false`, the default, is an active worker. |
 | `Cluster:Worker:VersionsFromDatabase` | `bool` | `true` | - | `true`, the default, advertises the versions the databases record (characters and world schema version rows, and a content revision derived from the world schema version; an unreadable version refuses to link) instead of the three labels below, so a worker and gateway on mixed versions are refused at admission. The worker logs the values it advertises at start. `false` advertises the labels (the explicit override; tests and operators who pin them). The gateway has no database access: set its Gateway:* labels to the values the worker logs, or every gateway is refused. |
-| `Cluster:Worker:WorldSchemaVersion` | `int` | `67` | - | World schema version both ends must agree on (an override label, used only while `VersionsFromDatabase` is false). |
+| `Cluster:Worker:WorldSchemaVersion` | `int` | `72` | - | World schema version both ends must agree on (an override label, used only while `VersionsFromDatabase` is false). |
 
 ## `Cluster:Worker:Handoff`
 
@@ -506,6 +511,7 @@ How to read the tables:
 | `Creatures:Respawn:SaveImmediately` | `bool` | `true` | - | `Creatures:Respawn:SaveImmediately`: every database spawn saves its respawn time at death (vmangos SaveRespawnTimeImmediately = 1, mangosd.conf.dist.in:397, World.cpp:729). False saves a normal creature only when it leaves the map or at shutdown; a world boss is always saved at death (Creature.cpp:2262-2263). |
 | `Creatures:RespawnPacifyMs` | `uint` | `5000` | - | Milliseconds a creature cannot initiate attacks after it respawns (vmangos Creature::SetTempPacified(5000) on respawn, Objects/Creature.cpp:877-878). 0 disables. |
 | `Creatures:SendAiReaction` | `bool` | `true` | - | Send SMSG_AI_REACTION(hostile) when a creature starts attacking (vmangos Creature::SendAIReaction from Unit::Attack); the client plays the aggro sound from it. |
+| `Creatures:SpellListContinueAfterCast` | `bool` | `false` | - | `Creatures:SpellListContinueAfterCast` (default off): a creature spell list casts one blocking spell per tick, as cmangos doc/SpellLists.txt describes retail ("always one spell is selected"). Switched on, the tick keeps walking the eligible blocking entries after a success, as the cmangos loop in UnitAI::UpdateSpellLists does; an instant spell can then fire a second one in the same tick. A deviation from retail. |
 | `Creatures:StealthAlertCooldownMs` | `uint` | `10000` | - | Milliseconds between two alerts of one creature (`Creatures:StealthAlertCooldownMs`): vmangos 10000 (AI/CreatureAI.cpp:366-367). |
 | `Creatures:StealthAlertEnabled` | `bool` | `true` | - | `Creatures:StealthAlertEnabled`: a hostile creature that notices a stealthed player just outside its detection range reacts (SMSG_AI_REACTION alert, it stops and turns to the player); vmangos CreatureAI::OnMoveInStealth, AI/CreatureAI.cpp:349-385. Retail is true. |
 | `Creatures:ThreatRadius` | `float` | `50` | - | ThreatRadius (yd): the soft leash sphere around where a fight began is `max(1.5 x aggro radius, ThreatRadius)`; none in instances (vmangos World.cpp:564, mangosd.conf.dist.in:1526: 50). |
@@ -559,11 +565,11 @@ How to read the tables:
 | `Diagnostics:CrashDump:FullMinFreeGB` | `int` | `16` | - | Free space, in GiB, the dump volume must have for a Full dump; below it Full falls back to Heap. Default 16, the launcher's threshold (`tools/ops/live/LiveDiagnostics.ps1`). 0 never falls back for space. |
 | `Diagnostics:CrashDump:MaxFiles` | `int` | `5` | - | How many of this feature's dump files are kept in the directory: after a dump is written the oldest beyond this count are deleted. Only files named by the pattern above are touched. 0 keeps every file. Default 5. |
 | `Diagnostics:CrashDump:Mode` | `CrashDumpMode` | `Full` | - | What to write: `Off`, `Mini`, `Heap` or `Full`. Default `Full`: it only acts when the process is already crashing, so it changes nothing for a healthy server. A failure of the chosen type falls back Full, Heap, Mini and is logged. Values: `Off`, `Mini`, `Heap`, `Full`. |
-| `Diagnostics:CrashDump:TimeoutSeconds` | `int` | `120` | - | How long the daemon waits for its own diagnostics server to start a dump before it gives up and ends the process anyway; it bounds an unresponsive server, not the length of a dump. The runtime suspends the waiting thread too, so a slow dump can outlast it: a file that is still growing is waited for, up to three times this value in total (a Full dump of a 7 GB process takes about a minute). A timeout, or an unreachable diagnostics endpoint (`DOTNET_EnableDiagnostics=0`), is not retried with a smaller type; a type the runtime refuses is. While it dumps the daemon publishes the heartbeat state `dumping`, which supervisors honour for a grace of this long plus a margin. Default 120. |
+| `Diagnostics:CrashDump:TimeoutSeconds` | `int` | `120` | - | How long the daemon waits for its own diagnostics server to start a dump before it gives up and ends the process anyway; it bounds an unresponsive server, not the length of a dump. The runtime suspends the waiting thread too, so a slow dump can outlast it: a file that is still growing is waited for, up to three times this value in total (a Full dump of a 7 GB process takes about a minute). A timeout, or an unreachable diagnostics endpoint (`DOTNET_EnableDiagnostics=0`), is not retried with a smaller type; a type the runtime refuses is. While it dumps the daemon publishes the heartbeat state `dumping`, which supervisors honour for the announced maximum (three times this) plus a minute, bounded by their own cap (`Cluster:Supervisor:DumpGraceSeconds`, default 420; raise it with this value). Default 120. Checked at start (1 to 3600) so the product cannot overflow. |
 | `Diagnostics:FaultDialog` | `bool` | `false` | - | Also show a dialog the first time each fault signature is caught and survived (the fault ledger, `.server faults`), on a background thread so the faulting thread never waits, at most one open at a time (faults while one is open are only logged). Needs the same interactive Windows console session as `CrashDialog`; takes effect once the host has started. Default off: a fault storm of new signatures still means one box after another. |
 | `Diagnostics:FaultLogLimit` | `int` | `10` | - | How many occurrences of one fault (an exception type thrown from one place, caught at one of the server's catch-and-log sites) are logged in full. After that the site logs that fault at most once a minute, with "(N more since)"; every occurrence is still counted in the fault ledger (`.server faults`, the `arcanecore_faults_total` metric). 0 logs the first occurrence and then once a minute. Default 10. |
 | `Diagnostics:FaultMaxSignatures` | `int` | `512` | - | How many distinct faults the fault ledger keeps. A fault beyond the cap is counted into one overflow entry, never dropped. Default 512; a lower value bounds memory on a server that throws a new exception signature per request. |
-| `Diagnostics:FirstChanceExceptions` | `bool` | `false` | - | Log every exception at the moment it is thrown (`AppDomain.FirstChanceException`), before any handler sees it, at Debug level. A development aid for finding swallowed exceptions; it is honoured only by a Debug build of the Kernel (the hook is compiled out of Release), where a Release daemon logs once that the key is ignored. Default off: the hook runs on every throw, caught or not. |
+| `Diagnostics:FirstChanceExceptions` | `bool` | `false` | - | Log exceptions at the moment they are thrown (`AppDomain.FirstChanceException`), before any handler sees them, at Debug level. The log is deduplicated per exception type and throw site, rate limited and capped, so a hot throw site cannot flood it; it is not a complete record of every throw. A development aid for finding swallowed exceptions; it is honoured only by a Debug build of the Kernel (the hook is compiled out of Release), where a Release daemon logs once that the key is ignored. Default off: the hook runs on every throw, caught or not. |
 | `Diagnostics:InvariantLogLimit` | `int` | `10` | - | How many failures of one invariant (one call site) are written to the log; later failures of that site are only counted (the counters are part of every crash report). 0 logs none, every failure is still counted. Default 10: a hot-path check that fails per packet cannot flood the log. |
 | `Diagnostics:OnInvariant` | `InvariantPolicy` | `Continue` | - | What a failed `Invariant.Check` (the release-mode check) does after it is logged and counted. `Continue` (default): the caller goes on with its own fail-closed handling (refuse the packet, drop the connection, throw). `FailFast`: the process aborts at once with the message, as the mangos `MANGOS_ASSERT` macro does in every build. Debug-build `Invariant.Assert` throws `InvariantViolationException` under `Continue` and aborts under `FailFast`. Values: `Continue`, `FailFast`. |
 | `Diagnostics:OnUnhandled` | `UnhandledExceptionPolicy` | `FailFast` | - | What ends the process after an unhandled exception (`AppDomain.UnhandledException`): the report is always written first. `FailFast` (default): `Environment.FailFast`, which is what the runtime does on its own; the process aborts (exit status 134, SIGABRT, on Linux; 0x80131623 / Watson on Windows). `Exit`: `Environment.Exit(70)` (`ExitCodes.UnhandledException`, sysexits EX_SOFTWARE), an exit code a supervisor can match. Under both, the daemon writes a dump of itself first (`Diagnostics:CrashDump`); the runtime's own `DOTNET_DbgEnableMiniDump=1` dump covers a FailFast too, and then this one is skipped. Values: `FailFast`, `Exit`. |
@@ -598,13 +604,14 @@ How to read the tables:
 | `Economy:AllowDeleteWithAttachments` | `bool` | `false` | - | Letters with an item or money may be deleted by the receiver, destroying the attachment, as vmangos does (MailHandler.cpp:469-491 refuses only cash on delivery). Default false: only emptied letters can be deleted, the pre-lane behaviour, since no retail source shows attachments being destroyable. |
 | `Economy:AuctionAccountConcurrentLimit` | `uint` | `0` | - | Active auctions one account may hold per auction house (vmangos Auction.AccountConcurrentLimit, World.cpp:538, AuctionHouseHandler.cpp:274-280). A listing counts from acceptance: while it settles, and while an unknown outcome is recovered. 0 = unlimited (default). |
 | `Economy:AuctionDepositMin` | `uint` | `0` | - | Minimum deposit in copper (vmangos CONFIG_UINT32_AUCTION_DEPOSIT_MIN, default 0). |
-| `Economy:AuctionHouses` | `List<AuctionHouseEntry>` | `[AuctionHouseEntry { Id = 2, DepositPercent = 5, CutPercent = 5 }, AuctionHouseEntry { Id = 6, DepositPercent = 5, CutPercent = 5 }, AuctionHouseEntry { Id = 7, DepositPercent = 25, CutPercent = 15 }]` | - | The three houses: Alliance 2, Horde 6, neutral (Blackwater/goblin) 7, with the deposit and cut percentages of the build-5875 client AuctionHouse.dbc (m_depositRate, m_consignmentRate), which vmangos reads: 5/5 for both faction houses, 25/15 for the neutral one. |
+| `Economy:AuctionHouses` | `List<AuctionHouseEntry>` | `[AuctionHouseEntry { Id = 2, DepositPercent = 5, CutPercent = 5 }, AuctionHouseEntry { Id = 6, DepositPercent = 5, CutPercent = 5 }, AuctionHouseEntry { Id = 7, DepositPercent = 25, CutPercent = 15 }]` | - | The three houses: Alliance 2, Horde 6, neutral (Blackwater/goblin) 7, with the deposit and cut percentages of the build-5875 client AuctionHouse.dbc (m_depositRate, m_consignmentRate), which vmangos reads: 5/5 for both faction houses, 25/15 for the neutral one. A configured entry is added after these three, whatever its index, and the last entry of an id is the one in force, so an entry with id 2, 6 or 7 replaces that house's percentages. |
 | `Economy:AuctionRateCut` | `float` | `1` | - | Rate.Auction.Cut multiplier (vmangos World.cpp:536, default 1.0). |
 | `Economy:AuctionRateDeposit` | `float` | `1` | - | Rate.Auction.Deposit multiplier (vmangos World.cpp:535, default 1.0). |
 | `Economy:AuctionRateTime` | `float` | `1` | - | Rate.Auction.Time multiplier of a listing's duration (vmangos World.cpp:534, AuctionHouseHandler.cpp:362; default 1.0). |
 | `Economy:AuctionSilentRefusals` | `bool` | `true` | - | A bid the bidder cannot afford, or a cancellation whose cut the seller cannot pay, is answered with nothing, as vmangos does (AuctionHouseHandler.cpp:498-503, 592-594); false answers NOT_ENOUGH_MONEY. Default true. |
 | `Economy:CodExpireDays` | `uint` | `3` | - | Days before a cash-on-delivery letter expires (vmangos: 3). |
 | `Economy:ExpirySweepSeconds` | `uint` | `60` | - | Seconds between expiry sweeps of mail and auctions. |
+| `Economy:GmCrossTeamTrade` | `bool` | `true` | - | Whether a game master with GM mode on may start a trade with a player of the other team although `AllowCrossTeamTrade` is off (default true). An ArcaneCore extension: vmangos HandleInitiateTradeOpcode (TradeHandler.cpp:634-636) has no such rule, so false is the retail behaviour. Only the initiator is tested; a player who invites a game master of the other team is refused. |
 | `Economy:LetterItemEntry` | `uint` | `8383` | - | The Plain Letter item created by CMSG_MAIL_CREATE_TEXT_ITEM (vmangos MAIL_BODY_ITEM_TEMPLATE 8383). |
 | `Economy:MailBodyMaxLength` | `int` | `500` | - | Longest body in bytes; longer ones are dropped (vmangos MailHandler.cpp:158: 500). |
 | `Economy:MailDeliveryDelaySeconds` | `uint` | `3600` | - | Delivery delay of letters carrying an item or money, seconds (vmangos MailDeliveryDelay, World.cpp:691: 1 hour). |
@@ -638,6 +645,7 @@ How to read the tables:
 | `GameObjects:LootSettlementBudgetSeconds` | `int` | `15` | - | Seconds one dungeon chest loot settlement may take end to end (the taker's save, the instance write drain, the loot transaction) before it is abandoned: a take that never started is refused to the client as usual, one whose outcome cannot be read kicks the taker. Operational, not a gameplay rule: 15 is the shipped value, three typical lock waits of the shipped 5 s Database:SqliteWriteTimeoutMs in a row (an unrelated character's write already in flight on the character save queue's one consumer, the taker's own save, the loot transaction), so one locked write ahead of it cannot use up the budget. A write-gate wait is not capped at one bound: it gives up after 5 s without a hand-off or 20 s of active waiting, but the settlement's budget token ends any wait it is passed to earlier. Valid range 1-300. |
 | `GameObjects:MiningAmountRate` | `float` | `1` | - | vmangos Rate.Mining.Amount (CONFIG_FLOAT_RATE_MINING_AMOUNT, default 1; LootHandler.cpp:455-457): scales the minimum and maximum number of opens of a multi-use mineral vein (chest.minSuccessOpens / maxSuccessOpens). Default 1 (retail). |
 | `GameObjects:MiningNextRate` | `float` | `1` | - | vmangos Rate.Mining.Next (CONFIG_FLOAT_RATE_MINING_NEXT, default 1; LootHandler.cpp:466-474): scales the chance that a mineral vein past its minimum opens stays for one more open. Default 1 (retail). |
+| `GameObjects:PersistRespawn` | `bool` | `true` | - | `GameObjects:PersistRespawn`: despawned database spawns keep their respawn time across restarts (vmangos `gameobject_respawn`, characters database; the counterpart of `Creatures:Respawn:Persist`). False keeps the timers in memory only, as before the table existed. |
 | `GameObjects:RandomRespawn` | `bool` | `true` | - | vmangos GameObjectData::GetRandomRespawnTime (GameObject.cpp:706-709): the respawn delay of a database spawn is a random value between spawntimesecsmin and spawntimesecsmax. False always uses the minimum. |
 | `GameObjects:TransportAnimationDbcPath` | `string` | `null` | - | A build-5875 TransportAnimation.dbc (vmangos loads it with the other DBCs): the animations of the elevators and trams (type 11), whose create block then carries the progress through their cycle. Empty (the default): their progress stays 0, as vmangos without the data. |
 
@@ -646,8 +654,8 @@ How to read the tables:
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
 | `Gateway:BindAddress` | `string` | `"0.0.0.0"` | - | Address the client listener binds. |
-| `Gateway:CharactersSchemaVersion` | `int` | `74` | - | The characters schema version this gateway advertises; defaults to the version this build targets. Explicit override only. |
-| `Gateway:ContentRevision` | `string` | `"world-schema-67"` | - | The content revision this gateway advertises; must equal the worker's. Defaults to the revision derived from the world schema version this build targets (`GatewayManifestVersions.ContentRevisionFor`), which is what a default worker (Cluster:Worker:VersionsFromDatabase on) advertises once its database is at that version. Set it only to pin an explicit override (then set the worker's labels and Cluster:Worker:VersionsFromDatabase=false to match). |
+| `Gateway:CharactersSchemaVersion` | `int` | `77` | - | The characters schema version this gateway advertises; defaults to the version this build targets. Explicit override only. |
+| `Gateway:ContentRevision` | `string` | `"world-schema-72"` | - | The content revision this gateway advertises; must equal the worker's. Defaults to the revision derived from the world schema version this build targets (`GatewayManifestVersions.ContentRevisionFor`), which is what a default worker (Cluster:Worker:VersionsFromDatabase on) advertises once its database is at that version. Set it only to pin an explicit override (then set the worker's labels and Cluster:Worker:VersionsFromDatabase=false to match). |
 | `Gateway:LinkRetryDelay` | `TimeSpan` | `00:00:01` | - | First wait before reconnecting a lost or refused worker link; doubles up to 30 s. |
 | `Gateway:LinkSecret` | `string` | `""` | - | The shared link secret (Cluster:Worker:LinkSecret on the worker): at least 16 characters, or the gateway refuses to start. |
 | `Gateway:LoginWorker` | `string` | `""` | - | Node id of the worker new sessions open on (it must name a `Workers` entry, or `LegacyWorkerNodeId` in single-worker mode). While it is down, sessions open on the ready link with the fewest sessions. Empty, the default, designates none: sessions always spread over the ready links. |
@@ -661,7 +669,7 @@ How to read the tables:
 | `Gateway:WorkerAddress` | `string` | `"127.0.0.1"` | - | Address of the world worker's gateway listener (Cluster:Worker:BindAddress). Used only while `Workers` is empty. |
 | `Gateway:WorkerPort` | `int` | `8095` | - | Port of the world worker's gateway listener (Cluster:Worker:Port). Used only while `Workers` is empty. |
 | `Gateway:Workers` | `List<GatewayWorkerEntry>` | `[]` | - | The world workers this gateway links to, one link each (node id, address, port, optional maps). When empty, the single-worker keys `WorkerAddress` and `WorkerPort` describe one entry named `LegacyWorkerNodeId`; when set, those two keys are ignored. Every worker must accept the same `LinkSecret`, `RealmId` and manifest values. An entry may also name a standby process (StandbyNodeId, StandbyAddress, StandbyPort), the target of a whole-World handoff of that slot (needs Gateway:Handoff:Enabled). |
-| `Gateway:WorldSchemaVersion` | `int` | `67` | - | The world schema version this gateway advertises; defaults to the version this build targets. Explicit override only. |
+| `Gateway:WorldSchemaVersion` | `int` | `72` | - | The world schema version this gateway advertises; defaults to the version this build targets. Explicit override only. |
 
 ## `Gateway:Control`
 
@@ -688,6 +696,7 @@ How to read the tables:
 | `Gateway:Transfers:AnomalyAfter` | `TimeSpan` | `00:10:00` | - | How long a player transfer may stay unresolved before the gateway raises an error-severity anomaly (it keeps retrying). Default 10 minutes. |
 | `Gateway:Transfers:Enabled` | `bool` | `false` | - | `true` lets this gateway coordinate cross-worker player transfers and finish interrupted ones from the journal: it connects to the characters database (Database:Characters:*, schema validation only, nothing is created or upgraded) and opens a control channel to every worker. The workers must have Cluster:Worker:Transfers:Enabled on. `false`, the default, changes nothing. |
 | `Gateway:Transfers:RecoveryInterval` | `TimeSpan` | `00:00:05` | - | How often the gateway looks for unresolved player transfers in the journal and recovers them (before the commit they abort, after it they roll forward). Default 5 s. |
+| `Gateway:Transfers:TestStageHold` | `bool` | `false` | - | `true` lets the crash scenarios of the test suite hold a transfer at a stage they name in the process environment. Never set it on a real gateway: a held transfer waits up to 4 minutes. `false`, the default, ignores that environment. |
 
 ## `HotReload`
 
@@ -704,8 +713,7 @@ How to read the tables:
 
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
-| `ItemRandomProperties:DbcPath` | `string` | `null` | - | The build-5875 ItemRandomProperties.dbc (16 fields), supplied by the developer and never downloaded by the daemon. Empty: no item gets a random property. A configured file that is unreadable or has another layout refuses startup. |
-| `ItemRandomProperties:EnchantmentTemplateDumpPath` | `string` | `null` | - | A MySQL world dump (vmangos or cmangos classic-db, plain or .gz) holding `item_enchantment_template`; only that table is read. Both this and `DbcPath` are needed for random properties. A configured dump that cannot be read refuses startup. |
+| `ItemRandomProperties:DbcPath` | `string` | `null` | - | The build-5875 ItemRandomProperties.dbc (16 fields), supplied by the developer and never downloaded by the daemon. Empty: no item gets a random property. The file is read only when the item_enchantment_template table has rows; a file that is unreadable or has another layout then refuses startup. |
 
 ## `ItemSets`
 
@@ -920,12 +928,6 @@ How to read the tables:
 | `Ops:Watchdog:TickMonitor:SummaryIntervalSeconds` | `int` | `300` | - | Seconds between periodic frame-time summaries (p50/p99/max, overruns) at Information level. 0 disables the summary. Default 300. |
 | `Ops:Watchdog:TickMonitor:WarnIntervalSeconds` | `int` | `30` | - | Least seconds between two overrun warnings; overruns in between are counted and reported with the next warning. Default 30. |
 
-## `PageText`
-
-| Key | Type | Default | Reload | Meaning |
-|---|---|---|---|---|
-| `PageText:DumpPath` | `string` | `null` | - | A MySQL world dump (vmangos or cmangos classic-db, plain or .gz) holding the `page_text` table; only that table is read. Empty: no page text, so every page a client asks for is answered "Item page missing." (the vmangos answer for an unknown page). A configured file that cannot be read refuses startup. |
-
 ## `PerformanceLog`
 
 | Key | Type | Default | Reload | Meaning |
@@ -1108,6 +1110,7 @@ How to read the tables:
 | `SpellRules:IgnoreHolyResistance` | `bool` | `false` | - | Whether holy resistance is ignored when resisting damage. Retail (vmangos Unit::CalculateDamageAbsorbAndResist, Unit.cpp:1936-1946): false; vmangos holds the holy resistance field at 0 (Player::UpdateResistances), so holy is only resisted through the level-based innate resist of higher-level creatures. true reproduces cmangos-classic (Unit::CalculateEffectiveMagicResistancePercent, Unit.cpp:3917: "completely ignore holy resistance value") and also drops that innate part. |
 | `SpellRules:ImmunityEnforcement` | `bool` | `true` | - | Whether immunities (aura-granted and creature static masks) are enforced. Retail: true; false disables every immunity check for development hosts. |
 | `SpellRules:MagicHitFloorPercent` | `float` | `22` | - | Lowest base magic hit chance in percent before modifiers: 22 (vmangos SpellCaster.cpp:829-834, from a classic duel test). Set 1 to reproduce cmangos-classic, which floors the final chance only. |
+| `SpellRules:MagnetRequiresAttackable` | `bool` | `false` | - | Whether a spell redirected by a Grounding-style magnet (SPELL_MAGNET) skips a magnet the caster may not attack (an unflagged or friendly owner's totem). Default false: vmangos SpellCaster::SelectMagnetTarget (SpellCaster.cpp:31-68) has no hostility test on the magnet and mangoszero (Unit.cpp:3590 via CheckTarget) refuses only unattackable-flagged targets, with no reaction test. true reproduces mangos-classic Unit::SelectMagnetTarget (Unit.cpp:6924, CanAttack(magnet)). Reference-core evidence only, no retail capture. Applies to non-triggered casts and client-named triggered blocks, creature casters included. |
 | `SpellRules:ResistTablePath` | `string` | `null` | - | Path of a file with vmangos' partial-resist outcome table (`ResistOutcomeTable`: 31 rows of `resist100,resist75,resist50,resist25,resist0,chanceResist`, Unit.cpp:1885-1918), which the repository does not ship. Unset: the engine draws the two quarter steps around the average resist (mean-preserving approximation, docs/areas/spell-rules.md); the damage-over-time one-tenth rule and the vulnerability bonus apply either way. |
 | `SpellRules:SoulShardUntappedCountsAsTapped` | `bool` | `false` | - | Whether a creature nobody tapped (no damage ever called LootService.OnCreatureDamaged: a scripted or GM kill) counts as tapped by the warlock for Soul Shards. Retail (vmangos Aura::HandleChannelDeathItem, SpellAuras.cpp:2860-2861, Creature::IsTappedBy, Creature.cpp:1615-1632): false, an untapped creature gives no shard. true keeps the shard for such kills. |
 | `SpellRules:SpellBatchAuraExpiry` | `bool` | `true` | - | With `SpellBatchWindowMs` set: a timed aura that runs out stays until the first update of the next batch (channel auras excepted). |
@@ -1174,7 +1177,7 @@ How to read the tables:
 | `Warden:BanSeconds` | `long` | `86400` | - | Warden:BanSeconds for `WardenAction.Ban`; 0 is permanent. Default 86400 (vmangos Warden.ClientBanDuration). |
 | `Warden:Checks` | `List<WardenCheckOptions>` | `[]` | - | Warden:Checks: scans added to the table's (a configured id replaces the table row with that id). With neither, the timing scan runs alone. |
 | `Warden:ChunkSize` | `int` | `500` | - | Warden:ChunkSize: module bytes per MODULE_CACHE frame (MaNGOS Zero 500). |
-| `Warden:ConfirmFailedScans` | `bool` | `false` | - | Warden:ConfirmFailedScans: the MaNGOS Zero evidence policy (WardenEvidence, WardenEnforcementPolicy). A failed memory, MPQ, Lua, page, driver, module or API-hook scan is first sent again alone (an isolated confirmation rescan), and only a confirmed mismatch of an actionable evidence class (integrity, threat signature) takes the scan's action. A confirmed unreadable result or a corroboration (Lua, scripted) mismatch is logged once, and a failed timing scan is logged. Default false: a failed scan acts at once. |
+| `Warden:ConfirmFailedScans` | `bool` | `false` | - | Warden:ConfirmFailedScans: the MaNGOS Zero evidence policy (WardenEvidence, WardenEnforcementPolicy). A failed memory, MPQ, Lua, page, driver, module or API-hook scan is first sent again alone (an isolated confirmation rescan), and only a confirmed mismatch of an actionable evidence class (integrity, threat signature) takes the scan's action. A confirmed unreadable result or a corroboration (Lua, scripted) mismatch is logged once, and a failed timing scan is logged. A check with id 0 is never confirmed and never acts: its failure is logged. Default false: a failed scan acts at once. |
 | `Warden:Enabled` | `bool` | `false` | - | Warden:Enabled; default false. |
 | `Warden:ExemptSecurity` | `AccountSecurity` | `Moderator` | - | Warden:ExemptSecurity: accounts at or above it are never scanned. Default Moderator. Values: `Player`, `Moderator`, `GameMaster`, `Administrator`. |
 | `Warden:LoadFromDatabase` | `bool` | `true` | - | Warden:LoadFromDatabase: also run the scans of the world table `warden_checks` for this build. Default true. |
@@ -1199,8 +1202,11 @@ How to read the tables:
 | `World:BindAddress` | `string` | `"0.0.0.0"` | restart | Interface to bind the world listener to. |
 | `World:CharactersPerRealm` | `int` | `10` | live | Characters an account may have on this realm (vmangos CharactersPerRealm: default 10, at most 10). |
 | `World:CommandTimeBudgetMs` | `int` | `5` | live | Maximum command-drain time per tick in milliseconds; 0 disables the time bound. |
+| `World:CompressMovementCount` | `int` | `0` | live | Movement packets a session must be sent within 10 seconds before further movement relays to it are batched into SMSG_COMPRESSED_MOVES (vmangos Compression.Movement.Count, WorldSession.cpp:221-266; vmangos defaults to 300, here 0 = never, which is what retail did). Packets over 253 bytes are never batched. A batch is flushed on the session's next tick. |
+| `World:ExpectedSpamRecords` | `string` | `""` | live | Records sent as SMSG_EXPECTED_SPAM_RECORDS at login, before the message of the day; '@' separates records, empty (the default) sends no packet. mangos-classic sends the rows of its spam_records table the same way (CharacterHandler.cpp:755, WorldSession.cpp:856). ArcaneCore ships none: the client's use of them is unconfirmed. |
 | `World:GmLevelInWhoList` | `AccountSecurity` | `Administrator` | live | Highest staff level ordinary players see in /who (vmangos/cmangos GM.InWhoList.Level default SEC_ADMINISTRATOR, i.e. every account). Values: `Player`, `Moderator`, `GameMaster`, `Administrator`. |
 | `World:InstantLogoutSecurity` | `AccountSecurity` | `Moderator` | live | Lowest security level that logs out instantly (vmangos/cmangos InstantLogout default SEC_MODERATOR). Values: `Player`, `Moderator`, `GameMaster`, `Administrator`. |
+| `World:LimitPlayTime` | `bool` | `false` | live | The consecutive-play-time limit (vmangos LimitPlayTime, CONFIG_BOOL_LIMIT_PLAY_TIME, default off; a regional anti-addiction rule that is not retail 1.12.1 behaviour). On: a session that has played 2 h 30 min, 3 h, 4 h 30 min and 5 h is sent SMSG_PLAY_TIME_WARNING at each step, its character is flagged PARTIAL_PLAY_TIME (half experience) from 3 h and NO_PLAY_TIME (no experience, no loot, no quest rewards, rolls pass) from 5 h (vmangos WorldSession::CheckPlayedTimeLimit, WorldSession.cpp:377-420). `ArcaneCore.Game.Entities.PlayTimeLimit`. |
 | `World:ListenRangeSay` | `float` | `25` | live | Distance /say reaches. vmangos and cmangos-classic World.cpp default to 25 (cmangos' shipped mangosd.conf keeps 25; vmangos' raises it to 40). 0 = the whole map. |
 | `World:ListenRangeTextEmote` | `float` | `25` | live | Distance /emote and text emotes reach (vmangos/cmangos ListenRange.TextEmote default 25). 0 = the whole map. |
 | `World:ListenRangeYell` | `float` | `300` | live | Distance /yell reaches (vmangos/cmangos ListenRange.Yell default 300). 0 = the whole map. |
@@ -1504,6 +1510,23 @@ How to read the tables:
 | `World:GmCommands:FirstLoginTools:ShowToolGuide` | `bool` | `true` | - | Show the staff member a short guide to the taught tools at that first login. |
 | `World:GmCommands:FirstLoginTools:SpellIds` | `uint[]` | `[]` | - | Optional operator subset. Empty means the reviewed rank-filtered catalog; populated values narrow it to known catalog IDs and never add new spells. |
 
+## `World:GmTicketAssistant`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `World:GmTicketAssistant:ActionCooldownSeconds` | `int` | `600` | - | Seconds before the same account gets another world-changing fix (unstuck, revive, combat reset) (0..86400). |
+| `World:GmTicketAssistant:AssistantName` | `string` | `"Ticketbot"` | - | The name the assistant's answers carry ("&lt;GM&gt;Name answers your ticket: ...") and the actor of its audit lines. |
+| `World:GmTicketAssistant:DeadSeconds` | `int` | `180` | - | Seconds since the assistant first saw the author dead (not since the release) before a ghost is resurrected at a graveyard (0..86400). |
+| `World:GmTicketAssistant:Enabled` | `bool` | `false` | - | Whether the assistant handles tickets at all (default false). `.ticket assistant on\|off` changes it until restart. |
+| `World:GmTicketAssistant:FaqPath` | `string` | `""` | - | Path of the FAQ text the assistant answers questions from; empty uses the starter FAQ built into the server. |
+| `World:GmTicketAssistant:MaxActionsPerAccountPerDay` | `int` | `3` | - | The most automatic actions (fixes and answers) per account per UTC day (0..1000); past it the ticket is left to a human. 0 allows none. |
+| `World:GmTicketAssistant:ModelTimeoutSeconds` | `int` | `15` | - | Seconds a model call (classification or answer) may take before the keyword fallback or an escalation takes over (1..120). |
+| `World:GmTicketAssistant:PollSeconds` | `int` | `30` | - | Seconds between passes over the open tickets (1..86400). |
+| `World:GmTicketAssistant:SignalWindowSeconds` | `int` | `900` | - | Seconds an anomaly signal (under the terrain floor, client-reported) is shown to the GM with a ticket; it never triggers an action (1..86400). |
+| `World:GmTicketAssistant:StaleCombatSeconds` | `int` | `30` | - | Seconds the author must have been "in combat" with nobody fighting them before the combat state is cleared (0..86400). |
+| `World:GmTicketAssistant:StuckIdleSeconds` | `int` | `120` | - | Seconds the author must not have moved before "stuck" counts as evidence (0..86400). |
+| `World:GmTicketAssistant:UseModel` | `bool` | `false` | - | Whether a model may classify tickets and draft answers (when the playerbot chat stack has a model provider). Default false: keywords only, no answers drafted, so no model-written text reaches a player and an FAQ ticket is left to a GM. On, the model picks the category and also writes the player-visible answer that closes a Question ticket. |
+
 ## `World:Guild`
 
 | Key | Type | Default | Reload | Meaning |
@@ -1524,6 +1547,7 @@ How to read the tables:
 | `World:Honor:CityProtector` | `bool` | `false` | - | Assign the City Protector titles (vmangos default off). |
 | `World:Honor:DishonorableKills` | `bool` | `true` | - | Civilian kills below gray cost honor (vmangos CONFIG_BOOL_ENABLE_DK). |
 | `World:Honor:Enabled` | `bool` | `true` | - | Master switch of the honor system (kills, ranks, the weekly calculation). |
+| `World:Honor:GmCrossFactionInspect` | `bool` | `true` | - | A game master with GM mode on may inspect the other faction (default true, an ArcaneCore extension; false is the vmangos behaviour). |
 | `World:Honor:MaintenanceDay` | `uint` | `3` | - | Weekday of the weekly calculation (Sunday 0, clamped to 6). |
 | `World:Honor:MaintenanceMode` | `HonorMaintenanceMode` | `Startup` | - | When the weekly calculation runs: Startup (default) or Live (an opt-in in-process weekly job). Values: `Live`, `Startup`. |
 | `World:Honor:MinHonorKills` | `uint` | `0` | - | Honorable kills a week to be ranked; 0 selects 15 (MIN_HONOR_KILLS_POST_1_10). |
@@ -1578,9 +1602,10 @@ How to read the tables:
 | `World:PacketHeuristics:CadenceLimits:QueryPerSecond` | `int` | `50` | - | Query opcodes (names containing QUERY) per second. A client entering a crowded city can burst; raise it if that is all you see. 0-1000, default 50. |
 | `World:PacketHeuristics:CadenceLimits:UsePerSecond` | `int` | `10` | - | CMSG_USE_ITEM, CMSG_GAMEOBJ_USE and CMSG_LOOT per second. 0-1000, default 10. |
 | `World:PacketHeuristics:DevOpcode` | `bool` | `true` | - | Report a stripped developer, GM, cheat or debug opcode that the release client never sends (`dev-opcode`); the packet is dropped unread either way. Default true. |
-| `World:PacketHeuristics:Enabled` | `bool` | `false` | - | Run the checks at all. Default false: with it off a packet costs one volatile read and no per-session state exists. |
+| `World:PacketHeuristics:Enabled` | `bool` | `true` | - | Run the checks at all. Default true: a server with no section runs them; false switches them off, and then a packet costs one volatile read and no per-session state exists. |
 | `World:PacketHeuristics:ExemptBots` | `bool` | `true` | - | The server's own managed playerbot sessions are not checked. Default true; with false their traffic is checked and counted as bot traffic. |
 | `World:PacketHeuristics:ExemptStaff` | `bool` | `true` | - | Staff (Moderator and above, or a player in GM mode) are not checked. Default true; with false their traffic is checked and counted as staff traffic. |
+| `World:PacketHeuristics:FeedAntiCheatScore` | `bool` | `false` | - | Feed the reports of real players' traffic into the AntiCheat score (so they count towards the escalation ladder of `AntiCheat:Action`). Default false: findings stay report-only, as before. Only `shape`, `dev-opcode` and `malformed` are fed, the checks whose only honest cause is a modified client. Every other check has an honest false-positive risk in the check table of docs/areas/packet-heuristics.md (latency, a crowded city's query burst, a late acknowledgement, a legitimately repeated payload) and never scores. Bot, staff and tool-injected traffic never scores; one score per reported finding, so the report throttle (one per session, check and opcode per `ReportIntervalSeconds`) also limits the score. With the default weight and decay a single finding peaks at 3 and is gone in 1.5 s: raise `ScoreWeight` (30 reaches the default GM alert in one finding) for it to escalate. |
 | `World:PacketHeuristics:IncapacitatedAction` | `bool` | `true` | - | Report an action opcode received while the player is dead or a ghost, on a taxi flight or in a far transfer (`incapacitated-action`; a near teleport such as Blink is not one). Default true. |
 | `World:PacketHeuristics:Malformed` | `bool` | `true` | - | Report a payload a handler rejected as malformed, or a bad frame header (`malformed`). Default true. |
 | `World:PacketHeuristics:OrphanAck` | `bool` | `true` | - | Report an unsolicited or mismatching movement acknowledgement (`orphan-ack`). Default true. |
@@ -1590,6 +1615,7 @@ How to read the tables:
 | `World:PacketHeuristics:ReplayExclude` | `string[]` | `[]` | - | More opcodes never checked for replay, on top of the built-in list: exact opcode names (CMSG_PING) or names with a leading and/or trailing * (MSG_MOVE_*, *QUERY*). A configured list is added to the default (empty) one, so entries never remove anything; use `ReplayBuiltInExclusions` to drop the built-in list. Default empty. |
 | `World:PacketHeuristics:ReplayWindowMs` | `int` | `1000` | - | The window of the replay check, in milliseconds. 100-60000, default 1000. |
 | `World:PacketHeuristics:ReportIntervalSeconds` | `int` | `10` | - | At most one ledger report per session, check and opcode per this many seconds; every occurrence is still counted. 1-3600, default 10. |
+| `World:PacketHeuristics:ScoreWeight` | `int` | `3` | - | The weight each fed finding adds to the AntiCheat score. The score decays by `AntiCheat:DecayPerSecond` (2) and escalates at 30, 60 and 120 by default, so the default weight 3 only escalates when about ten distinct check and opcode pairs report within a second or two; use 30 or more for a single finding to alert. 1-100, default 3. |
 | `World:PacketHeuristics:Shape` | `bool` | `true` | - | Report a payload whose length differs from the fixed length of its message (`shape`). Default true. |
 | `World:PacketHeuristics:UnknownOpcode` | `bool` | `true` | - | Report an opcode with no handler or outside the opcode table (`unknown-opcode`). Default true. |
 | `World:PacketHeuristics:WrongState` | `bool` | `true` | - | Report an opcode dropped because the session state does not allow it (`wrong-state`). Default true. |
@@ -1660,6 +1686,9 @@ How to read the tables:
 | `World:Playerbots:Chat:InProcess:Threads` | `int` | `2` | - | Threads one reply computes on (1..16; dedicated, BelowNormal priority, never the thread pool). |
 | `World:Playerbots:Chat:InProcess:TopK` | `int` | `40` | - | Sample among the k most likely tokens (1..256). |
 | `World:Playerbots:Chat:InProcess:TopP` | `double` | `0.9` | - | Then among the smallest set holding this much probability (0.05..1). |
+| `World:Playerbots:Chat:Lfg:AnswerRepeatSeconds` | `int` | `60` | live | Seconds within which a player's repeated "inv" to the same waiting group is applied without a second reply (10..600). |
+| `World:Playerbots:Chat:Lfg:Enabled` | `bool` | `true` | live | Let any bot of a waiting group answer a whisper "inv" for the group, not only the bot that posted the call (on by default). Off: only the whisper to the poster itself is answered. |
+| `World:Playerbots:Chat:Lfg:MaxTrackedVolunteers` | `int` | `64` | live | The most (player, group) answers remembered for `AnswerRepeatSeconds` (8..512). |
 | `World:Playerbots:Chat:MaxDailySpendUsd` | `double` | `1` | live | The most estimated US dollars the priced providers may spend per UTC day (0..10000; 0 = no daily cap). The estimate counts the tokens each reply reports at the provider's price; a provider without a known price is limited by its MaxRepliesPerHour only. |
 | `World:Playerbots:Chat:MaxQueuedRequests` | `int` | `16` | live | The most replies waiting for a provider at once (1..256); a line that finds the queue full is not answered. |
 | `World:Playerbots:Chat:MemoryExchanges` | `int` | `4` | live | Earlier exchanges with the same player a bot remembers and sends with a model request (0..16). |
@@ -1727,6 +1756,14 @@ How to read the tables:
 | `World:Playerbots:Chat:Voice:RunCalls` | `bool` | `true` | live | The bot that leads a dungeon or raid run says the plan in party or raid chat: "pulling &lt;boss&gt;", "wait for mana", "wipe, run back", "gg" (on by default). |
 | `World:Playerbots:Chat:Voice:Trade` | `bool` | `true` | live | Trade calls (on by default): WTS for tradeable surplus in the bot's bags (no grey, no bind-on-pickup or bound item, no quest item, nothing it would wear itself) at the price the trade desk quotes (the auction price book, else the reference price; `PriceMultiplier` only for an item with no such price), and WTB for the reagents of the recipes it wants; in Trade in a capital, now and then in General elsewhere (`GeneralSharePercent`). A real player who whispers the seller about the item is told the price and where the bot is. |
 | `World:Playerbots:Chat:Voice:TradeRepeatSeconds` | `int` | `900` | live | The least seconds between two trade calls of one bot (60..86400). |
+| `World:Playerbots:City:BindInCapital` | `bool` | `false` | live | Make the capital's inn the bot's home on a trip (off by default). Players bind where they quest, and a bot with its bind in a capital that is stranded or stalled is sent there with nothing of its level to fight; this makes the hearthstone lead to the capital's services instead. Only an innkeeper that likes the bot is used, and a bind already in the capital stays. |
+| `World:Playerbots:City:Enabled` | `bool` | `true` | live | Let bots make capital city trips (on by default). Off: no trip starts; one under way is dropped. |
+| `World:Playerbots:City:MaxStartsPerMinute` | `int` | `4` | live | The most trips that start for one capital in a minute (1..600), so a restart or a level-up wave does not send the whole population at once. |
+| `World:Playerbots:City:MaxTripYards` | `float` | `6000` | live | The longest straight line in yards (above 0, at most 100000) from the bot to a capital on its own map for a trip to start by walking. A capital beyond it is skipped. A bot whose home bind is in a capital may use its hearthstone for any distance. |
+| `World:Playerbots:City:MaxTripsPerCapital` | `int` | `6` | live | The most trips under way to one capital at the same moment (1..1000). A bot whose trigger fires while the city is at the cap waits and asks again. |
+| `World:Playerbots:City:MinGoldForAuctionTrip` | `int` | `50000` | live | The copper a bot must hold (0..2000000000) for the gold to send it to the auction house on its own: with this much money and something to buy or sell there, and no trip for half a `VisitIntervalMinutes`, it leaves. 50000 is five gold. |
+| `World:Playerbots:City:MinLevel` | `int` | `10` | live | The level a bot must have reached (1..60) before it makes trips of its own accord. |
+| `World:Playerbots:City:VisitIntervalMinutes` | `int` | `90` | live | Minutes between two capital city trips of one bot when nothing else sent it (1..10080). Each bot's own interval is this value plus or minus a quarter, fixed by its guid, and the first one is a random point of the first interval, so the bots do not all leave at once. |
 | `World:Playerbots:ClientFidelity` | `PlayerbotClientFidelity` | `Lean` | - | How much real-client packet work a bot's session does (`PlayerbotClientFidelity.Lean` by default). Lean: a bot has no client, so the map builds no SMSG_UPDATE_OBJECT blocks for it (its visible set is still maintained) and its session keeps only the received packets a bot reads back (`PlayerbotPacketIntake`). Full: bots are treated like real clients, every packet is built, compressed and copied into the bot's receive ring, which is the stress-test mode for load testing. A session with an observer attached (scenario, packet capture) always receives everything. Read at start; a restart applies a change. Values: `Lean`, `Full`. |
 | `World:Playerbots:Combat:Kite:Enabled` | `bool` | `true` | live | Kite at all (on by default). |
 | `World:Playerbots:Combat:Kite:HealthPct` | `float` | `50` | live | A bot kites once its health falls to this percentage (10..95). |
@@ -1742,8 +1779,8 @@ How to read the tables:
 | `World:Playerbots:CornerCentringMaxYards` | `float` | `4` | - | The most (yards, 0..10) the centring part of a `PathShaping` move can be: a corner in a corridor bounded on both sides (a road between two walls) is pushed away from the inside of the turn by the larger of the clearance still missing and its way to the middle of the corridor, and this caps that way to the middle only, so it never lowers the clearance push. 0 turns road centring off. A corner is never moved closer than 0.5 yard to the far side. |
 | `World:Playerbots:CornerClearanceYards` | `float` | `2` | - | The clearance (yards, 0.5..5) kept from the obstacle on the inside of a turn when `PathShaping` moves a route corner. The navigation mesh is built with a 0.2 yard agent radius, so an unshaped corner sits that close to the wall or post it goes around. |
 | `World:Playerbots:CornerTurnLeadYards` | `float` | `2.5` | - | How far before a corner (yards, 0..6) `PathShaping` starts to turn it: the tangent length of the arc that rounds a turn sharper than about 34 degrees. 0 turns rounding off; the lead is also held to 40% of the shorter leg beside the corner. |
-| `World:Playerbots:CutRegionMaxPolygons` | `int` | `5000` | - | The most polygons a cut region (a navigation region that is the only way between two large parts of the mesh, such as the Timbermaw Hold tunnel) may hold and still be exempt from shared world pins and from refusing a bot's pinned plan end (0..1000000; 0: no region is exempt). The exemption judges the whole region, so a larger bound lets more real snags go unshared. The default, 5000, keeps the Timbermaw Hold tunnel's largest measured region inside it, with about 2% headroom; re-check after regenerating mmaps. Bots only; no retail behaviour depends on it. |
-| `World:Playerbots:DropGreyQuests` | `bool` | `true` | live | Abandon an incomplete quest that has turned grey for the bot (quest level at or below its vmangos grey level) and hunt no objective of it (on by default). A completed grey quest is still turned in. Off: grey quests are kept until a full log sheds one. Live: `.reload config`. |
+| `World:Playerbots:CutRegionMaxPolygons` | `int` | `5000` | - | The most polygons a cut region (a navigation region that is the only way between two large parts of the mesh, such as the Timbermaw Hold tunnel) may hold and still need a crowd of bots for a shared world pin and be exempt from refusing a bot's pinned plan end (0..1000000; 0: no region is exempt). The exemption judges the whole region, so a larger bound makes more real snags wait for that crowd. The default, 5000, keeps the Timbermaw Hold tunnel's largest measured region inside it, with about 2% headroom; re-check after regenerating mmaps. Bots only; no retail behaviour depends on it. |
+| `World:Playerbots:DropGreyQuests` | `bool` | `true` | live | Abandon an incomplete quest that has turned grey for the bot (quest level at or below its vmangos grey level) and hunt no objective of it (on by default). A completed grey quest is still turned in, and a class-restricted or chain-step quest is kept and still offered whatever its colour. Off: grey quests are kept until a full log sheds one. Live: `.reload config`. |
 | `World:Playerbots:Economy:BankDeposit` | `bool` | `true` | live | Deposit goods the bot does not need (trade goods and reagents no spell of its own uses, gems, recipes, stackable curios) at a banker while it stays at its capital home (on by default). Gear, food, potions, ammunition, bags, grays and quest items are never deposited. |
 | `World:Playerbots:Economy:BuyBankSlots` | `bool` | `true` | live | Buy the next bank bag slot at a banker while the bot stays at its capital home when the bank has fewer than 5 free slots and the price is at most 40% of the bot's gold (on by default). A bought slot is only space once a bag is put in it, which bots do not do yet, so the bank-nearly-full gate keeps the purchase rare. |
 | `World:Playerbots:Economy:BuyBelowAskPercent` | `int` | `50` | live | The most a bot pays per unit at the house (reagents and gear) as a percent of the bot floor of that item, so no bot ever pays what a bot asks. |
@@ -1764,6 +1801,7 @@ How to read the tables:
 | `World:Playerbots:Economy:MaxListingsPerHour` | `int` | `10` | live | The most auctions one bot lists in any 60 minutes of world time (0..100); 0 lists nothing. |
 | `World:Playerbots:Economy:MoneyGoal` | `bool` | `true` | live | A bot short of money lists every visit and gets 3 more listing slots (on by default). Short means its budget reserves more than it has, or its money is below MoneyGoalCopperPerLevel times its level. It only raises listing, and never when ListChancePerVisit or MaxListingsPerBot is 0. |
 | `World:Playerbots:Economy:MoneyGoalCopperPerLevel` | `int` | `500` | live | The money floor per character level of the money goal, in copper (0..100000); 0: only what the budget reserves counts. |
+| `World:Playerbots:Economy:UpgradeSlotSearches` | `int` | `3` | live | How many of the bot's weakest equipment slots a visit searches the auction house for (0..8), one page each, by inventory type; the main hand, and the off hand and ranged slots of weapon builds, share one weapon page, while a shield, a held-in-off-hand item or a relic is searched by its own inventory type; no off-hand search while a two-hander is worn. 0 searches the two class-wide pages (weapons, then armor) of earlier versions. |
 | `World:Playerbots:Economy:VisitIntervalMinutes` | `int` | `30` | live | Minutes between two visits of one bot (1..1440). Bots start at a random point of the first interval. |
 | `World:Playerbots:Enabled` | `bool` | `false` | - | Run server-managed playerbots (off by default). |
 | `World:Playerbots:FaultBackoffSeconds` | `int` | `30` | - | Seconds a bot waits in quarantine after an action fault before it is logged in again (1..3600); each further fault in `FaultWindowSeconds` doubles the wait, up to an hour. The bot stays desired meanwhile. |
@@ -2155,6 +2193,12 @@ How to read the tables:
 | `World:Playerbots:Social:WarMode:NeverForget` | `bool` | `true` | live | In the war layer negative affinity never drifts back toward 0 and the war Rival flag is never cleared by drift, only by positive events that lift the war affinity back over the threshold. |
 | `World:Playerbots:Social:WarMode:RemoveCaps` | `bool` | `true` | live | In the war layer the daily affinity gain cap and the one-apology-a-day limit are lifted, and a relation a full memory drops from the normal layer stays for the war layer when the war layer holds a grudge against it (a war-only entry: the normal layer, and War Mode while it is off, never see it). |
 | `World:Playerbots:StallSeconds` | `int` | `120` | - | Seconds of world time a living bot may go without any progress (it moved less than 10 yards and its level, experience, money, bags, quest log and spells did not change, and it took no target's health to a new low) before it reports a stall in `.playerbot list` and gives up its goal (`PlayerbotStallWatch`; 10..86400). |
+| `World:Playerbots:Summon:AnnounceToPlayers` | `bool` | `true` | live | Whether the warlock tells the party who it is summoning and to click the portal, when the member is a real player (on by default). |
+| `World:Playerbots:Summon:Enabled` | `bool` | `true` | live | Let bots summon far group members with Ritual of Summoning and accept summons from their group (on by default). |
+| `World:Playerbots:Summon:FarYards` | `float` | `200` | live | A member on another map, or farther than this many yards from the summoner, is summoned (50..5000). |
+| `World:Playerbots:Summon:HelperYards` | `float` | `40` | live | The farthest from the portal, in yards, a group bot walks over to help with a ritual (5..100). |
+| `World:Playerbots:Summon:MeetingStones` | `bool` | `false` | live | Non-vanilla: let two group members at a dungeon meeting stone summon a third (TBC summoning-stone rules; strict 1.12 meeting stones only queue for the dungeon). On the server it lets CMSG_GAMEOBJ_USE on a meeting stone, with a group member selected, send that member a summon request, for a real player as well as for a bot (no reagent, no cooldown); the bots use it when no warlock can summon. Off by default (retail: the use of a stone is refused); on is a deliberate deviation. |
+| `World:Playerbots:Summon:RetrySeconds` | `int` | `120` | live | Seconds before the same member is summoned again after an attempt that was declined, ignored or failed (10..3600). |
 | `World:Playerbots:SyncPathQueryMaxMs` | `int` | `0` | live | The longest wall time in milliseconds one navigation-mesh search may take on the world thread (0 = no bound, else 10..60000): a search past it stops as one that ran out of nodes does (capped). Live 2026-10-24: one bot think spent 2 168 ms in a single 32 768-node search. Live: `.reload config`. |
 | `World:Playerbots:Taxi:BackoffMinutes` | `int` | `10` | live | The longest, in minutes, a flight node is backed off after trips from it failed (the server refused the flight, the flight master could not be reached, or none stood where the node is): the per-node cap on the schedule of `World:Playerbots:Travel` (`TransitBackoffSeconds` doubling to `TransitBackoffMaxSeconds`). Only the failing node waits; the bot walks, or flies from another known node, meanwhile (1..1440; default 10). |
 | `World:Playerbots:Taxi:Enabled` | `bool` | `true` | live | Let bots discover flight masters they pass and fly between known nodes (on by default). Off: bots never talk to a flight master. |
@@ -2331,6 +2375,181 @@ How to read the tables:
 | `World:Zones:PvpRealmMode` | `PvpRealmMode` | `Normal` | - | The realm kind for PvP rules (vmangos `IsPvPRealm` / `IsFFAPvPRealm`): Normal (default), Pvp or FfaPvp. Values: `Normal`, `Pvp`, `FfaPvp`. |
 | `World:Zones:RelocationCheckDelayMs` | `uint` | `0` | - | vmangos `Movement.RelocationVmapsCheckDelay` (default 0, at most 2000): when above 0 the explore check runs this many ms after a position change instead of at once (Player.cpp:5975-5985). |
 
+## List and map element fields
+
+These options hold entries that are themselves groups of keys. A list entry is numbered (`Key:0:Field`, `Key:1:Field`, ...), a map entry is named (`Key:name:Field`); in a `.conf` file the separator is a dot (`Key.0.Field = value`). A field that is not written keeps the default shown here. A field whose default reads `required` is a constructor parameter without a default value. The binder itself does not report an entry that lacks one: it drops the whole entry and carries on. A check at every start and in `check-config` therefore refuses such an entry, naming the key (exit 78).
+
+### `Auth:AutoPatch:Patches`
+
+`List<AutoPatchEntry>`: each entry sets `Auth:AutoPatch:Patches:<index>:<Field>`.
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `Build` | `ushort` | `0` | The client build this patch upgrades (for example 5875); the entry applies to a client of exactly this build. |
+| `File` | `string` | `""` | File name (or path) relative to `AutoPatchOptions.Directory`. |
+| `Locale` | `string` | `""` | A client locale such as enUS; empty matches every locale. |
+
+### `Auth:IntegrityHashes`
+
+`List<ClientIntegrityHashOptions>`: each entry sets `Auth:IntegrityHashes:<index>:<Field>`.
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `Build` | `ushort` | `0` | The client build this entry is for (for example 5875); it must equal the build the client reported in its logon challenge. |
+| `Hash` | `string` | `""` | The 20-byte integrity hash as 40 hex digits. An entry whose text is not 40 characters is skipped, a malformed one is skipped with a warning, and an all-zero hash accepts that client tuple without a check. |
+| `Os` | `string` | `""` | The client operating system string, as the client reports it in the logon challenge; compared ignoring case. |
+| `Platform` | `string` | `""` | The client platform string, as the client reports it in the logon challenge; compared ignoring case. |
+
+### `Cluster:Peer:Endpoints`
+
+`List<PeerEndpointEntry>`: each entry sets `Cluster:Peer:Endpoints:<index>:<Field>`.
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `Address` | `string` | `""` | `host:port` of the node's peer listener. |
+| `NodeId` | `string` | `""` | The node id (`Cluster:Worker:NodeId`); may contain `:`. |
+
+### `Cluster:Supervisor:Processes`
+
+`Dictionary<string, SupervisedProcessConfig>`: each entry sets `Cluster:Supervisor:Processes:<name>:<Field>`.
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `Arguments` | `string` | `""` | Command-line arguments passed to the child process. |
+| `Console` | `SupervisedConsoleMode` | `Merged` | Console routing mode (`merged \| window \| none`). Defaults to `SupervisedConsoleMode.Merged`. Errors and exceptions are always routed to the merged console regardless of this setting. Values: `Merged`, `Window`, `None`. |
+| `DrainTimeoutMs` | `int` | `180000` | Graceful drain timeout in milliseconds before the supervisor forcibly terminates an owned child process (1 to 600000; default 180000). A world child needs more than `WorldStopBudget.Recommended`: a lower value is warned about at start-up. |
+| `ExecutablePath` | `string` | `""` | Path to the executable to launch (e.g. `ArcaneCore.Realm` or `ArcaneCore.World`). |
+| `HangCapture` | `SupervisedHangCaptureMode` | `None` | What the supervisor captures from a hung child before it drains it: `None` (default), `Stacks` or `Dump` (a full memory dump, which holds secrets). Values: `None`, `Stacks`, `Dump`. |
+| `HangDrainTimeoutMs` | `int` | `15000` | Milliseconds a hung child gets to drain on the supervisor's drain request before it is killed (default 15000; 1 to 600000). |
+| `HangTimeoutSeconds` | `int` | `120` | Seconds without a world-tick heartbeat after which the supervisor treats a beating-then-silent child as hung and drains, kills and relaunches it (default 120; 0 turns hang detection off; otherwise 30 to 3600). The watch is armed by the child's first `alive` beat and is suspended while the child has announced that it is stopping. |
+| `HeartbeatGraceSeconds` | `int` | `300` | Seconds after launch (default 300; 30 to 86400) before a child that has never sent an `alive` beat gets one warning that hang detection is not armed. A child that starts slowly is never killed for silence before its first beat. |
+| `LogFilePath` | `string` | `null` | Optional path to the child process's dedicated log file. Every stdout/stderr line from the child is written here regardless of `Console` mode. |
+| `MapAssignments` | `IReadOnlyList<uint>` | `[]` | Static map IDs assigned to this worker (empty for non-worker roles or dynamically assigned workers). |
+| `Maps` | `string` | `""` | The maps this worker owns as ids and inclusive ranges (`0,1,30-40`), the same syntax as the child's `Cluster:Worker:OwnedMaps` (pass it there in `Arguments`; the supervisor only checks it). Empty means no assignment here. Worker children's lists, and their `MapAssignments`, must not overlap: a map has one owner. Only worker-role entries are compared. |
+| `Name` | `string` | `""` | Logical process name and merged-console tag (e.g. `"realm"`, `"gateway"`, `"social"`, `"coordinator"`, `"worker:EK"`, `"worker:Kalimdor"`, `"worker:instances"`). |
+| `RealmId` | `int` | `0` | The realm id this child serves (default 0: none). The supervisor routes a GM's cross-world `.server shutdown\|restart #delay #exitcode #realmid` to the child with that id, and tells every child its own id so it can tell a local request from a remote one. Unique per supervisor. |
+| `RequiredMemoryMb` | `long` | `256` | Memory budget in MiB required to admit and launch this process on the host. |
+| `RestartBackoffMaxMs` | `int` | `60000` | Maximum capped restart backoff in milliseconds (default: 60000 ms = 60 s). |
+| `RestartBackoffMinMs` | `int` | `1000` | Initial restart backoff in milliseconds after an unexpected process exit (default: 1000 ms = 1 s). |
+| `Role` | `string` | `"worker"` | Process role (`SupervisedRoles`). |
+| `StartOrder` | `int` | `0` | Position in the start sequence (default 0): processes start in ascending order, ties broken by the configuration key (ordinal), and drain in the reverse. Needed because configuration binding returns keys sorted, not in file order; for example give `realm` 0, `gateway` 1 and the workers 2. Also decides which process is denied first when admission runs out. |
+| `StopGraceMs` | `int` | `0` | Milliseconds a child that announced its stop may take to exit before the supervisor kills it (default 0, which means `DrainTimeoutMs`; otherwise 1 to 600000). The kill is classified by what the child announced (restart relaunches at once, shutdown stays down). |
+| `WorkingDirectory` | `string` | `null` | Optional working directory for the child process. |
+
+### `Economy:AuctionHouses`
+
+`List<AuctionHouseEntry>`: each entry sets `Economy:AuctionHouses:<index>:<Field>`.
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `CutPercent` | `uint` | `required` | The consignment cut percentage the house keeps from a sale (AuctionHouse.dbc consignment rate). |
+| `DepositPercent` | `uint` | `required` | The deposit percentage of the house (AuctionHouse.dbc deposit rate). |
+| `Id` | `uint` | `required` | The AuctionHouse.dbc id of the house: 2 is the Alliance house, 6 the Horde house, 7 the neutral house. |
+
+### `Gateway:Workers`
+
+`List<GatewayWorkerEntry>`: each entry sets `Gateway:Workers:<index>:<Field>`.
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `Address` | `string` | `"127.0.0.1"` | Address of the worker's gateway listener (its Cluster:Worker:BindAddress). |
+| `Maps` | `int[]` | `[]` | Map ids this worker owns; empty means it is not map-restricted. Surfaced in the link state for map-aware routing. |
+| `NodeId` | `string` | `""` | The worker's name in logs, metrics and link state; unique among the entries. |
+| `Port` | `int` | `8095` | Port of the worker's gateway listener (its Cluster:Worker:Port). |
+| `StandbyAddress` | `string` | `"127.0.0.1"` | Address of the standby's gateway listener (its Cluster:Worker:BindAddress). Used only when `StandbyNodeId` is set. |
+| `StandbyNodeId` | `string` | `""` | The standby process of this worker's slot (its Cluster:Worker:NodeId, with Cluster:Worker:Standby on): the target of a whole-World handoff of this slot. Empty, the default, means the slot has no standby and cannot be handed off. The gateway keeps a session-less control link to it (needs Gateway:Handoff:Enabled); it must differ from every other node id. |
+| `StandbyPort` | `int` | `8096` | Port of the standby's gateway listener (its Cluster:Worker:Port). Used only when `StandbyNodeId` is set. |
+
+### `NpcServices:NpcTemplates`
+
+`List<NpcTemplateMetadata>`: each entry sets `NpcServices:NpcTemplates:<index>:<Field>`.
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `Entry` | `uint` | `0` | The creature_template entry the override applies to. |
+| `GossipMenuId` | `uint` | `0` | Replaces the creature's gossip_menu_id. |
+| `TrainerClass` | `byte` | `0` | Replaces the creature's trainer_class. |
+| `TrainerRace` | `byte` | `0` | Replaces the creature's trainer_race. |
+| `TrainerSpell` | `uint` | `0` | Replaces the creature's trainer_spell. |
+| `TrainerType` | `TrainerType` | `Class` | Replaces the creature's trainer_type. Values: `Class`, `Mounts`, `TradeSkills`, `Pets`. |
+
+### `Quests:AreaTriggerQuests`
+
+`QuestAreaTrigger[]`: each entry sets `Quests:AreaTriggerQuests:<index>:<Field>`.
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `QuestId` | `uint` | `0` | The quest that is explored or completed by entering the trigger. |
+| `TriggerId` | `uint` | `0` | The AreaTrigger id (areatrigger_involvedrelation id) that the player enters. |
+
+### `Realms:Seed`
+
+`List<RealmSeedEntry>`: each entry sets `Realms:Seed:<index>:<Field>`.
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `Address` | `string` | `"127.0.0.1:8085"` | "ip:port" the client connects to for the world server. |
+| `Category` | `byte` | `0` | The realm category (timezone group) id of the build-5875 realm-list layout. |
+| `Flags` | `RealmFlags` | `None` | The realm flags stored with the row (offline, new players, recommended and so on). A seeded row starts stopped (offline in the realm list) until a world reports in. Values: `None`, `Invalid`, `Offline`, `SpecifyBuild`, `NewPlayers`, `Recommended`. |
+| `Name` | `string` | `"ArcaneCore"` | The realm name shown on the realm-list screen. |
+| `Population` | `float` | `0` | The population value stored with the row and sent in the realm list as it is. It holds only until a world reports in: with realm liveness on, the world (the gateway, in a split) resets it to 0 and then, when `World:Realm:PlayerLimit` is above 0, writes sessions / player limit * 2, so on that scale 0 is empty and 2 is full. With a limit of 0 nothing is written after the reset, and bot sessions count, so 2 is not a ceiling. |
+| `Type` | `RealmType` | `Normal` | The realm type (icon) shown on the realm-list screen; the numeric values are the build-5875 wire values. Values: `Normal`, `PvP`, `Normal2`, `RP`, `RpPvP`. |
+
+### `Warden:Checks`
+
+`List<WardenCheckOptions>`: each entry sets `Warden:Checks:<index>:<Field>`.
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `Action` | `WardenAction?` | `null` | A per-check action; null uses `WardenOptions.Action` (vmangos warden_scans.penalty). Values: `Log`, `Kick`, `Ban`. |
+| `Address` | `uint` | `0` | Memory: the absolute address (or module-relative offset); page checks: the start offset. |
+| `Comment` | `string` | `""` | Free text naming the scan in logs and staff notices; empty shows the kind instead. |
+| `DriverName` | `string` | `""` | Driver: the driver name sent in the string table. |
+| `DriverPath` | `string` | `""` | Driver: the target path whose HMAC-SHA1 the client compares. |
+| `Expected` | `string` | `""` | Memory: the expected bytes (1-255, hex); Mpq: the expected SHA-1 (hex, or empty); Lua: the expected value (text, or empty). |
+| `Function` | `string` | `""` | ApiHook: the exported function (GetProcAddress name) inside `Module`. |
+| `Id` | `uint` | `0` | The scan id, unique within `Warden:Checks`; an entry replaces the `warden_checks` row with the same id. |
+| `InitialLogin` | `bool` | `false` | Run this scan once, right after the handshake, instead of in the recurring rotation (vmangos ScanFlags::InitialLogin, flag 0x08 of warden_scans.flags). |
+| `Kind` | `WardenCheckKind` | `Memory` | Which kind of scan this is; it decides which of the other fields apply. Values: `Memory`, `PageA`, `PageB`, `Driver`, `Timing`, `ModuleByName`, `Mpq`, `Lua`, `ApiHook`. |
+| `Length` | `int` | `0` | ApiHook: the bytes the client reads at the jump target (0-255; vmangos warden_scans.length). |
+| `Module` | `string` | `""` | Memory: the module name (empty for the main executable); ModuleByName: the DLL to look for. |
+| `Path` | `string` | `""` | Mpq: the file path inside the client archives; Lua: the global variable name. |
+| `Pattern` | `string` | `""` | Page checks: the code pattern (1-255 bytes) whose HMAC-SHA1 the client searches for. |
+| `Wanted` | `bool` | `false` | Page, driver, module and existence-only Lua checks: true when the pattern or driver must be present (a legitimate client), false when finding it is the failure (a cheat signature). |
+
+### `World:Playerbots:Chat:Providers`
+
+`PlayerbotChatProviderOptions[]`: each entry sets `World:Playerbots:Chat:Providers:<index>:<Field>`.
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `ApiKeyEnvironmentVariable` | `string` | `null` | The environment variable that holds the key. Unset: ANTHROPIC_API_KEY for Anthropic, none for the others. Empty: the endpoint takes no key (a local server). A provider whose variable is not set is skipped. |
+| `BaseUrl` | `string` | `""` | The endpoint root: for Anthropic the origin (empty = https://api.anthropic.com; `/v1/messages` is appended), for OpenAICompatible the API base including its version (`/chat/completions` is appended), e.g. https://api.openai.com/v1, https://openrouter.ai/api/v1 or http://localhost:11434/v1. Unused by Builtin. |
+| `Headers` | `Dictionary<string, string>` | `{}` | Extra request headers (e.g. OpenRouter's HTTP-Referer and X-Title); they may not replace the key or version headers. |
+| `InputUsdPerMillionTokens` | `double?` | `null` | US dollars per million input tokens for the spend estimate (unset = the built-in price of a known Anthropic model, else unpriced; 0 for a local model). |
+| `JsonResponseFormat` | `bool` | `true` | OpenAICompatible only: send `response_format: {"type":"json_object"}` with the reply prompts, which ask for a JSON object (on by default; Ollama, OpenAI and most compatible servers support it). Turn it off for a server that rejects the field (LM Studio answers 400). |
+| `Kind` | `PlayerbotChatProviderKind` | `Builtin` | How this provider answers: `Builtin`, `Anthropic` or `OpenAICompatible`. Values: `Builtin`, `Anthropic`, `OpenAICompatible`, `InProcess`. |
+| `MaxRepliesPerHour` | `int` | `120` | The most replies this provider gives per hour, over all bots (1..100000); past it the next provider answers. |
+| `MaxTokens` | `int` | `150` | The most tokens of one model reply (16..1024; unused by Builtin). |
+| `Model` | `string` | `""` | The model id (empty = claude-haiku-4-5 for Anthropic; required for OpenAICompatible; unused by Builtin). |
+| `Moderation` | `PlayerbotChatModerationKind` | `None` | The moderation step before each player line is sent to this provider: `None` (default), `Endpoint` (an OpenAI-compatible `/moderations` endpoint) or `Classify` (a one-word classification request to this provider). A line it flags goes to no provider; when the step fails, this provider is skipped. Values: `None`, `Endpoint`, `Classify`. |
+| `ModerationApiKeyEnvironmentVariable` | `string` | `null` | Endpoint moderation: the environment variable of the moderation key (unset = this provider's key; empty = none). |
+| `ModerationBaseUrl` | `string` | `""` | Endpoint moderation: the API base whose `/moderations` is called (empty = `BaseUrl`; required for Anthropic). |
+| `ModerationModel` | `string` | `""` | Endpoint moderation: the moderation model (empty = omni-moderation-latest). |
+| `OutputUsdPerMillionTokens` | `double?` | `null` | US dollars per million output tokens for the spend estimate (unset = the built-in price of a known Anthropic model, else unpriced). |
+| `ReasoningEffort` | `string` | `""` | OpenAICompatible only: the `reasoning_effort` body field, one of `none`, `minimal`, `low`, `medium`, `high`, `xhigh` (any case, surrounding spaces ignored), or empty to send nothing on a hosted server (the default; the moderation classifier still sends `none` to a server on this machine). A thinking model (e.g. qwen3.5 on Ollama) otherwise spends the whole `MaxTokens` reasoning and returns no text; `none` turns that off. `omit` never sends the field, to either the reply or the classifier call (for a server that rejects it). |
+| `TokenLimitParameter` | `string` | `"max_tokens"` | OpenAICompatible only: the body field of the reply limit, `max_tokens` (default) or `max_completion_tokens` (newer OpenAI models). |
+
+### `World:Playerbots:Population:Bands`
+
+`PopulationBand[]`: each entry sets `World:Playerbots:Population:Bands:<index>:<Field>`.
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `MaxLevel` | `int` | `0` | The highest level of the band (the band's MinLevel..60). |
+| `MinLevel` | `int` | `0` | The lowest level of the band (1..60). |
+| `Weight` | `int` | `0` | The band's share of the target: its weight over the sum of all weights (0..1000; 0 = no bots). |
+
 ## Keys read by name
 
 These keys are read directly rather than through an options class.
@@ -2348,4 +2567,5 @@ These keys are read directly rather than through an options class.
 - `ChatRestrictionOptions`: `World:Chat:FloodMessageCount`, `World:Chat:FloodMessageDelaySeconds` and `World:Chat:FloodMuteSeconds` are bound twice: by `ChatFeature` into `ChatOptions` (documented in the `World:Chat` table) and by `ChatRestrictionFeature` into `ChatRestrictionOptions`, both with the same defaults. Set them once; both read them.
 - `LootOptions.RewardRange`: `Loot:RewardRange` is computed from `Loot:GroupLootDistance`, `Loot:BossRewardDistanceBonus` and `Loot:RaidMapsUnlimitedRewardDistance`; it is not a key.
 - `WorldRuntimeOptions.Perf`: `World:Perf:*` is an alias. `PerformanceLog` is the real section (`PerformanceLogOptions.SectionName`); `WorldServiceCollectionExtensions` copies it into `WorldRuntimeOptions.Perf` with a PostConfigure, so a `World:Perf:*` key is never read.
-- `Logging` and `HostOptions` (`ShutdownTimeout`) belong to the .NET host, not to ArcaneCore; see the .NET documentation for their keys.
+- `Logging` (for example `Logging:LogLevel:<category>`) and `HostOptions` (`HostOptions:ShutdownTimeout`) belong to the .NET host, not to ArcaneCore; see the .NET documentation for their keys. The checks accept every key below them and never report one as unknown; `Logging:ArcaneCore` is not part of this and is documented above.
+- `hostBuilder:reloadConfigOnChange` is a .NET host key that ArcaneCore reads when it attaches the `.conf` file: `true` (the default when unset; ArcaneCore's own read also takes an unparsable value as true) makes a running daemon watch `world.conf`, `realm.conf` or `gateway.conf` and pick up an edit, `false` reads the file once at start. It also governs the `appsettings*.json` files.

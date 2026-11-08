@@ -48,6 +48,17 @@ public sealed class RealmStartupValidationTests
         Assert.Contains(report.Issues, i => i.Key == "Auth:BindAddress" && i.Severity == ConfigSeverity.Error);
     }
 
+    [Theory]
+    [InlineData("Diagnostics:CrashDump:TimeoutSeconds", "2000000000")]
+    [InlineData("Diagnostics:CrashDump:TimeoutSeconds", "0")]
+    [InlineData("Diagnostics:CrashDump:Mode", "Everything")]
+    public void BadCrashDumpValue_FailsCheckConfig(string key, string value)
+    {
+        ConfigReport report = Validate((key, value));
+        Assert.True(report.IsInvalid);
+        Assert.Contains(report.Issues, i => i.Key == key && i.Severity == ConfigSeverity.Error);
+    }
+
     [Fact]
     public void ValidAuthListener_Passes()
         => Assert.DoesNotContain(Validate(("Auth:BindAddress", "::1"), ("Auth:Port", "3724")).Issues, i => i.Key.StartsWith("Auth:", StringComparison.Ordinal));

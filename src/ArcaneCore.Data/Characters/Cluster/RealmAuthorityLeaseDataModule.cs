@@ -210,6 +210,17 @@ public sealed class EfRealmAuthorityLeaseStore(
         using LeaseDb lease = Open();
         CharacterDbContext db = lease.Db;
         using IDisposable exempt = CharacterWriteFence.Exempt();
+        // Providers without a row filter in TryLockRow (SQLite, MariaDB) would otherwise run the UPDATEs below against a live lease held by another node: on SQLite that takes the single writer lock, on MariaDB an
+        // exclusive row lock that waits behind the holder's fenced writers (their shared lock) and blocks its renewals. A read-only look first (the same as GetCurrent) refuses such a call without any write or lock.
+        // PostgreSQL does it in TryLockRow with a conditional FOR UPDATE and needs no pre-check. A lease that lapses between the read and a later call is simply taken on the next attempt.
+        if (db.Database.ProviderName != "Npgsql.EntityFrameworkCore.PostgreSQL"
+            && Read(db, scope) is { } seen
+            && ActiveLease(seen, now) is { } liveHolder
+            && !(seen.OwnerNode == ownerNodeId && seen.OwnerIncarnation == incarnation))
+        {
+            return new AuthorityLeaseResult(AuthorityLeaseOutcome.RejectedHeldByOther, liveHolder);
+        }
+
         using IDbContextTransaction tx = BeginLeaseTransaction(db);
         // Acquire and takeover change authority: on PostgreSQL lock the row (FOR UPDATE, waits for in-flight fenced commits) only when one of the two UPDATEs below could change it: the lease is free or lapsed (and the
         // token can grow), or it is this owner's own (the renewal branch). A call that will be refused locks nothing and skips both UPDATEs.

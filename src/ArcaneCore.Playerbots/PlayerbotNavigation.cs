@@ -49,9 +49,9 @@ internal sealed class PlayerbotRoute
 
     private bool[]? _legs;
 
-    internal IReadOnlyList<Vector3> Points { get; }
+    internal IReadOnlyList<Vector3> Points { get; private set; }
     internal IReadOnlyList<Vector3>? MeshPoints { get; set; }
-    internal float Distance { get; }
+    internal float Distance { get; private set; }
 
     /// <summary>
     /// The corners came from the map's navigation mesh: every leg between them is walkable by construction (vmangos
@@ -60,7 +60,7 @@ internal sealed class PlayerbotRoute
     /// obstacle the mesh goes around (a pillar, a counter, a doorway's edge). Routes stepped over the terrain without a mesh
     /// (<see cref="PlayerbotNavigation.TryTerrainRoute"/>) carry no such proof and keep the line-of-sight check.
     /// </summary>
-    internal bool Navigated { get; }
+    internal bool Navigated { get; private set; }
 
     internal void SetLegNavigated(int legIndex, bool navigated)
     {
@@ -116,12 +116,6 @@ internal sealed class PlayerbotRoute
     /// <summary>The landing <see cref="ToLiftLanding"/> walks towards (the point every leg of the approach closes on; a leg's own end is only
     /// as far as one route reaches). Meaningless unless <see cref="ToLiftLanding"/>.</summary>
     internal Vector3 LiftLanding { get; set; }
-
-    /// <summary>
-    /// What a caller's progress clock measures this walk against: the lift's landing for a <see cref="ToLiftLanding"/> route (walking to
-    /// the lift may lead away from the goal, e.g. a canyon floor under a plateau), the goal otherwise.
-    /// </summary>
-    internal Vector3 ProgressAim(Vector3 goal) => ToLiftLanding ? LiftLanding : goal;
 
     /// <summary>The map pathfinder active when this route was planned, used to detect live pathfinder replacement.</summary>
     internal IPathfinder? Pathfinder { get; set; }
@@ -179,6 +173,84 @@ internal sealed class PlayerbotRoute
             Pathfinder = Pathfinder ?? next.Pathfinder,
             MeshPoints = MeshPoints is not null || next.MeshPoints is not null ? points : null,
         };
+    }
+
+    /// <summary>
+    /// Puts <paramref name="join"/> (the mesh's way from where the bot stands to point <see cref="NextPoint"/>) in front of this route's
+    /// unwalked rest, in place, so the motion and the goal holding this route walk on along the same route
+    /// (<see cref="PlayerbotNavigation.TryRejoin"/>). The join's legs are the mesh's; the rest keeps its own proof (<see cref="LegsNavigated"/>).
+    /// </summary>
+    internal void Rejoin(IReadOnlyList<Vector3> join)
+    {
+        int next = Math.Clamp(NextPoint, 1, Math.Max(1, Points.Count - 1));
+        var points = new List<Vector3>(join.Count + Points.Count - next) { join[0] };
+        var legs = new List<bool>(points.Capacity);
+        for (int i = 1; i < join.Count - 1; i++)
+        {
+            points.Add(join[i]);
+            legs.Add(true);
+        }
+
+        for (int i = next; i < Points.Count; i++)
+        {
+            points.Add(Points[i]);
+            legs.Add(i == next || LegNavigatedAt(i));
+        }
+
+        float distance = 0;
+        for (int i = 1; i < points.Count; i++) distance += Vector3.Distance(points[i - 1], points[i]);
+        Points = points;
+        Distance = distance;
+        _legs = legs.ToArray();
+        Navigated = legs.All(leg => leg);
+        if (MeshPoints is not null) MeshPoints = points;
+        NextPoint = 1;
+    }
+}
+
+/// <summary>
+/// The aim a caller's progress clock measures a walk against (the destination's not-closing clock, the repair walk's stuck clock, the
+/// explore cell's best distance): the goal itself, or the landing of the lift the walk heads for (<see cref="PlayerbotRoute.ToLiftLanding"/>:
+/// the way to the lift may lead away from the goal, a canyon floor under a plateau). One rule for the three: a change of aim (the goal to
+/// a landing, the goal again when the approach falls back or the ride is over, one car's landing to another's) starts the best distance
+/// over at the new aim and is no progress in itself (the caller keeps its accumulated time); after <see cref="MaxChanges"/> changes on
+/// one goal the aim is the goal for good, so a bot that alternates between a lift leg and a goal leg (a pending or refused approach
+/// between them) is judged by the goal, as before the approach existed, instead of starting a fresh best at every leg.
+/// A mutable struct held in a field of the caller: call <see cref="Retarget"/> and <see cref="Reset"/> on the field itself, on the
+/// caller's thread (the bot's world thread).
+/// </summary>
+internal struct PlayerbotProgressAim
+{
+    /// <summary>
+    /// Changes of aim on one goal after which a <see cref="PlayerbotRoute.ToLiftLanding"/> walk is measured to the goal: a trip is two
+    /// (the landing, then the goal again after the ride), a fallback to the goal and back two more, a change of the nearest car one.
+    /// </summary>
+    internal const int MaxChanges = 6;
+
+    /// <summary>The landing measured to; null: the goal.</summary>
+    internal Vector3? Landing { get; private set; }
+
+    /// <summary>Changes of aim so far on this goal.</summary>
+    internal int Changes { get; private set; }
+
+    /// <summary>
+    /// Point the clock at the aim of <paramref name="route"/> (null, or not to a lift: the goal). True when the aim changed: the caller
+    /// starts its best distance over at the distance to the new aim and keeps its accumulated time.
+    /// </summary>
+    internal bool Retarget(PlayerbotRoute? route)
+    {
+        Vector3? aim = route is { ToLiftLanding: true } && Changes < MaxChanges ? route.LiftLanding : null;
+        if (aim == Landing) return false;
+        Landing = aim;
+        Changes++;
+        return true;
+    }
+
+    /// <summary>The clock starts over (another goal, or it ran out).</summary>
+    internal void Reset()
+    {
+        Landing = null;
+        Changes = 0;
     }
 }
 
@@ -275,6 +347,9 @@ internal struct TileWait
 internal static class PlayerbotNavigation
 {
     [ThreadStatic] private static bool t_nonPathRefusal;
+
+    /// <summary>Whether the last refusal on this thread was no verdict on the destination (<see cref="Usable"/> refusing a remembered rejected place sets it); tests read and reset it.</summary>
+    internal static bool NonPathRefusal { get => t_nonPathRefusal; set => t_nonPathRefusal = value; }
     internal static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Player, PlayerbotRisk> Guards = [];
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Player, PlayerbotStallWatch> StallWatches = [];
 
@@ -1127,6 +1202,27 @@ internal static class PlayerbotNavigation
             : null;
     }
 
+    /// <summary>How near (yards, flat) the end of a join must come to the corner it was asked for (<see cref="TryRejoin"/>).</summary>
+    private const float RejoinCornerYards = 0.5f;
+
+    /// <summary>
+    /// The way back onto <paramref name="route"/> from <paramref name="here"/>, a position off the leg it walks next: the mesh's complete
+    /// path to that leg's corner, put in front of the route's rest (<see cref="PlayerbotRoute.Rejoin"/>). False, with the route unchanged,
+    /// when the mesh knows no complete way there.
+    /// </summary>
+    internal static bool TryRejoin(Map map, PlayerbotRoute route, Vector3 here, PlayerbotOptions options)
+    {
+        if (route.Complete) return false;
+        Vector3 corner = route.Points[route.NextPoint];
+        PathResult path = PlayerbotThinkProbe.Find(map.Collision, here, corner, new PathOptions { MaxPoints = Math.Max(2, options.MaxPathPoints),
+            Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, MaxSearchNodes = PathOptions.DefaultMaxSearchNodes, LoadTiles = true, NonBlockingTiles = true });
+        if (!IsUsablePath(path, options.MaxPathPoints, options.MaxRouteYards) || (path.Type & PathType.Incomplete) != 0 || path.Points.Count < 2
+            || Vector2.Distance(Flat(path.Points[^1]), Flat(corner)) > RejoinCornerYards)
+            return false;
+        route.Rejoin(path.Points);
+        return true;
+    }
+
     /// <summary>The route without the hazard check (<see cref="Plan"/>).</summary>
     private static bool PlanDirect(Player player, Vector3 destination, Vector3 goal, PlayerbotOptions options, bool partial,
         out PlayerbotRoute? route, out bool straightRefused, int? searchNodes = null, Vector3? from = null, bool noFallbacks = false,
@@ -1296,7 +1392,7 @@ internal static class PlayerbotNavigation
             MaxSearchNodes = searchNodes ?? SearchNodes(from, to), LoadTiles = true, NonBlockingTiles = true });
 
     /// <summary>Whether a mesh answer from <paramref name="from"/> is a route the bot takes (<see cref="Bounded"/>), and the route.</summary>
-    private static bool Usable(Player player, PathResult path, Vector3 from, Vector3 destination, Vector3 goal, bool partial,
+    internal static bool Usable(Player player, PathResult path, Vector3 from, Vector3 destination, Vector3 goal, bool partial,
         bool nearestEnd, PlayerbotOptions options, out PlayerbotRoute? route)
     {
         route = null;
@@ -1325,6 +1421,14 @@ internal static class PlayerbotNavigation
             return false;
 
         route = Bounded(path.Points, options, complete: Reaches(path) || EndsAt(path, destination));
+        // A corner the bot's walk broke at again and again (PlayerbotMotion.NoteStepRejected) is not walked through for a while: the goal picks another.
+        if (route is not null && PlayerbotMotion.CrossesRejectedPlace(player, route))
+        {
+            route = null;
+            t_nonPathRefusal = true;
+            return false;
+        }
+
         return route is not null;
     }
 
@@ -2165,6 +2269,13 @@ internal static class PlayerbotNavigation
     /// x, y probed from z (<see cref="MapCollision.GetHeight(float, float, float, bool, float)"/>).
     /// </summary>
     internal static Vector3 GroundNear(Func<float, float, float, float> height, Func<Vector3, bool>? usable, float botZ, Vector3 point)
+        => TryGroundNear(height, usable, botZ, point) ?? point;
+
+    /// <summary>
+    /// <see cref="GroundNear(Func{float, float, float, float}, Func{Vector3, bool}?, float, Vector3)"/>, but null where no floor qualifies
+    /// (the point would stay at the bot's height, on no region): a caller that must not plan toward such a point can tell.
+    /// </summary>
+    internal static Vector3? TryGroundNear(Func<float, float, float, float> height, Func<Vector3, bool>? usable, float botZ, Vector3 point)
     {
         float best = float.NaN, bestDelta = float.MaxValue;
         for (int probe = 0; probe < 2; probe++)
@@ -2176,7 +2287,7 @@ internal static class PlayerbotNavigation
             (best, bestDelta) = (floor, delta);
         }
 
-        return float.IsNaN(best) ? point : point with { Z = best };
+        return float.IsNaN(best) ? null : point with { Z = best };
     }
 
     /// <summary>
@@ -2219,6 +2330,9 @@ internal static class PlayerbotNavigation
 
         /// <summary><paramref name="point"/> on the floor nearest the bot's height, as <see cref="GroundNear(Map, Vector3, Vector3)"/>.</summary>
         internal Vector3 Near(Vector3 point) => GroundNear(_height, _usable, _bot.Z, point);
+
+        /// <summary>As <see cref="Near"/>, null where no usable floor qualifies.</summary>
+        internal Vector3? TryNear(Vector3 point) => TryGroundNear(_height, _usable, _bot.Z, point);
 
         private float Height(float x, float y, float z) => _map.Collision.GetHeight(x, y, z);
 

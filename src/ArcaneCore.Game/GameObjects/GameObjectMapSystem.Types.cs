@@ -74,7 +74,7 @@ public sealed partial class GameObjectMapSystem
     {
         if (go.Template.GetData(GooberSpellData) is var spellId and not 0)
         {
-            Spells?.Cast(go, spellId, player, null);
+            Spells?.CastUse(go, spellId, player);
         }
     }
 
@@ -106,7 +106,7 @@ public sealed partial class GameObjectMapSystem
         go.UseCount++;
         if (go.Template.GetData(SpellCasterSpellData) is var spellId and not 0)
         {
-            Spells?.Cast(go, spellId, player, null);
+            Spells?.CastUse(go, spellId, player);
         }
 
         return GameObjectUseResult.Ok;
@@ -146,7 +146,7 @@ public sealed partial class GameObjectMapSystem
             _logger.LogWarning("GameObject::Use unhandled GameObject type {Type} (entry {Entry}), used by {Player}", (uint)go.Type, go.Entry, player.Guid);
         }
 
-        return GameObjectUseResult.Unsupported;
+        return Unsupported(player, go, "type");
     }
 
     private static float CentreDistanceSquared(WorldObject a, WorldObject b)

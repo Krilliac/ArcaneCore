@@ -104,6 +104,36 @@ public sealed class PetAiTests
     }
 
     [Fact]
+    public void SetGameMaster_On_StopsThePetTheGuardiansAndTheCharmToo()
+    {
+        // vmangos Unit::CombatStopWithPets stops CONTROLLED_PET | CONTROLLED_GUARDIANS | CONTROLLED_CHARM (Unit.cpp:4663-4667).
+        (PetTestKit kit, Player owner, _, Creature pet) = Summoned();
+        using (kit)
+        {
+            kit.Cast(owner, GuardianSpell);
+            Creature guardian = Assert.Single(kit.Map.Pets!.GuardiansOf(owner));
+            Creature charmed = Enemy(kit, 9, 5);
+            owner.SetUInt64(UpdateFields.UnitFieldCharm, charmed.Guid.Value);
+
+            Creature petFoe = Enemy(kit, 7, 5);
+            Creature guardianFoe = Enemy(kit, 7, 6);
+            Creature charmFoe = Enemy(kit, 7, 7);
+            Assert.True(kit.Map.Combat.Attack(pet, petFoe));
+            Assert.True(kit.Map.Combat.Attack(guardian, guardianFoe));
+            Assert.True(kit.Map.Combat.Attack(charmed, charmFoe));
+
+            owner.SetGameMaster(true);
+
+            Assert.Null(pet.Combat.Victim);
+            Assert.Null(guardian.Combat.Victim);
+            Assert.Null(charmed.Combat.Victim);
+            Assert.DoesNotContain(pet, petFoe.Combat.Attackers);
+            Assert.DoesNotContain(guardian, guardianFoe.Combat.Attackers);
+            Assert.DoesNotContain(charmed, charmFoe.Combat.Attackers);
+        }
+    }
+
+    [Fact]
     public void ADefensivePetDefendsItsOwner_APassivePetDoesNot()
     {
         (PetTestKit kit, Player owner, _, Creature pet) = Summoned();

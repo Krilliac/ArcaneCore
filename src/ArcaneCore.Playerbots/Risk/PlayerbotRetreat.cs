@@ -99,7 +99,10 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
     private int _extensions;
     private int _failedReplans;
     private int _fanResume;
+    private FanPlan? _fan; // the fan a budget-deferred PlanAway resumes (null otherwise)
     private bool _attackStopped;
+
+    private readonly record struct FanPlan(Vector3[] Points, int[] Order, Vector3 Goal);
 
     internal bool Active { get; private set; }
 
@@ -141,7 +144,7 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
         _route = null;
         _extensions = 0;
         _failedReplans = 0;
-        _fanResume = 0;
+        ResetFan();
         _attackStopped = false;
         _startedMs = session.World.NowMs;
         _zones.AddRange(BuildZones(player, enemies, anchors));
@@ -244,6 +247,7 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
         Outcome = outcome;
         _route = null;
         _enemies.Clear();
+        ResetFan();
     }
 
     /// <summary>One think of the retreat; true while it owns the bot.</summary>
@@ -278,7 +282,7 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
             if (_route is null && deferred) return true; // the think's time went on the plans so far: the rest of the fan is the next think's
             if (_route is null)
             {
-                Trace += $"; no way out at {player.X:F1},{player.Y:F1}";
+                Trace += $"; no way out at {player.X:F1},{player.Y:F1} toward {goal.X:F1},{goal.Y:F1},{goal.Z:F1}";
                 if (++_failedReplans >= MaxFailedReplans) { Stop("cornered"); return false; }
                 return true;
             }
@@ -358,7 +362,11 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
         // No trail out of reach: straight away from the enemies, past the farthest leash.
         float needed = 0;
         foreach ((Vector3 anchor, float safe) in zones) needed = MathF.Max(needed, safe - Vector3.Distance(here, anchor));
-        return here + (Away(player, enemyList, zones) * MathF.Max(ExtendYards, needed + LeashMarginYards));
+        // Grounded as PlanAway's goals are, at the same distance (never cut back: Assess measures the escape yards to it and Safe() holds it
+        // outside every leash zone; where no floor qualifies the point stays as it is, PlanAway picks the real run). One FloorProbe (an
+        // object, two delegates, a region lookup) per Assess think while the fight is being lost.
+        PlayerbotNavigation.FloorProbe? floors = player.Map is { } map ? new PlayerbotNavigation.FloorProbe(map, here) : null;
+        return RunPoint(floors is null ? null : (Func<Vector3, Vector3?>)floors.TryNear, here, Away(player, enemyList, zones), MathF.Max(ExtendYards, needed + LeashMarginYards), shorten: false).Point;
     }
 
     private static bool Safe(Vector3 point, IReadOnlyList<(Vector3 Anchor, float Safe)> zones)
@@ -373,9 +381,9 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
 
     /// <summary>
     /// A further run of <see cref="ExtendYards"/>: straight away from the enemies when the navigation has a way there, else the first of
-    /// the turns of <see cref="FanDegrees"/> that has one, else the walkable point nearest the straight one
+    /// the turns of <see cref="FanDegrees"/> that has one, else the walkable point nearest the first grounded one
     /// (<see cref="PlayerbotNavigation.TryPlanToward"/>); null when none. Each goal stands on the ground there (the bot's own height
-    /// is yards off it on a slope). <paramref name="goal"/> is where the run goes (the straight one when there is none).
+    /// is yards off it on a slope). <paramref name="goal"/> is where the run goes (the first grounded point, which the nearest-point search also uses).
     /// <para>
     /// The retreat once asked only for the straight one, every think: where that was a cliff edge, water or a wall, all
     /// <see cref="MaxExtensions"/> replans were refused alike within a few thinks and the bot gave up cornered where it stood, although
@@ -392,34 +400,45 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
         Vector3 here = new(player.X, player.Y, player.Z);
         Vector3 away = Away(player);
         float straight = MathF.Atan2(away.Y, away.X);
-        // The bot's own region is looked up once for the up to six goal points below.
-        PlayerbotNavigation.FloorProbe? floors = player.Map is { } map ? new PlayerbotNavigation.FloorProbe(map, here) : null;
-        goal = OnGround(floors, here + (away * ExtendYards));
+        // A fan resumed after the budget keeps the points, grounding, order and goal it was cut with (_fan, kept only across a deferral):
+        // recomputed each think they would shift with the bot's own movement and _fanResume (an index into the order) would then skip or
+        // repeat points.
+        FanPlan plan;
+        if (_fanResume > 0 && _fan is { } cached) plan = cached;
+        else
+        {
+            // The bot's own region is looked up once for the up to five goal points.
+            PlayerbotNavigation.FloorProbe? floors = player.Map is { } map ? new PlayerbotNavigation.FloorProbe(map, here) : null;
+            Func<Vector3, Vector3?>? ground = floors is null ? null : floors.TryNear;
+            plan = BuildFan(here, away, straight, ground);
+        }
+
+        Vector3[] points = plan.Points;
+        int[] order = plan.Order;
+        goal = plan.Goal;
         PlayerbotRoute? fallbackRoute = null;
         Vector3 fallbackGoal = goal;
         ReadOnlySpan<float> fan = FanDegrees;
-        for (int index = _fanResume; index < fan.Length; index++)
+        for (int index = _fanResume; index < order.Length; index++)
         {
             // Each plan is a synchronous search on the world thread outside the think's own node bound (PlayerbotThinkProbe.NodeBudget
             // counts only fallbacks): past the budget the rest of the fan waits for the next think, which resumes where this stopped.
             if (index > _fanResume && PlayerbotThinkProbe.MsSince(started) >= PlanBudgetMs)
             {
                 if (fallbackRoute is not null) break; // a way through a hazard is in hand: take it rather than search on
+                _fan = plan;
                 _fanResume = index;
                 deferred = true;
                 return null;
             }
 
-            float degrees = fan[index];
-            float angle = straight + (degrees * MathF.PI / 180f);
-            Vector3 candidate = degrees == 0f ? goal
-                : OnGround(floors, here + (new Vector3(MathF.Cos(angle), MathF.Sin(angle), 0f) * ExtendYards));
+            Vector3 candidate = points[order[index]];
             if (PlayerbotNavigation.TryPlan(player, candidate, options, out PlayerbotRoute? route) && route is not null)
             {
                 if (!CrossesNewHazard(player, route))
                 {
                     goal = candidate;
-                    _fanResume = 0;
+                    ResetFan();
                     return route;
                 }
 
@@ -434,20 +453,60 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
         if (fallbackRoute is not null)
         {
             goal = fallbackGoal;
-            _fanResume = 0;
+            ResetFan();
             return fallbackRoute;
         }
 
         if (PlayerbotThinkProbe.MsSince(started) >= PlanBudgetMs && _fanResume < fan.Length)
         {
             // The fan's last plans spent the budget: the nearest-point search is the next think's (the fan itself is done).
+            _fan = plan;
             _fanResume = fan.Length;
             deferred = true;
             return null;
         }
 
-        _fanResume = 0;
+        ResetFan();
         return PlayerbotNavigation.TryPlanToward(player, goal, options, out PlayerbotRoute? toward, nowMs: session.World.NowMs) ? toward : null;
+    }
+
+    private void ResetFan()
+    {
+        _fanResume = 0;
+        _fan = null;
+    }
+
+    /// <summary>
+    /// The fan's points, each on the ground there (a shorter run where the full one has no floor on the bot's own component); a point
+    /// with no floor at any length is on no region and is tried last, only when no grounded one has a plan (flat test worlds, no terrain).
+    /// The order lists the grounded points first, then the ungrounded ones; the goal is the first grounded point (else the straight one).
+    /// </summary>
+    internal static (Vector3[] Points, int[] Order, Vector3 Goal) ShapeFan(Func<Vector3, Vector3?>? ground, Vector3 here, Vector3 away, float straight)
+    {
+        Vector3[] points = new Vector3[FanDegrees.Length];
+        bool[] grounded = new bool[FanDegrees.Length];
+        for (int i = 0; i < FanDegrees.Length; i++)
+        {
+            float angle = straight + (FanDegrees[i] * MathF.PI / 180f);
+            Vector3 direction = FanDegrees[i] == 0f ? away : new Vector3(MathF.Cos(angle), MathF.Sin(angle), 0f);
+            (points[i], grounded[i]) = RunPoint(ground, here, direction, ExtendYards, shorten: true);
+        }
+
+        Vector3 goal = points[0];
+        for (int i = 0; i < points.Length; i++)
+            if (grounded[i]) { goal = points[i]; break; }
+        int[] order = new int[points.Length];
+        int placed = 0;
+        for (int pass = 0; pass < 2; pass++)
+            for (int i = 0; i < points.Length; i++)
+                if (grounded[i] == (pass == 0)) order[placed++] = i;
+        return (points, order, goal);
+    }
+
+    private static FanPlan BuildFan(Vector3 here, Vector3 away, float straight, Func<Vector3, Vector3?>? ground)
+    {
+        (Vector3[] points, int[] order, Vector3 goal) = ShapeFan(ground, here, away, straight);
+        return new FanPlan(points, order, goal);
     }
 
     private bool CrossesNewHazard(Player player, PlayerbotRoute route)
@@ -470,13 +529,32 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
         return false;
     }
 
+    /// <summary>The shorter runs (yards) <see cref="RunPoint"/> falls back to where the full run has no floor.</summary>
+    private static ReadOnlySpan<float> ShorterRuns => [20f, 10f];
+
     /// <summary>
-    /// <paramref name="point"/> on the floor nearest the bot's own height (<see cref="PlayerbotNavigation.GroundNear(ArcaneCore.Game.Maps.Map, Vector3, Vector3)"/>:
-    /// searched from 2 yards above the bot, then from 20), or as it is where there is none within 30 yards or the floor is no ground the
-    /// bot can walk to. The search once started 20 yards above the point only, which in a cave or tunnel is inside the rock: the goal
-    /// stayed at the bot's height, on no region of the region graph (Timbermaw Hold, issues #1478 and #1479).
+    /// The point <paramref name="yards"/> from <paramref name="here"/> along <paramref name="direction"/>, put on the ground there by
+    /// <paramref name="ground"/> (null where no usable floor qualifies). Where the full run has none and <paramref name="shorten"/>
+    /// is set, the first of <see cref="ShorterRuns"/> that has one: a point with no floor stays at the bot's height on no region
+    /// (live goal component -1), and planning toward it is refused again and again. Grounded is false, and the point the full-run raw one,
+    /// when no length has a floor (or <paramref name="ground"/> is null).
     /// </summary>
-    private static Vector3 OnGround(PlayerbotNavigation.FloorProbe? floors, Vector3 point) => floors is null ? point : floors.Near(point);
+    internal static (Vector3 Point, bool Grounded) RunPoint(Func<Vector3, Vector3?>? ground, Vector3 here, Vector3 direction, float yards, bool shorten)
+    {
+        Vector3 raw = here + (direction * yards);
+        if (ground is null) return (raw, false);
+        if (ground(raw) is { } full) return (full, true);
+        if (shorten)
+        {
+            foreach (float shorter in ShorterRuns)
+            {
+                if (shorter >= yards) continue;
+                if (ground(here + (direction * shorter)) is { } near) return (near, true);
+            }
+        }
+
+        return (raw, false);
+    }
 
     /// <summary>A route to <paramref name="goal"/>: the navigation's, else back along the trail itself.</summary>
     private PlayerbotRoute? Plan(Player player, Vector3 goal, IReadOnlyList<Vector3> crumbs)

@@ -48,7 +48,8 @@ Behaviour, in the order vmangos runs it:
   (vmangos: "allowed to move self"), nothing while the player is possessed or charmed. A possessed creature is relocated (never while the server
   moves it on a spline) and the block is relayed to its observers except the possessor, a possessed player through its own locomotion observers
   and to its own client. CMSG_SET_ACTIVE_MOVER and CMSG_MOVE_NOT_ACTIVE_MOVER follow vmangos (the latter ignores the block while the moved
-  player, not the sender, is being teleported). The creature system runs the AI of a possessed creature and, while a fear or confuse holds it,
+  player, not the sender, is being teleported, on a taxi flight or inside the reject window, and runs the anticheat first). A controlled unit's
+  blocks are scored by the anticheat against the controller ([anticheat](anticheat.md)). The creature system runs the AI of a possessed creature and, while a fear or confuse holds it,
   that crowd-control generator (vmangos `ModConfuseSpell` starts it whoever controls the unit and `UpdateMotion` runs it: UNIT_STATE_POSSESSED is
   not in UNIT_STATE_CAN_NOT_MOVE); no leash and no generator of its own, and the default generator is not resumed when the crowd control ends
   (vmangos installs none for a possessed unit, MotionMaster.cpp:56). PetAI skips return movement and autocast while it is possessed.
@@ -90,6 +91,9 @@ Behaviour, in the order vmangos runs it:
 * **Data**: the creature spell slots a charm or possession puts on the bar (vmangos `Creature::m_spells` from `creature_spells` /
   `creature_template.spell_list_id`) are not in the repository: `CharmService.CreatureSpells` is the seam and defaults to none, so a charmed or
   possessed creature's bar holds the commands only. A charmed demon's spells therefore need that data.
+* **Creature spell lists**: the cmangos 1200 ms combat scheduler runs for EventAI and the plain creature AIs, from the tables of world schema 68 and
+  `creature_template.SpellList`. A charm bar does not read them, and the vmangos `spell_list_id` above is a different table, not translated. Delivered behaviour and
+  limits: `docs/design/creature-spell-lists.md`.
 * A charmed **player** is not moved by the server (vmangos MoveChase/MoveFollow: players have no server movement generator here) and casts no
   spells (PlayerControlledAI's usable-spell list); it melees what its controller fights. The group update broadcast at the end of a charm on a
   player and the loot release when a looting player is charmed are not done.

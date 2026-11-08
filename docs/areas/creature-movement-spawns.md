@@ -160,8 +160,8 @@ needs a Characters schema module).
   to the maximum at once.
 * `Creatures:Movement:EvadeRestoresFullHealth=true` restores the old instant reset (not retail).
 
-Limits: a Home leg whose mesh path is missing or partial teleports home (see "No path, no straight line" below); `RemoveAurasAtReset`, the low-health aura-state
-reset (`:39-42`) and `LoadCreatureAddon(true)` on arrival (`:94`) are not done (aura lane / addon reload).
+Limits: a Home leg whose mesh path is missing or partial teleports home (see "No path, no straight line" below); the low-health aura-state
+reset (`:39-42`) and `LoadCreatureAddon(true)` on arrival (`:94`) are not done (aura lane / addon reload). `RemoveAurasAtReset` is done: `CreatureMapSystem.Evade.cs` (the evade path, `ICreatureAuraReset`, `CreatureAuraReset.cs` with `SpellSystemCreatureCaster`).
 
 ### 5. Waypoint paths by entry, and the waypoint generator (slice `waypoint-path-data` + `waypoint-generator-core`)
 
@@ -251,8 +251,8 @@ A restart no longer brings every dead rare and boss back to life (classic-db: 75
 
 Data (Characters schema version **24**, `CreatureRespawnDataModule.Version`; allocated as 21 in the lane, renumbered at wave-4 integration): table `creature_respawn`
 (`instance_id, spawn_guid, map_id, respawn_time` unix seconds, key `(instance_id, spawn_guid)`; vmangos `sql/characters.sql:472-480`
-keys by guid and instance). `EfCreatureRespawnStore` upserts by EF update-or-insert (no `REPLACE INTO`, which PostgreSQL lacks), one
-transaction per batch, explicit lower-case column names. `LoadAsync(now)` deletes (does not just skip) rows whose time has passed
+keys by guid and instance). `EfCreatureRespawnStore` is a thin subclass: the SQL lives in the shared `EfRespawnStore` (`src/ArcaneCore.Data/Stores/EfRespawnStore.cs`, the place to edit it), which upserts by EF update-or-insert (no `REPLACE INTO`, which PostgreSQL lacks), one
+transaction per chunk of 500 keys of one instance (a call is several transactions, deletes first), explicit lower-case column names. `LoadAsync(now)` deletes (does not just skip) rows whose time has passed
 (vmangos `MapPersistentStateMgr.cpp:1070-1100`) and rows of a dungeon instance whose `instance` row is gone (the loot-state guard
 against a reused instance id). `EfInstanceStore.DeleteInstanceAsync` deletes the instance's rows with it. The module implements
 `ICharacterDataCleanup` as a deliberate no-op (the rows are keyed by spawn and instance, never by character).
@@ -271,7 +271,7 @@ Behaviour (`CreatureMapSystem.RespawnPersistence.cs`, `ICreatureRespawnPersisten
   for a battleground instance id (ids are reused after a restart) are deleted when the instance's creature system starts, so a new match starts
   alive. A creature that will never come back (`Creature.RespawnNeverSeconds`, a battleground's RESPAWN_STOP) is never saved on any map: it has no
   respawn time, and "now + never" would be a row the load never deletes.
-* The world side (`CreatureRespawnFeature`, `CreatureRespawnQueue`): reads answer from memory, writes are queued to one consumer off the world
+* The world side (`CreatureRespawnFeature`, `CreatureRespawnQueue`, a thin subclass: the queue body is the shared `RespawnWriteQueue`, `src/ArcaneCore.World/Persistence/RespawnWriteQueue.cs`, the place to edit batching, retries, retention and the stop drain): reads answer from memory, writes are queued to one consumer off the world
   thread, in order, retried three times; the creature systems save what is still dead at shutdown (`StopAsync` after the world stopped) and the
   queue drains. Inactive without a store or with `Creatures:Respawn:Persist=false`.
 
@@ -310,7 +310,7 @@ formula or the count) is TrinityCore's/AzerothCore's dynamic respawn rate. `Crea
   `GameObjectRespawnDataModule`, vmangos `MapPersistentState::SaveGORespawnTime`): saved when the object despawns, restored when its grid or
   instance map loads, deleted when it respawns or its instance is removed. Not stored: negative `spawntimesecs`, pool and spawn-group members,
   battleground maps, and durable instance chests (their consumed state is in `loot_state`). The persistence follows the creature feature
-  (`GameObjectRespawnFeature`, `GameObjectRespawnQueue`), without a `Persist` switch: it is on whenever the characters database is present.
+  (`GameObjectRespawnFeature`, `GameObjectRespawnQueue`; both queues and both stores are the shared `RespawnWriteQueue` and `EfRespawnStore`), switched by `GameObjects:PersistRespawn`.
 - **Persistence:** `RespawnAtMs` is set to the scaled time before `SaveRespawnOnDeath`, so `creature_respawn` stores the scaled time and a
   restart does not reset it. No schema change.
 - **DynamicRate:** when `World:Respawn:Dynamic:Enabled` is on, `Creatures:Respawn:DynamicRate` no longer applies to any creature, including the ones this feature excludes (elites when `IncludeElitesAndRares` is off, pool and spawn-group members, scripted delays); with it off, `DynamicRate` runs exactly as before.

@@ -101,10 +101,10 @@ internal sealed class AvScriptRig : IDisposable
     public static AvScriptRig Create(IEnumerable<CreatureTemplate> templates, IEnumerable<CreatureSpawn> spawns, float playerX, float playerY,
         IEnumerable<(uint Entry, uint PathId, CreatureWaypoint Point)>? paths = null, IEnumerable<GameObjectTemplate>? objectTemplates = null,
         IEnumerable<GameObjectSpawn>? objectSpawns = null, Team team = Team.Alliance, ICreatureHostility? hostility = null,
-        SpellTestKit? spells = null)
+        SpellTestKit? spells = null, CreatureSpellListCatalog? spellLists = null)
     {
         var ai = new CreatureAiContent([], [], new BroadcastTextCatalog(Texts.Select(id =>
-            new BroadcastText((uint)id, $"text {id}", string.Empty, 1, 0, 0, [0, 0, 0], [0, 0, 0]))));
+            new BroadcastText((uint)id, $"text {id}", string.Empty, 1, 0, 0, [0, 0, 0], [0, 0, 0])))) { SpellLists = spellLists ?? CreatureSpellListCatalog.Empty };
         CreatureContent content = new(templates, spawns, [], [], [], ai, entryWaypoints: paths);
         var caster = new FakeCaster();
         (WorldRuntime world, Map map, CreatureMapSystem creatures) = CreateAiSystem(content,

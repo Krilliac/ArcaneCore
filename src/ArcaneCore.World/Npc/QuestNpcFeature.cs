@@ -212,7 +212,9 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
             : CharacterQuestData.Empty;
         // Own the lists across the session/world handoff even if a custom store reuses buffers.
         var data = new CharacterQuestData(loaded.Quests.ToArray(), loaded.TaxiMask.ToArray());
+#pragma warning disable ARC0002 // the player is still loading: no map holds it and nothing else writes CharacterOwnership until activation, so the pool continuation cannot race
         Persistence.LoadCharacter(character.Id, data, revision, player.CharacterOwnership);
+#pragma warning restore ARC0002
         new PlayerQuestLog(player).Load(data.Quests, Services.Quests);
         _staged.Remove(player);
         _staged.Add(player, data);
@@ -264,7 +266,8 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
                 : null,
             ReputationRewards: reputation is { Factions.Count: > 0 } ? reputation : null,
             SpellCaster: progression && _services.GetService<SpellFeature>() is { } caster ? new SpellSystemQuestCaster(caster.System) : null,
-            Party: progression ? new WorldQuestParty(_services, () => _world) : null), npcs),
+            Party: progression ? new WorldQuestParty(_services, () => _world) : null,
+            Qa: _services.GetService<Game.Diagnostics.IGameQaObserver>()), npcs),
         Options, new PersistenceSink(this), () => _clock.GetUtcNow().ToUnixTimeSeconds(), _logger);
 
     private void OnPersistenceFatalFailure(Exception failure)
@@ -295,6 +298,8 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
             spells.InterruptChannelsWithFlags(player, (SpellAuraInterruptFlags)AuraInterruptMask.Interacting);
             spells.RemoveAurasWithInterruptFlags(player, AuraInterruptMask.Interacting);
         };
+
+        Services.BreakFeignDeath = player => spells.BreakSuccessfulFeignDeath(player);
 
         spells.RegisterEffect(SpellEffectName.Bind, context =>
         {

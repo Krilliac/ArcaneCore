@@ -117,10 +117,10 @@ public sealed partial class CharmInfo
     /// <summary>vmangos Pet::m_loyaltyTimer: milliseconds to the next loyalty tick (12 s period).</summary>
     internal int LoyaltyTimerMs { get; set; } = SummonService.LoyaltyPeriodMs;
 
-    /// <summary>vmangos Pet::m_resetTalentsCost: the copper the last untraining cost (0 before the first). Kept in memory only.</summary>
+    /// <summary>vmangos Pet::m_resetTalentsCost: the copper the last untraining cost (0 before the first). Persisted in character_pet.ResetTalentsCost (vmangos reset_talents_cost, Pet.cpp:582).</summary>
     public uint ResetTalentsCost { get; internal set; }
 
-    /// <summary>vmangos Pet::m_resetTalentsTime: unix seconds of the last untraining (0 before the first). Kept in memory only.</summary>
+    /// <summary>vmangos Pet::m_resetTalentsTime: unix seconds of the last untraining (0 before the first). Persisted in character_pet.ResetTalentsTime (vmangos reset_talents_time, Pet.cpp:583).</summary>
     public long ResetTalentsTime { get; internal set; }
 
     /// <summary>vmangos Pet::m_teachspells: pet ability → the spell that teaches it to the owner (see SummonService.Teaching).</summary>

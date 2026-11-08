@@ -76,7 +76,8 @@ public sealed class PhaseClosureTests
     private static bool Declares(IReadOnlyList<string> sources, string typeName, string methodName)
     {
         var typePattern = new Regex(@"\bclass " + Regex.Escape(typeName) + @"\b", RegexOptions.CultureInvariant);
-        var methodPattern = new Regex(@"\b" + Regex.Escape(methodName) + @"\s*[(<]", RegexOptions.CultureInvariant);
+        // A declaration, not any call of that name: an access modifier and a return type on the same line before it.
+        var methodPattern = new Regex(@"\b(?:public|internal|protected|private)\b[^\n;=(]*\s" + Regex.Escape(methodName) + @"\s*[(<]", RegexOptions.CultureInvariant);
         foreach (string source in sources)
         {
             if (source.Contains(typeName, StringComparison.Ordinal)

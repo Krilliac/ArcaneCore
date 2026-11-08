@@ -297,7 +297,38 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         Social?.Note(kicked, kicker, BotSocial.PlayerbotSocialEvent.Kicked);
     }
 
-    public Task QuiesceAsync(CancellationToken cancellationToken) => Task.CompletedTask; // world-thread only: nothing runs in the background
+    // The only background work is the instance_encounter read started at attach (it touches the core catalogue and the log): wait for it,
+    // bounded by the token, so a detach or pack swap leaves no code of this feature running.
+    public Task QuiesceAsync(CancellationToken cancellationToken) => _encounterLoad.WaitAsync(cancellationToken);
+
+    /// <summary>
+    /// The world is stopping: cancel an instance_encounter read still under way and wait for it (bounded), so a late read does not run
+    /// against a disposed service provider and fault after shutdown.
+    /// </summary>
+    public async Task StopAsync()
+    {
+        CancellationTokenSource? cancel = _encounterCancel;
+        if (cancel is null) return;
+        try
+        {
+            await cancel.CancelAsync().ConfigureAwait(false);
+            await _encounterLoad.WaitAsync(EncounterStopWait).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            logger.LogWarning("Playerbot runs: the instance_encounter read did not end within {Seconds} s of the stop", EncounterStopWait.TotalSeconds);
+        }
+        finally
+        {
+            if (_encounterLoad.IsCompleted)
+            {
+                cancel.Dispose();
+                if (ReferenceEquals(_encounterCancel, cancel)) _encounterCancel = null;
+            }
+        }
+    }
+
+    private static readonly TimeSpan EncounterStopWait = TimeSpan.FromSeconds(10);
 
     public void Detach(FeatureHandover handover)
     {

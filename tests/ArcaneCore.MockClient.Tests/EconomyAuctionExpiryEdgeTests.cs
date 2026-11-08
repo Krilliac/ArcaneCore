@@ -26,7 +26,7 @@ public sealed class EconomyAuctionExpiryEdgeTests
     [Fact]
     public async Task Expired_auction_cannot_be_cancelled_before_the_sweep()
     {
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        using var deadline = new CancellationTokenSource();
         CancellationToken token = deadline.Token;
         var clock = new ManualClock(DateTimeOffset.UtcNow);
         await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync(services =>
@@ -34,6 +34,8 @@ public sealed class EconomyAuctionExpiryEdgeTests
             services.AddSingleton<IAuctioneerAccess>(new OwnedAuctioneer());
             services.AddSingleton<TimeProvider>(clock);
         }, token);
+        // The fixture starts under its own hang bound; the scenario deadline is armed after it returns (TestDeadlines).
+        deadline.CancelAfter(TimeSpan.FromSeconds(45));
         await server.AddAccountAsync(Account, Password, token);
         await using WorldClient client = await AuthenticateAsync(server, token);
         var connection = new ScenarioConnection(client);

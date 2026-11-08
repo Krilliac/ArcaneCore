@@ -4,7 +4,7 @@ namespace ArcaneCore.Game.Spells.Mods;
 
 /// <summary>
 /// The charged mods one cast has used (vmangos <c>Spell::m_appliedMods</c>). A cast gets one when it is prepared; while it is
-/// the current scope (the consume windows <see cref="ISpellModEngine.Begin"/> opens around the cast-time and cast phases) the
+/// the current scope (the consume windows <see cref="ISpellModEngine.Begin"/> opens around the first CheckCast (range reads only), the cast-time read and the cast phase) the
 /// engine spends charges on it, and a mod with no charge left (-1) keeps applying to exactly the casts whose scope holds it.
 /// </summary>
 public sealed class SpellModScope
@@ -31,6 +31,9 @@ public sealed class SpellModScope
     /// <summary>vmangos Spell::HasModifierApplied (Spell.cpp:8282-8289).</summary>
     public bool HasModifierApplied(SpellMod mod) => _applied.Contains(mod);
 
+    /// <summary>True while the first CheckCast's window is open: only range reads spend charges (vmangos Spell::CheckRange, Spell.cpp:6896, :6917) (see <c>SpellSystem.BeginModCheckWindow</c>).</summary>
+    internal bool ChecksOnly { get; set; }
+
     internal void Add(SpellMod mod) => _applied.Add(mod);
 
     internal bool Remove(SpellMod mod) => _applied.Remove(mod);
@@ -50,5 +53,13 @@ public readonly struct SpellModWindow : IDisposable
         _scope = scope;
     }
 
-    public void Dispose() => _engine?.End(_scope!);
+    public void Dispose()
+    {
+        if (_scope is not null)
+        {
+            _scope.ChecksOnly = false;
+        }
+
+        _engine?.End(_scope!);
+    }
 }

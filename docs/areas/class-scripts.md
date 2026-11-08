@@ -58,9 +58,11 @@ same caster, removes the other holder; a weaker rank of one chain, or a weaker s
 | Well Fed, Food, Drink, Food and drink | generic family (standing cancels, regeneration auras; RETAIN_ITEM_CAST) and the priest sunfruit rows: :28-64, :92-100 | Well Fed one per target; food and drink pair as :157-176 |
 | Snare, Negative haste | a lone MOD_DECREASE_SPEED (not a daze) or a negative lone MOD_MELEE_HASTE: :163-172 | one per target, any caster; a weaker one is refused (Unit.cpp:3504-3507, SpellEntry.cpp:197-220) |
 
-LIMITS: the elixir specifics (battle, guardian, flask: vmangos reads the `spell_elixir` table) are not classified, so elixirs stack as before; the heal
-over time first-in-chain rule (Unit.cpp:3498-3500), the database `spell_group` rules and the `IsNoStackSpellDueToSpell` fallback are not modelled;
-passive spells are skipped; the rank chain is the spell family and name (no `SkillLineAbility` rank table). The tracker rule also exists in
+LIMITS: the elixir specifics (battle, guardian, flask: vmangos reads the `spell_elixir` table) are not classified, so elixirs stack as before; the database `spell_group` rules and the `IsNoStackSpellDueToSpell` fallback are not modelled;
+the rank chain is the spell family and name (no `SkillLineAbility` rank table). Passive and hidden spells are not skipped: they follow
+vmangos Unit.cpp:3366-3453 (a passive spell with no aura effect stacks with everything; a passive or hidden holder only meets the same caster or
+a party area aura, and then only a rank of its own chain, by the strict `SpellSpecifics.IsRankOf`). Drain Soul style holders (CHANNEL_DEATH_ITEM)
+are never replaced, and a holder whose aura handler is running is kept (Unit.cpp:3488, :3515). The tracker rule also exists in
 `Ranged/TrackingAuras.cs` and `Spells/Auras/VisualAuras.cs` (applies first, the general rule finds nothing left to remove).
 
 ## Talent scripts (lane `tb-t3-talent-class-scripts-pets`)
@@ -70,7 +72,7 @@ Talents that vmangos implements as per-spell class scripts. Each is a new file o
 
 | Talent | What it does | Code | vmangos |
 |---|---|---|---|
-| Ignite (11119, 11120, 12846, 12847, 12848) | Proc script on the talent's DUMMY aura (a fire crit, spell_proc_event school 4 / procEx CRITICAL_HIT): 4/8/12/16/20% of the crit's original amount is the tick damage of 12654 (PERIODIC_DAMAGE every 2 s for 4 s) cast by the mage on the victim. A live Ignite (anyone's) that still has ticks to deal gains the share and a stack (at 5 stacks only the duration refreshes), and its ticks start over, so the accumulated tick rolls into a fresh 4 s; one whose ticks are all dealt is replaced. | `Mage/IgniteScript.cs` | spell_mage.cpp:50-130 |
+| Ignite (11119, 11120, 12846, 12847, 12848) | Proc script on the talent's DUMMY aura (a fire crit, spell_proc_event school 4 / procEx CRITICAL_HIT): 4/8/12/16/20% of the crit's original amount is the tick damage of 12654 (PERIODIC_DAMAGE every 2 s for 4 s) cast by the mage on the victim. A live Ignite (anyone's) that still has ticks to deal gains the share and a stack (at 5 stacks only the duration refreshes), and its ticks start over, so the accumulated tick rolls into a fresh 4 s; one whose ticks are all dealt is replaced. The cast takes no done side (`SpellBonusModule`, SpellCaster.cpp:1571-1573). | `Mage/IgniteScript.cs` | spell_mage.cpp:50-130, SpellCaster.cpp:1571-1573 |
 | Combustion (11129, 28682) | Proc script on the invisible DUMMY aura (3 charges, fire spells): every fire hit adds a stack of the +10% crit buff 28682; only crits spend charges; the last crit removes the buff and the last charge. No buff (dispelled) ends the proc aura; cancelling the buff (AURA_REMOVE_BY_CANCEL) removes the proc aura. | `Mage/CombustionScript.cs` | spell_mage.cpp:144-205 |
 | Swiftmend (18562) | Cast check: the target needs a druid PERIODIC_HEAL of Rejuvenation (0x10) or Regrowth (0x40), else TARGET_AURASTATE. Effect: the one with the shortest remaining duration (the first on a tie) is consumed and 4 (Rejuvenation) or 6 (Regrowth) times its tick is added to the heal before the heal bonus (`SwiftmendHealModifier`). | `Druid/SwiftmendScript.cs` | spell_druid.cpp:101-160 |
 | Mana Tide (16191) | Periodic trigger script: a PERIODIC_TRIGGER_SPELL Mana Tide aura makes its target cast the trigger on itself with the aura's amount (dithered). The build 5875 row is APPLY_AREA_AURA_PARTY of PERIODIC_ENERGIZE (170 mana every 3 s, 20 yd) and never reaches the script; it restores mana through the area aura and the energize tick (pinned by a test). | `Shaman/ManaTideScript.cs` | spell_shaman.cpp:49-67, mangos-classic SpellAuras.cpp:1209-1213 |

@@ -12,7 +12,10 @@ public sealed partial class SpellSystem
 
     /// <summary>Publish a triggered cast after durable costs and enchant fields are committed.
     /// No effect or cost executes again; duplicate callbacks for the same plan are ignored.
-    /// This is live publication, not a durable crash-recovery journal.</summary>
+    /// This is live publication, not a durable crash-recovery journal.
+    /// vmangos builds both sides of a trade spell triggered (TradeHandler.cpp:362, :399) and prepares them at :510-513, so SMSG_SPELL_GO follows
+    /// <c>Spell::IsNeedSendToClient</c> for a triggered cast: only a spell with a visual, a channel or a missile speed is shown. The cooldown does not
+    /// depend on it.</summary>
     public bool PublishCommittedTradeEnchantment(Guid operationId, Player caster, Item item, TradeEnchantmentPlan plan)
     {
         ArgumentNullException.ThrowIfNull(caster);
@@ -38,8 +41,12 @@ public sealed partial class SpellSystem
                 itemCategoryCooldownMs: itemCast.ItemSpell.CategoryCooldown,
                 itemCategory: itemCast.ItemSpell.Category == 0 ? null : itemCast.ItemSpell.Category,
                 itemId: itemCast.CastItemEntry);
-            SendToSet(caster, WorldOpcode.SmsgSpellGo, SpellPackets.BuildSpellGo(castItemOrCaster, caster.Guid, spell.Id,
-                SpellCastFlags.Unknown9, [], [], itemTargets), includeSelf: true);
+            if (IsShownWhenTriggered(spell))
+            {
+                SendToSet(caster, WorldOpcode.SmsgSpellGo, SpellPackets.BuildSpellGo(castItemOrCaster, caster.Guid, spell.Id,
+                    SpellCastFlags.Unknown9, [], [], itemTargets), includeSelf: true);
+            }
+
             return true;
         }
 
@@ -52,8 +59,12 @@ public sealed partial class SpellSystem
         if (plan.PowerCost > 0 && spell.PowerType == (int)PowerType.Mana
             && ((uint)spell.AttributesEx2 & Casters.CasterAttributes.Ex2DontBlockManaRegen) == 0)
             caster.Combat.NoteManaUsed(spell.Id);
-        SendToSet(caster, WorldOpcode.SmsgSpellGo, SpellPackets.BuildSpellGo(caster.Guid, caster.Guid, spell.Id,
-            SpellCastFlags.Unknown9, [], [], targets), includeSelf: true);
+        if (IsShownWhenTriggered(spell))
+        {
+            SendToSet(caster, WorldOpcode.SmsgSpellGo, SpellPackets.BuildSpellGo(caster.Guid, caster.Guid, spell.Id,
+                SpellCastFlags.Unknown9, [], [], targets), includeSelf: true);
+        }
+
         return true;
     }
 

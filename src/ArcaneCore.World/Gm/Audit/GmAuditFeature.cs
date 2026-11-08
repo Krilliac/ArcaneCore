@@ -2,9 +2,12 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Cluster.Social;
 using ArcaneCore.Kernel.Gm;
+using ArcaneCore.Kernel.Logging;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Chat;
+using ArcaneCore.World.Cluster.Social;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Gm.Core;
 using ArcaneCore.World.Net;
@@ -27,6 +30,8 @@ public sealed record GmAuditEntry(long Unix, int AccountId, string Player, strin
 /// vmangos HandleChatMessageOpcode stay in <see cref="ChatFeature"/>. With no <see cref="IGmAuditStore"/> registered
 /// everything lives in memory only. State is guarded by one lock: commands run on the world thread, the character
 /// deletion hook does not.
+/// <para>The ticket queue is the Social lease holder's. A node that did not hold that lease at attach holds its ticket writes back and rereads the queue when it gains the lease at run time (see
+/// <see cref="EnsureTicketsCurrent"/>), so what it read at attach never overwrites what the previous holder wrote.</para>
 /// </summary>
 public sealed partial class GmAuditFeature(
     IServiceScopeFactory scopes, ILoggerFactory loggers, IConfiguration? configuration = null, TimeProvider? clock = null, ShutdownDrain? drain = null)
@@ -59,6 +64,11 @@ public sealed partial class GmAuditFeature(
 
         // Fail closed: a database that cannot be read must not start the world with every mute forgotten.
         using IServiceScope scope = scopes.CreateScope();
+
+        // Decided before the read below: a lease that arrives after this rereads the queue, and one held now was held when the read ran.
+        _world = world;
+        _leaseKeeper = scope.ServiceProvider.GetService<RealmAuthorityLeaseKeeper>();
+        _ticketsStale = !RealmAuthorityLeaseKeeper.HeldOrUnclustered(_leaseKeeper, RealmAuthorityScopes.Social);
         if (scope.ServiceProvider.GetService<IGmAuditStore>() is { } store)
         {
             Load(store.LoadActiveMutesAsync(NowUnixSeconds).GetAwaiter().GetResult(),
@@ -72,9 +82,17 @@ public sealed partial class GmAuditFeature(
         long now = NowUnixSeconds;
         Writes.Save(ExpiredMutesKey, store => store.DeleteExpiredMutesAsync(now));
         world.Updated += ExpireMutes;
+        if (_ticketsStale)
+        {
+            world.Updated += ReloadTicketsOnLeaseGain;
+        }
     }
 
-    public Task StopAsync() => Writes.StopAsync();
+    public async Task StopAsync()
+    {
+        await StopTicketReloadAsync().ConfigureAwait(false);
+        await Writes.StopAsync().ConfigureAwait(false);
+    }
 
     // ---- mutes ----------------------------------------------------------------------------------
 
@@ -185,6 +203,12 @@ public sealed partial class GmAuditFeature(
 
     // ---- audit tail -----------------------------------------------------------------------------
 
+    /// <summary>
+    /// Longest command text kept in the tail. The text is client-typed and is echoed back to GMs by <c>.arcane gmlog</c>, so control and format
+    /// characters are escaped on the way in (<see cref="LogSafe"/>), the same as the log line itself.
+    /// </summary>
+    internal const int MaxTailCommandLength = 1024;
+
     /// <summary>Remember an audit line (the newest <see cref="GmOptions.AuditTailSize"/> are kept).</summary>
     public void RecordCommand(int accountId, string player, string commandText, string line)
     {
@@ -193,6 +217,8 @@ public sealed partial class GmAuditFeature(
             return;
         }
 
+        string safePlayer = LogSafe.Escape(player);
+        string safeCommand = LogSafe.Escape(commandText, MaxTailCommandLength);
         lock (_gate)
         {
             while (_tail.Count >= _tailSize)
@@ -200,7 +226,7 @@ public sealed partial class GmAuditFeature(
                 _tail.Dequeue();
             }
 
-            _tail.Enqueue(new GmAuditEntry(NowUnixSeconds, accountId, player, commandText, line));
+            _tail.Enqueue(new GmAuditEntry(NowUnixSeconds, accountId, safePlayer, safeCommand, line));
         }
     }
 

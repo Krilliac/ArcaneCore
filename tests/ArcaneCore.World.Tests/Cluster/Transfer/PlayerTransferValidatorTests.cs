@@ -202,6 +202,15 @@ public sealed class PlayerTransferValidatorTests
         Assert.NotEmpty(result.Errors);
     }
 
+    [Theory]
+    [InlineData(false, PlayerTransferStage.Reserve, PlayerTransferStage.Reserve, "held", false)] // the environment alone does nothing: the production case
+    [InlineData(true, PlayerTransferStage.Reserve, PlayerTransferStage.Reserve, "held", true)]
+    [InlineData(true, PlayerTransferStage.Reserve, PlayerTransferStage.CommitDecision, "held", false)]
+    [InlineData(true, PlayerTransferStage.Reserve, null, "held", false)]
+    [InlineData(true, PlayerTransferStage.Reserve, PlayerTransferStage.Reserve, null, false)]
+    public void TheStageHold_NeedsTheSwitch_TheStageAndTheDirectory(bool enabled, PlayerTransferStage reached, PlayerTransferStage? holdStage, string? directory, bool holds)
+        => Assert.Equal(holds, TransferStageProbe.Holds(enabled, reached, holdStage, directory));
+
     [Fact]
     public void ValidateBundle_RejectsMissingOrCorruptFields()
     {

@@ -1,4 +1,5 @@
 using ArcaneCore.Game;
+using ArcaneCore.Game.WorldState.Zones;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.BotSocial;
@@ -138,6 +139,9 @@ public sealed class PlayerbotRivalryReplyWorldTests
         await using SocialWorld world = await RivalryKit.StartAsync(chat: true);
         (string[] bots, ulong[] guids, ulong foeGuid, WorldTestClient foe) = await CrowdAsync(world, "Rvwrp", 8);
         await using WorldTestClient keep = foe;
+        // The foe stands in a War Mode exempt area: with War Mode on, a bot that is idle and sees a flagged enemy attacks it (PlayerbotBrain.TryInitiate), and a bot in
+        // combat does not answer an emote. Whether a think ran before the wave landed was a race; nothing the bots do on their own may start a fight here.
+        await world.Host.OnWorldAsync(() => PvpAreaState.SetWarModeExempt(RivalryKit.Online(world, "Rvwrpfoe"), true));
         world.Options.Social.WarMode.Enabled = true;
         foreach (string bot in bots) await RivalryKit.SeedAsync(world, bot, "Rvwrpfoe", killerIsBot: false, kills: 1); // normal -20, war -60: Disliked and a war rival
         PlayerbotRelation seeded = RivalryKit.RelationOf(world, world.Bots[bots[0]], foeGuid)!;

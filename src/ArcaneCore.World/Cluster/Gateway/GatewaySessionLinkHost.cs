@@ -69,6 +69,11 @@ public interface IGatewayControlSubmitSink
 
     /// <summary>The gateway tells the worker the outcome of an operation it submitted, or text for an operator.</summary>
     void OnNotice(ControlNotice notice);
+
+    /// <summary>The link that carried this session went down: an answer to a submit of that session has nowhere to arrive, so nothing should wait for one. Called on the link's receive loop, before the session closes.</summary>
+    void OnSessionLinkLost(long sessionGeneration)
+    {
+    }
 }
 
 /// <summary>The acceptor's answer: <see cref="AuthResponseCode.Ok"/> with a session, or a refusal code for the client.</summary>
@@ -264,12 +269,26 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
     /// </summary>
     public IGatewayControlHandler? ControlHandler { get; set; }
 
+    /// <summary>
+    /// Called on a link's receive loop for the gateway's LinkSlot frame, with the slot that link serves. Set once, before <see cref="Start"/>; must not block. Null: the name is ignored (a worker with no control service has no use for it).
+    /// </summary>
+    public Action<string>? SlotNamed { get; set; }
+
     /// <summary>Test seam: awaited before every accept; an exception it throws behaves like a failed accept.</summary>
     internal Func<CancellationToken, ValueTask>? BeforeAcceptForTests { get; set; }
 
     public void Start()
     {
-        _listener.Start();
+        try
+        {
+            _listener.Start();
+        }
+        catch (SocketException ex)
+        {
+            _listener.Stop();
+            throw WorldBindFailedException.For("gateway link port", _listener.LocalEndpoint.ToString()!, ex);
+        }
+
         _acceptTask = Task.Run(() => AcceptLoopAsync(_stop.Token));
     }
 
@@ -442,6 +461,9 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
                     case GatewayWorkerFrameType.WardenPosture:
                         OnWardenPosture(link, body.Span);
                         break;
+                    case GatewayWorkerFrameType.LinkSlot:
+                        SlotNamed?.Invoke(GatewaySessionWire.DecodeLinkSlot(body.Span));
+                        break;
                     case GatewayWorkerFrameType.SessionOpen:
                         OnOpen(link, body.Span, ct);
                         break;
@@ -498,6 +520,7 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
             ReleaseSource(link);
             foreach (LinkSession session in link.Sessions.Values)
             {
+                OnSessionLinkLost(session.Generation);
                 session.CloseFromLink(ClusterSessionDetachReason.LinkLost);
             }
 
@@ -552,6 +575,18 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             _logger.LogFault("cluster.control", ex, "The control submit reply handler failed");
+        }
+    }
+
+    private void OnSessionLinkLost(long generation)
+    {
+        try
+        {
+            SubmitSink?.OnSessionLinkLost(generation);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogFault("cluster.submit-sink", ex, "The submit sink failed on the link loss of session {Generation}", generation);
         }
     }
 

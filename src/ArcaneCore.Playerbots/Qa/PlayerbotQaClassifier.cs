@@ -97,6 +97,9 @@ internal static class PlayerbotQaClassifier
                     (s.Goal.Length != 0 && !s.Goal.StartsWith(PlayerbotQaAnomalyFeed.BotSubsystemPrefix, StringComparison.Ordinal) ? "recurring world anomaly " : "recurring bot outcome anomaly ")
                     + (s.Goal.Length != 0 ? s.Goal : "bot") + "/" + (s.Reason.Length != 0 ? s.Reason : "anomaly")
                     + (s.Detail.Length != 0 ? ": " + s.Detail : string.Empty), title);
+            case QaSignalKind.InteractionFailed or QaSignalKind.QuestBroken or QaSignalKind.ObjectUnsupported or QaSignalKind.ScriptUnsupported
+                or QaSignalKind.OpcodeUnhandled:
+                return PlayerbotQaInteractionText.Classify(s, facts, title);
 
             default:
                 // Every kind has a case above (PlayerbotQaKindExhaustivenessTests): a new kind must say how it is classified.

@@ -53,21 +53,24 @@ public sealed class StaticMutableStateAuditTests(ITestOutputHelper output)
 
         ["ArcaneCore.World.Playerbots.Control.BotController.s_sequence"] = "control event sequence, Interlocked.Increment and Interlocked.Read",
         ["ArcaneCore.World.Playerbots.Groups.PlayerbotWorldBossMeters._active"] = "gauge value, Volatile.Write by the coordinator and Volatile.Read by the meter callback",
-        ["ArcaneCore.World.Playerbots.ElevatorRegions.s_knownBox"] = "Volatile reference to an immutable per-tuning-generation box; a racing rebuild only recomputes the same rows",
+        ["ArcaneCore.World.Playerbots.ElevatorRegions.s_knownBox"] = "Volatile reference to an immutable per-tuning-generation box; a race across TuningCatalog.Replace can briefly publish an older generation's box, which the next reader rebuilds",
         ["ArcaneCore.World.Playerbots.PlayerbotShip.DockComputeCount"] = "process-wide counter, Interlocked",
-        ["ArcaneCore.World.Playerbots.PlayerbotShipNetwork.s_classicBox"] = "Volatile reference to an immutable per-tuning-generation box; a racing rebuild only recomputes the same map",
+        ["ArcaneCore.World.Playerbots.PlayerbotShipNetwork.s_classicBox"] = "Volatile reference to an immutable per-tuning-generation box; a race across TuningCatalog.Replace can briefly publish an older generation's box, which the next reader rebuilds",
         ["ArcaneCore.World.Playerbots.PlayerbotPathShaping.s_paths"] = "process-wide counter, Interlocked",
         ["ArcaneCore.World.Playerbots.PlayerbotPathShaping.s_cornersShaped"] = "process-wide counter, Interlocked",
         ["ArcaneCore.World.Playerbots.PlayerbotPathShaping.s_fallbacks"] = "process-wide counter, Interlocked",
         ["ArcaneCore.World.Playerbots.PlayerbotPathShaping.s_queries"] = "process-wide counter, Interlocked",
         ["ArcaneCore.World.Playerbots.PlayerbotPathShaping.s_ticks"] = "process-wide counter, Interlocked",
         ["ArcaneCore.World.Playerbots.PlayerbotFleetCommands.s_nextPostId"] = "post id, Interlocked.Increment",
-        ["ArcaneCore.World.Playerbots.PlayerbotGearScoreSeam.UpgradeGain (property)"] = "test seam, set by tests before the world runs",
+        ["ArcaneCore.World.Playerbots.PlayerbotGearScoreSeam.UpgradeGain (property)"] = "test seam: the shield visit test in PlayerbotEconomyVisitBuyWorldTests swaps it on the world thread (a single reference write, atomic) and restores it in a finally; the override answers only for its own scenario item and delegates every other item to DefaultUpgradeGain, so economy classes running in parallel read production values (PlayerbotEconomyAnomalyTests, which reads the scorer through the economy bot, can still see an overridden scorer for that one scenario item while the swap is live, and so only delegates to the default for every other item)",
+        ["ArcaneCore.World.Playerbots.PlayerbotGearScoreSeam.WornScore (property)"] = "test seam: the economy world tests swap it on the world thread (a single reference write, atomic); only PlayerbotEconomyVisitBuyWorldTests writes it, one test at a time, and other classes' visits read the default",
+        ["ArcaneCore.World.Playerbots.PlayerbotGearScoreSeam.UpgradeProfile (property)"] = "test seam: swapped like WornScore (atomic reference write, one test at a time in PlayerbotEconomyVisitBuyWorldTests)",
         ["ArcaneCore.World.Playerbots.PlayerbotRegionRoutes.s_syncFallbacks"] = "telemetry counter, Interlocked.Increment and Interlocked.Read only",
         ["ArcaneCore.World.Playerbots.PlayerbotRegionRoutes.s_workers"] = "queue worker count, read and written only under the QueueGate lock (the queue, the gate and the default SyncSearchBudget are readonly)",
         ["ArcaneCore.World.Playerbots.PlayerbotTravel.s_staticRoutes"] = "Volatile reference to an immutable route list",
         ["ArcaneCore.World.Playerbots.Scenarios.PlayerbotScenarioCommands.s_running"] = "Interlocked.CompareExchange flag",
         ["ArcaneCore.World.Playerbots.Scenarios.ScenarioPacketLog.s_sequence"] = "sequence, Interlocked.Increment",
+        ["ArcaneCore.World.Spells.SpellCommands.s_facingSplineId"] = "spline id counter for the .cast facing splines, Interlocked.Increment (like ArcaneCore.Game.Locomotion.ForcedMovement.s_splineId)",
     };
 
     [Fact]

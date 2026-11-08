@@ -11,7 +11,8 @@ namespace ArcaneCore.MockClient.Tests;
 /// tests of the deadline itself pass the default explicitly.
 /// <para>
 /// A scenario deadline is armed after <see cref="ArcaneCore.MockClient.Hosting.SyntheticArcaneServer.StartAsync(System.Threading.CancellationToken)"/>
-/// returns, never passed into it: startup keeps the fixture's own 60 s hang bound. Passing a 20-40 s scenario token into startup
+/// returns, never passed into it: startup keeps the fixture's own 60 s hang bound, which times a startup's own work (cold starts in a
+/// process run one at a time, so that bound is not spent on a queue of them). Passing a 20-40 s scenario token into startup
 /// spent the scenario's budget on fixture construction (three SQLite schemas, content seed, a real world host) whenever the host
 /// was loaded, and the test failed with a bare cancellation in startup itself or in whichever login step was in flight when the
 /// budget ran out (QuestGreetingWire, InactiveQueueWire, ItemFeedbackProbe, EndToEnd, ReplayTranscript, QuestRewardAdversarial).

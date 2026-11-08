@@ -1,5 +1,6 @@
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Schema;
+using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -10,7 +11,7 @@ namespace ArcaneCore.Data.Creatures;
 /// The durable respawn time of one dead spawn (vmangos <c>creature_respawn</c>: guid, respawn_time, instance, map;
 /// sql/characters.sql:472-480). The key is the spawn guid within a map instance (0 = the shared world copy).
 /// </summary>
-public sealed class CreatureRespawnRow
+public sealed class CreatureRespawnRow : IRespawnRow
 {
     public int InstanceId { get; set; }
 

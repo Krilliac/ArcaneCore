@@ -6,6 +6,8 @@ dumps are a second accepted layout. The dumps are GPL-3 data with Blizzard copyr
 `COPYRIGHT.md`): they are read from wherever the developer keeps them, never committed, and the importer refuses to write a
 database or report inside a git work tree unless git ignores the path.
 
+World schema v70 adds `page_text` (`Entry`, `Text`, `NextPage`) and `item_enchantment_template` (`Entry`, `Ench`, `Chance`; `ItemTextWorldDataModule`), which the world used to read from the dump at every start. `ItemTextDumpImporter` reads both on `import` (with `--replace` a table is emptied only when the dump carries rows for it) and `refresh` (replaces each table the dump carries), keeps every `page_text` row (the world's page catalog applies the vmangos `LoadPageTexts` checks for a missing next page and a loop) and, for the vmangos layout, only the `item_enchantment_template` rows whose `patch_min`/`patch_max` hold patch 10 (`LoadRandomEnchantmentsTable`). Nothing is seeded: a database upgraded to 70 has neither table filled until the dump is imported or refreshed.
+
 World schema v60 adds `npc_text_broadcast_text` (`Id`, `Prob0..7`, `BroadcastTextId0..7`; `NpcTextBroadcastDataModule`), the form of an NPC greeting whose eight weighted variants are `broadcast_text` ids (classic-db, mangos-classic `src/game/Globals/ObjectMgr.cpp:5624-5684`; vmangos has no such table). Import reads it with the other NPC tables, and `refresh` replaces it (a dump without the table leaves it alone) and reports its count. The NPC content store turns a row into the same eight-variant text an inline `npc_text` row gives: the variant's text is the broadcast male (`Text`) and female (`Text1`) text, its language is `LanguageID`, and `EmoteID1..3` with `EmoteDelay1..3` are its three emote/delay pairs. Two deliberate divergences from mangos-classic: an inline `npc_text` row with the same id wins (mangos-classic `:5653-5655` overwrites it with the broadcast row and logs "Overwriting."; z2815 has no id in both tables), and a variant whose broadcast id is 0 or has no `broadcast_text` row gets probability 0 (mangos-classic `:5659, :5674-5682` keeps the probability and sends empty text, which can pick a blank variant). An id found in neither table still answers with the default greeting.
 
 World schema v56 adds `creature_equip_template` (`Entry`, `EquipEntry1..3`, item entries for the main hand, off hand and ranged slot) and `creature_template.EquipmentTemplateId`
@@ -39,8 +41,9 @@ World schema v53 adds `npc_vendor_template` and `creature_template.VendorTemplat
 **`dbscripts_on_spell` (world 65).** A spell's DB script runs when its DUMMY or SCRIPT_EFFECT effect hits and no code script claims the
 spell, as cmangos `Spell::EffectDummy` / `EffectScriptEffect` fall through to `ScriptsStart(SCRIPT_TYPE_SPELL, ...)`
 (`Spells/SpellEffects.cpp:1517-1532`, `:4176-4191`) and vmangos `EffectScriptEffect` to `spell_scripts` (`SpellEffects.cpp:4565-4571`).
-Only the effect of the highest priority starts it (SCRIPT_EFFECT 10, DUMMY 9; cmangos `ScriptMgr::CanSpellEffectStartDBScript`,
-`DBScripts/ScriptMgr.cpp:67-106`), on every hit. The steps run on the map's DB script executor (`SpellSystem.DbSpellScripts.cs`); a map
+Every SCRIPT_EFFECT effect that hits starts it (vmangos runs the trailing block once per effect; the cmangos priority rule, SCRIPT_EFFECT 10 over
+DUMMY 9, `ScriptMgr::CanSpellEffectStartDBScript`, `DBScripts/ScriptMgr.cpp:67-106`, would let only the first start it). A DUMMY effect starts it only
+as the fallback, for a spell with no SCRIPT_EFFECT effect that no code claims (`SpellSystem.DbSpellScripts.cs`), on every hit. The steps run on the map's DB script executor (`SpellSystem.DbSpellScripts.cs`); a map
 gets that executor when it has creature spawns, as the event scripts of SEND_EVENT need too.
 
 Sources, in `refresh` (and `import`, through the creature importer):
@@ -64,7 +67,7 @@ than write them with their vmangos ids. The vmangos dump is GPL data and is neve
 only into an effect slot the world's `spell_template` leaves empty. The vmangos dump (db-4641790) has 371 rows: 291 rewrite effects
 classic-db defines, 27 name spells classic-db lacks, and 53 fill empty slots, most of them vmangos' way of implementing spells ArcaneCore
 implements in code (Bloodthirst's heal trigger, Blade Flurry). `refresh` therefore writes only the spells in
-`SpellEffectModDumpImporter.ReviewedSpells` (16468 Mother's Milk: a 12 s periodic trigger of 15474 Web Explosion) and names every
+`SpellEffectModDumpImporter.ReviewedSpells` (16468 Mother's Milk: a 12 s periodic trigger of 15474 Web Explosion; 8892 and 13141 rocket boots: a 1 s periodic trigger of the explosion, rolled 1 in 100 by `PeriodicTriggerAuraModule`) and names every
 other spell in a warning line. A spell joins the list once its row is checked against both cores and ArcaneCore's own scripts.
 
 Limits:
@@ -268,6 +271,9 @@ memberless groups.
 `totem_spell` table. `--replace` replaces the table; without it, a duplicate target key fails the entire
 import and restores all earlier importer writes. Repeating an import with `--replace` produces the same mappings.
 
+- The cmangos spell list tables (`creature_spell_list_entry`, `creature_spell_list`, `creature_spell_targeting`, `combat_condition`, `unit_condition`) and
+  `creature_template.SpellList` import into world schema 68, and `refresh` backfills them ([creature spell lists](../design/creature-spell-lists.md)). A row the
+  reference would refuse is imported as it stands and left out, with an anomaly, when the catalog loads. The totem mapping below reads the same `creature_spell_list` rows.
 - For classic-db, candidates come from summon-totem effects 74 and 87–90 in `spell_template`, or
   `creature_template.AIName = TotemAI`. An explicit `creature_template.SpellList` (`spell_list_id`
   is accepted as an alias) takes precedence and selects the lowest-position positive spell in
@@ -338,7 +344,7 @@ were copied into the implementation.
 | Command | What it does |
 |---|---|
 | `plan <dump>...` | reads the dumps and prints, per table an importer reads, dialect, rows, keys, duplicates, mapped and not-imported columns; then the tables no importer reads yet and the statements not applied. Writes no database. |
-| `import <dump>...` | the scan above, then `CreatureDumpImporter`, `GameObjectLootDumpImporter` and `ItemQuestDumpImporter` inside one `ImportTransaction`. `--replace` empties the importers' tables first; without it a key conflict fails and nothing changes. `--dry-run` reads and counts, writes nothing. `--dbc-dir <DBFilesClient>` also reads `Lock.dbc` (game object locks). `--quest-xp derived|none` (default derived, see below). |
+| `import <dump>...` | the scan above, then `CreatureDumpImporter`, `GameObjectLootDumpImporter` and `ItemQuestDumpImporter` inside one `ImportTransaction`. `--replace` empties the importers' tables first; without it a key conflict fails and nothing changes. Exception: `EnchantProcDumpImporter` and `ReputationTemplatesDumpImporter` empty a table only when the input carried rows for it, so a dump without that table keeps what an earlier import wrote; every other importer on this path still empties its tables unconditionally. `--dry-run` reads and counts, writes nothing. `--dbc-dir <DBFilesClient>` also reads `Lock.dbc` (game object locks). `--quest-xp derived|none` (default derived, see below). |
 | `import-dbc <dir>` | the five spell DBCs through `SpellDbcImporter` / `EfSpellContentStore` (what `arcane-spell-import` does). With `Map.dbc` and `AreaTable.dbc` (and `WMOAreaTable.dbc`) in the directory it also fills `map_template`, `area_template` and `wmo_area_template` the way `import-map-dbc` does, but only when they are empty (a world with rows keeps them). It fills `areatrigger_template`, `taxi_nodes`, `taxi_path` and `race_taxi_start` from `AreaTrigger.dbc`, `TaxiNodes.dbc`, `TaxiPath.dbc` and `ChrRaces.dbc` (field 14, the starting flight-path mask) the same way (only when empty); `refresh <dump> --dbc-dir <dir>` rewrites them. |
 | `refresh-portals <dump>...` | Replace only `areatrigger_teleport` in an existing current-schema world, including required item, quest and condition fields. It leaves `game_tele`, area-trigger quest relations and other content untouched. The source must contain portal rows; `--dry-run` counts them without writing. |
 | `verify` | table counts and spawns whose template does not exist (entry 0 is reported as a note, see Limits). An empty `map_template`, `area_template`, `areatrigger_template`, `taxi_nodes` or `taxi_path` is a problem (exit 6) that names the command filling it: without them the World skips every instance portal and `.gps` keeps the login zone. |

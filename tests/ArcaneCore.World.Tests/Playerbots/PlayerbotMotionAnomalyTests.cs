@@ -658,6 +658,76 @@ public sealed class PlayerbotMotionAnomalyTests
         Assert.True(scenario.Capture.Any(Key(Code.Airwalk)), scenario.Capture.Describe());
     }
 
+    // ---- resuming a route away from its leg (#776) -------------------------------------------------------------------------------
+
+    [Theory]
+    [InlineData(4f)]
+    [InlineData(6f)]
+    public async Task AMeshRouteResumedBehindAWall_WalksTheMeshsWayBackOntoItsLeg_NotThroughTheWall(float yardsOffLeg)
+    {
+        var mesh = new ScriptedMesh();
+        await using Scenario scenario = await Scenario.StartAsync(blocked: static (_, _, _) => false, start: false, mesh: mesh);
+        Vector3 origin = scenario.Route.Points[0], corner = scenario.Route.Points[1];
+        Vector3 aside = origin + new Vector3(5, yardsOffLeg, 0), around = origin + new Vector3(25, yardsOffLeg, 0);
+        // A wall between the leg and where the bot now stands, open past its east end: the mesh goes around it.
+        Func<Vector3, Vector3, bool> wall = (a, b) => CrossesWall(a, b, origin);
+        scenario.Ground.Blocked = (a, b, _) => wall(a, b);
+        mesh.Edge = wall;
+        mesh.Way = (from, to) => wall(from, to) ? [from, around, to] : [from, to];
+        await PlaceAsync(scenario, aside);
+
+        Assert.True(await scenario.StartAsync(), "the resumed route did not start: " + scenario.Capture.Describe());
+        await scenario.WalkAsync(3000); // one heartbeat 21 yards on: a straight walk to the corner would have crossed the wall
+        Assert.False(scenario.Capture.Any(Key(Code.WallCrossed)), scenario.Capture.Describe());
+        Assert.Equal([aside, around, corner], scenario.Route.Points);
+        Vector3 at = await scenario.Host.OnWorldAsync(() => new Vector3(scenario.Session.Player!.X, scenario.Session.Player!.Y, Floor));
+        Assert.True(Vector2.Distance(new(at.X, at.Y), new(around.X, around.Y)) < 3f, $"the bot is at {at}, not past {around}");
+    }
+
+    [Theory]
+    [InlineData(4f)] // under OffLegYards: only the guard refuses it, the base's off-leg drop does not apply
+    [InlineData(6f)]
+    public async Task AMeshRouteResumedBehindAWall_WithNoWayBack_IsDropped_NotWalkedThroughTheWall(float yardsOffLeg)
+    {
+        await using Scenario scenario = await Scenario.StartAsync(blocked: static (_, _, _) => false, start: false);
+        Vector3 origin = scenario.Route.Points[0];
+        scenario.Ground.Blocked = (a, b, _) => CrossesWall(a, b, origin);
+        await PlaceAsync(scenario, origin + new Vector3(5, yardsOffLeg, 0));
+
+        bool started = await scenario.StartAsync();
+        await scenario.WalkAsync(3000);
+        Assert.Empty(scenario.Capture.Notices); // neither a crossing nor a blocked start: the caller plans again from here
+        Assert.False(started);
+    }
+
+    [Fact]
+    public async Task AMeshRouteResumedBesideItsLeg_WithAClearLineToItsCorner_WalksStraightOn()
+    {
+        await using Scenario scenario = await Scenario.StartAsync(blocked: static (_, _, _) => false, start: false);
+        IReadOnlyList<Vector3> planned = scenario.Route.Points;
+        await PlaceAsync(scenario, planned[0] + new Vector3(5, 3, 0)); // beside the leg, nearer than OffLegYards
+
+        Assert.True(await scenario.StartAsync(), "the resumed route did not start: " + scenario.Capture.Describe());
+        Assert.Same(planned, scenario.Route.Points);
+        await scenario.WalkAsync(600);
+        Assert.Empty(scenario.Capture.Notices);
+    }
+
+    /// <summary>Whether the line from <paramref name="a"/> to <paramref name="b"/> crosses the wall 3 yards north of <paramref name="origin"/> (x from -10 to +20).</summary>
+    private static bool CrossesWall(Vector3 a, Vector3 b, Vector3 origin)
+    {
+        float wallY = origin.Y + 3;
+        if ((a.Y - wallY) * (b.Y - wallY) >= 0) return false;
+        float x = a.X + ((wallY - a.Y) / (b.Y - a.Y) * (b.X - a.X)) - origin.X;
+        return x is >= -10 and <= 20;
+    }
+
+    private static Task<bool> PlaceAsync(Scenario scenario, Vector3 at) => scenario.Host.OnWorldAsync(() =>
+    {
+        scenario.Session.Player!.Relocate(at.X, at.Y, at.Z, 0, scenario.Host.World.NowMs);
+        return true;
+    });
+
     // ---- fixture -----------------------------------------------------------------------------------------------------------------
 
     private static PlayerbotRoute LineRoute(Player player, float yards, bool navigated)
@@ -753,7 +823,11 @@ public sealed class PlayerbotMotionAnomalyTests
 
         public bool Enabled => true;
 
-        public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null) => new(PathType.Normal, [start, end]);
+        /// <summary>When set, the corners of the path from the first point to the second (else the straight line).</summary>
+        internal Func<Vector3, Vector3, IReadOnlyList<Vector3>>? Way { get; set; }
+
+        public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+            => new(PathType.Normal, Way?.Invoke(start, end) ?? [start, end]);
 
         public bool TryGetRandomPointAround(uint mapId, Vector3 center, float radius, Random random, PathOptions? options, out Vector3 point)
         { point = center; return false; }

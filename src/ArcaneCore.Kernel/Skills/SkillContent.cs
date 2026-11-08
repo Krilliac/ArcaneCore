@@ -191,6 +191,7 @@ public sealed class SpellRankChains
     private readonly FrozenDictionary<uint, uint> _first;
     private readonly FrozenDictionary<uint, byte> _rank;
     private readonly FrozenDictionary<uint, uint> _next;
+    private readonly FrozenDictionary<uint, uint[]> _bookPredecessors;
 
     public SpellRankChains(IEnumerable<SkillLineAbilityRecord> abilities, IEnumerable<TalentRecord>? talents)
         : this(abilities, null, talents)
@@ -234,6 +235,21 @@ public sealed class SpellRankChains
         }
 
         HasTalents = hasTalents;
+
+        // vmangos GetSpellBookSuccessorSpellId (SpellMgr.h:563-575): the first non-zero raw forward_spellid among a spell's ability rows,
+        // with none of the chain patches above (no talent links, no 2366 forced link, no 20154 skip, no existence filter).
+        var successorOf = new Dictionary<uint, uint>();
+        foreach (SkillLineAbilityRecord ability in all)
+        {
+            if (ability.ForwardSpellId != 0)
+            {
+                successorOf.TryAdd(ability.SpellId, ability.ForwardSpellId);
+            }
+        }
+
+        _bookPredecessors = successorOf.GroupBy(kv => kv.Value)
+            .ToFrozenDictionary(g => g.Key, g => g.Select(kv => kv.Key).Order().ToArray());
+
         foreach (SkillLineAbilityRecord ability in all.OrderBy(a => a.SpellId))
         {
             uint spell = ability.SpellId;
@@ -320,6 +336,12 @@ public sealed class SpellRankChains
 
     /// <summary>The previous rank, 0 for a first rank or an unranked spell.</summary>
     public uint Previous(uint spellId) => _previous.GetValueOrDefault(spellId);
+
+    /// <summary>
+    /// The spells whose raw SkillLineAbility forward_spellid is <paramref name="spellId"/> (vmangos GetSpellBookSuccessorSpellId read in reverse):
+    /// the ranks a learned <paramref name="spellId"/> supersedes in the spell book. Empty when none.
+    /// </summary>
+    public IReadOnlyList<uint> BookPredecessors(uint spellId) => _bookPredecessors.GetValueOrDefault(spellId) ?? [];
 
     /// <summary>The next rank, 0 for the highest rank or an unranked spell.</summary>
     public uint Next(uint spellId) => _next.GetValueOrDefault(spellId);

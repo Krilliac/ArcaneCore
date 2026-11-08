@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Ops.Watchdog;
 using ArcaneCore.Kernel.Ops.Watchdog.Counters;
@@ -33,8 +34,35 @@ public sealed class TickWatchdogFeatureTests
         return options;
     }
 
+    /// <summary>
+    /// Stands in for the runtime actuators, which write the process-global <c>ExitCodes.Current</c> and stop the host. Their action options
+    /// default to None, so today none of these tests reaches them; a test that later turns an action on must not write that global while another
+    /// class asserts it in parallel, so the real actuators are never registered here.
+    /// </summary>
+    private sealed class NoActuator : ITickHangActuator, IMemoryPressureActuator
+    {
+        public void Stop(string reason)
+        {
+        }
+
+        public void FailFast(string reason)
+        {
+        }
+
+        public void Collect()
+        {
+        }
+
+        public void Stop()
+        {
+        }
+    }
+
     private static void Register(IServiceCollection services, WatchdogOptions options, WatchdogClock? clock = null)
     {
+        var actuator = new NoActuator(); // before AddTickWatchdog: its TryAdd then keeps these
+        services.AddSingleton<ITickHangActuator>(actuator);
+        services.AddSingleton<IMemoryPressureActuator>(actuator);
         services.AddSingleton(Microsoft.Extensions.Options.Options.Create(options));
         services.AddSingleton(new CounterRegistry());
         if (clock is not null)
@@ -469,6 +497,27 @@ public sealed class TickWatchdogFeatureTests
     }
 
     [Fact]
+    public async Task TheHangDetail_PutsTheFileReadAndDroppedPrefetchTotals_BeforeTheSaveQueue()
+    {
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: s => Register(s, Options(o => o.HangMs = 60_000)));
+        TickMonitor monitor = host.WorldServices.GetRequiredService<TickMonitor>();
+        SyncTileReadCounters.Record(SyncReadCaller.OutsideMapUpdate, SyncReadFile.Terrain, System.Diagnostics.Stopwatch.Frequency / 1000, 7, 1, 1);
+        SyncTileReadCounters.RecordPrefetchDrop(SyncReadFile.Terrain, PrefetchDrop.Evicted);
+
+        foreach (bool inProgress in new[] { true, false })
+        {
+            string detail = monitor.HangDetail!(inProgress);
+            int reads = detail.IndexOf("; terrain/vmap tile file reads since start (prefetch misses): ", StringComparison.Ordinal);
+            int drops = detail.IndexOf("; terrain/vmap tile prefetches dropped untaken since start: ", StringComparison.Ordinal);
+            int saves = detail.IndexOf("; save queue depth ", StringComparison.Ordinal);
+
+            Assert.True(reads >= 0, detail);
+            Assert.True(drops > reads, detail);
+            Assert.True(saves > drops, detail);
+        }
+    }
+
+    [Fact]
     public async Task AHangInProgress_NamesThePhaseAndTheRunningFeature()
     {
         await using WorldTestHost host = WorldTestHost.Start(configureServices: s => Register(s, Options(o => o.HangMs = 60_000)));
@@ -487,7 +536,9 @@ public sealed class TickWatchdogFeatureTests
             string detail = monitor.HangDetail!(true);
             Assert.Contains("phase=Features", detail);
             Assert.Contains("running=BlockingFeature", detail);
-            Assert.Contains(" ms; save queue depth ", detail);
+
+            // The running text, then any process-wide segments (a read recorded anywhere in this process adds the file read totals), then the backlog.
+            Assert.Matches(@"running=BlockingFeature for \d+ ms; (?:[^;]+; )*save queue depth ", detail);
         }
         finally
         {

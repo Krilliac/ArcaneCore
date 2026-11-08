@@ -14,8 +14,17 @@ namespace ArcaneCore.World.Tests.Architecture;
 /// </summary>
 public sealed partial class NoQuietWindowEmptyAssertTests
 {
-    [GeneratedRegex(@"Assert\s*\.\s*Empty\s*\(\s*await\s+[\w.?!]+\s*\.\s*Collect\w*\s*\(", RegexOptions.CultureInvariant)]
+    // The receiver is optional (a helper inside WorldTestClient calls CollectAsync() bare). Matches Assert.Empty(await x.Collect...(..)).
+    [GeneratedRegex(@"Assert\s*\.\s*Empty\s*\(\s*await\s+(?:[\w.?!]+\s*\.\s*)?Collect\w*\s*\(", RegexOptions.CultureInvariant)]
     private static partial Regex QuietEmptyAssert();
+
+    // The two-step form: var p = await x.Collect...(..); (up to six statements later) Assert.Empty(p).
+    [GeneratedRegex(@"\bvar\s+(\w+)\s*=\s*await\s+(?:[\w.?!]+\s*\.\s*)?Collect\w*\s*\([^;]*;(?:(?!\bvar\s+\1\b)[^;]*;){0,6}?\s*Assert\s*\.\s*Empty\s*\(\s*\1\s*\)", RegexOptions.CultureInvariant)]
+    private static partial Regex QuietEmptyAssertTwoStep();
+
+    // The fixed-window silence helper (it passed or failed on timing) was removed; neither a call nor a redefinition may return.
+    [GeneratedRegex(@"\bAssertSilentAsync\b", RegexOptions.CultureInvariant)]
+    private static partial Regex FixedWindowSilenceHelper();
 
     [Fact]
     public void NoTestAssertsEmptyOnAQuietWindowCollect()
@@ -33,10 +42,16 @@ public sealed partial class NoQuietWindowEmptyAssertTests
 
             scanned.Add(relative);
             string text = File.ReadAllText(file);
-            foreach (Match match in QuietEmptyAssert().Matches(text))
+            // This file names the removed helper in its own pattern and theory data.
+            bool self = relative.EndsWith("Architecture/NoQuietWindowEmptyAssertTests.cs", StringComparison.Ordinal);
+            Regex[] patterns = self ? [QuietEmptyAssert(), QuietEmptyAssertTwoStep()] : [QuietEmptyAssert(), QuietEmptyAssertTwoStep(), FixedWindowSilenceHelper()];
+            foreach (Regex pattern in patterns)
             {
-                int line = 1 + text.AsSpan(0, match.Index).Count('\n');
-                offenders.Add($"tests/{relative}:{line}");
+                foreach (Match match in pattern.Matches(text))
+                {
+                    int line = 1 + text.AsSpan(0, match.Index).Count('\n');
+                    offenders.Add($"tests/{relative}:{line}");
+                }
             }
         }
 
@@ -51,6 +66,7 @@ public sealed partial class NoQuietWindowEmptyAssertTests
     }
 
     [Theory]
+    [InlineData("Assert." + "Empty(await CollectAsync());", true)]
     [InlineData("Assert." + "Empty(await client.CollectAsync(Quiet));", true)]
     [InlineData("Assert." + "Empty(await client.CollectAsync());", true)]
     [InlineData("Assert." + "Empty( await a.b.CollectFromAsync(WorldOpcode.X, Quiet));", true)]
@@ -59,4 +75,19 @@ public sealed partial class NoQuietWindowEmptyAssertTests
     [InlineData("await client.AssertNoPacketsAsync(WorldOpcode.SmsgMessagechat);", false)]
     public void ThePatternMatchesTheForbiddenShapeOnly(string line, bool expected)
         => Assert.Equal(expected, QuietEmptyAssert().IsMatch(line));
+
+    [Theory]
+    [InlineData("var p = await c.CollectAsync(Quiet);\n        Assert." + "Empty(p);", true)]
+    [InlineData("var p = await CollectAsync();\n        Assert." + "Empty(p);", true)]
+    [InlineData("var p = await c.CollectAsync(Quiet);\n        var q = 1;\n        Assert." + "Empty(p);", true)]
+    [InlineData("var p = await c.CollectAsync(Quiet);\n        Assert." + "Equal(1, p.Count);\n        Assert." + "Empty(q);", false)]
+    [InlineData("var p = await store.GetMailsAsync(1);\n        Assert." + "Empty(p);", false)]
+    public void TheTwoStepPatternMatchesTheForbiddenShapeOnly(string text, bool expected)
+        => Assert.Equal(expected, QuietEmptyAssertTwoStep().IsMatch(text));
+
+    [Theory]
+    [InlineData("await client.AssertSilent" + "Async(window);", true)]
+    [InlineData("await client.AssertNoPacketsAsync(WorldOpcode.X);", false)]
+    public void TheRemovedSilenceHelperIsRecognised(string line, bool expected)
+        => Assert.Equal(expected, FixedWindowSilenceHelper().IsMatch(line));
 }

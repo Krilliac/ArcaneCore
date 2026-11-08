@@ -72,6 +72,8 @@ public sealed class PlayerbotRunClearWipeSurvivorWorldTests : PlayerbotRunClearW
             if (group.State != PlayerbotGroupState.Wiped) return $"the wipe settled while the member was dead: {group.State}";
             Player revived = world.Player(member.Id);
             if (revived.IsAlive || revived.MapId != GroupRfcContent.Map) return $"the member is not dead inside: alive={revived.IsAlive}, map {revived.MapId}, step {ai.Step}";
+            // The death reset the count: a non-zero count here would make the later fails check pass for the wrong reason.
+            if (ai.WipeExitFails != 0) return $"the death did not reset the exit give-up count: {ai.WipeExitFails}";
             revived.Map!.Combat.ResurrectPlayer(revived, 1f, applySickness: false);
             Assert.True(revived.IsAlive);
             // Revived on the exit point whose trigger still does not fire, and engaged again (in the same tick, before the bot moves).

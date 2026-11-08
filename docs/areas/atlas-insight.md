@@ -62,6 +62,9 @@ A notice is kept when its owner is this world's identity token. A notice with no
 `WorldMapFeedOptions.AnomaliesUnowned` is true (the default, since the daemon runs one world per process); tests that run several
 worlds in one process set it false.
 
+An unowned packet-heuristic finding (subsystem `packet`) is also budgeted: at most 16 per account and 512 in all per minute enter the ring, so one
+client cycling opcodes cannot overwrite the 4,096 slots. The ledger still counts every finding; see docs/areas/packet-heuristics.md for the limits.
+
 ## Commands (Atlas)
 
 | Command | Meaning |

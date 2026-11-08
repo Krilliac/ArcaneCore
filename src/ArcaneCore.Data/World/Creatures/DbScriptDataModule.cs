@@ -84,6 +84,18 @@ public sealed class CreatureMovementScriptRow : DbScriptRow;
 public sealed class SpellScriptRow : DbScriptRow;
 
 /// <summary>
+/// <c>dbscripts_on_go_use</c>: run when the game object spawn whose <c>gameobject.guid</c> is the script id is used (world schema step
+/// <see cref="DbGameObjectScriptDataModule"/>; classic-db z2815: 37 rows). Source is the user, target the object.
+/// </summary>
+public sealed class GameObjectUseScriptRow : DbScriptRow;
+
+/// <summary>
+/// <c>dbscripts_on_go_template_use</c>: run when any object of the template whose entry is the script id is used (world schema step
+/// <see cref="DbGameObjectScriptDataModule"/>; z2815: 169 rows). Source is the user, target the object.
+/// </summary>
+public sealed class GameObjectTemplateUseScriptRow : DbScriptRow;
+
+/// <summary>
 /// One <c>script_waypoint</c> row (ScriptDev2's escort paths; mangos-classic <c>Entry, PathId, Point, PositionX/Y/Z, Orientation, WaitTime,
 /// ScriptId, Comment</c>; SystemMgr::LoadScriptWaypoints, AI/ScriptDevAI/system/system.cpp:63-121). The comment is not kept.
 /// classic-db z2815: 1,523 rows on 61 entries.
@@ -136,6 +148,12 @@ public sealed class DbScriptDataModule : IDataModule
 
     /// <summary>cmangos <c>dbscripts_on_spell</c> (world schema <see cref="DbSpellScriptDataModule.Version"/>).</summary>
     public const string SpellTable = "dbscripts_on_spell";
+
+    /// <summary>cmangos <c>dbscripts_on_go_use</c> (world schema <see cref="DbGameObjectScriptDataModule.Version"/>).</summary>
+    public const string GameObjectUseTable = "dbscripts_on_go_use";
+
+    /// <summary>cmangos <c>dbscripts_on_go_template_use</c> (world schema <see cref="DbGameObjectScriptDataModule.Version"/>).</summary>
+    public const string GameObjectTemplateUseTable = "dbscripts_on_go_template_use";
 
     public DatabaseComponent Component => DatabaseComponent.World;
 
@@ -194,6 +212,8 @@ public sealed class DbScriptDataModule : IDataModule
         EventScriptRow => DbScriptKind.Event,
         CreatureMovementScriptRow => DbScriptKind.CreatureMovement,
         SpellScriptRow => DbScriptKind.Spell,
+        GameObjectUseScriptRow => DbScriptKind.GameObject,
+        GameObjectTemplateUseScriptRow => DbScriptKind.GameObjectTemplate,
         _ => throw new ArgumentOutOfRangeException(nameof(row), row.GetType().Name, "not a DB script table row"),
     };
 
@@ -206,6 +226,8 @@ public sealed class DbScriptDataModule : IDataModule
         DbScriptKind.Event => new EventScriptRow(),
         DbScriptKind.CreatureMovement => new CreatureMovementScriptRow(),
         DbScriptKind.Spell => new SpellScriptRow(),
+        DbScriptKind.GameObject => new GameObjectUseScriptRow(),
+        DbScriptKind.GameObjectTemplate => new GameObjectTemplateUseScriptRow(),
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "the relay scripts have their own table (RelayScriptDataModule)"),
     };
 

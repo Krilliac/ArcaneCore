@@ -112,7 +112,8 @@ the catch census are in [docs/ops/exception-audit.md](docs/ops/exception-audit.m
   (`0.388999998569489f` is bit-exact). Keep squared comparisons squared, and keep `<` versus `<=` per site.
 
 **Generated files**
-- Generated docs: `docs/reference/*.md` (regenerate with `ARCANECORE_UPDATE_DOCS=1 dotnet test tests/ArcaneCore.World.Tests --filter Docs`).
+- Generated docs: `docs/reference/*.md` except `docs/reference/rules-conversion.md`, which is hand-written and has no generator (regenerate the rest with
+  `ARCANECORE_UPDATE_DOCS=1 dotnet test tests/ArcaneCore.World.Tests --filter Docs`).
   `docs/ops/exception-audit.md` comes from `scripts/exception-audit/audit.py`. `sql/updates` comes from the export (below). Regenerate; never hand-edit.
 - Every markdown file outside `bin`/`obj`/`.git`/`.claude` is link-checked (`DocsLinkTests`), and every backticked config key in
   docs must exist (`DocKeyAuditTests`).

@@ -152,4 +152,13 @@ internal static class PlayerbotFestivalRules
     /// </summary>
     internal static bool IsHeldAtSpot(float distance2D, float dz, float anchorDistance2D)
         => distance2D <= PlayerbotTownIdle.HoldYards && MathF.Abs(dz) <= SpotZToleranceYards && anchorDistance2D >= AnchorClearYards;
+
+    /// <summary>
+    /// Whether a bot has arrived at its spot: within <see cref="SpotArriveYards"/> (ground plane), on the spot's floor and at least
+    /// <see cref="AnchorClearYards"/> from the anchor. The arrival line and the celebration emotes need this, not <see cref="IsHeldAtSpot"/>: a bot still
+    /// walking to its spot is held (its place stays reserved) anywhere within <see cref="PlayerbotTownIdle.HoldYards"/>, but it must not speak or emote
+    /// mid-walk.
+    /// </summary>
+    internal static bool IsArrivedAtSpot(float distance2D, float dz, float anchorDistance2D)
+        => distance2D <= SpotArriveYards && MathF.Abs(dz) <= SpotZToleranceYards && anchorDistance2D >= AnchorClearYards;
 }

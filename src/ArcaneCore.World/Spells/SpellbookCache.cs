@@ -293,6 +293,18 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
         Enqueue(characterId, store => DeleteCharacterAsync(store, characterId));
     }
 
+    /// <summary>Characters whose last write failed and still await a reconciling flush.</summary>
+    public IReadOnlyCollection<int> FailedCharacters
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return [.. _failedCharacters];
+            }
+        }
+    }
+
     /// <summary>Wait until every queued write has been attempted (tests, shutdown).</summary>
     public async Task FlushAsync()
     {
@@ -681,7 +693,7 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
                     await pending.Write(store).ConfigureAwait(false);
                     pending.Done?.TrySetResult();
                 }
-                catch (CharacterOwnershipRejectedException) when (pending.CharacterId is { } movedId && CharacterRetirementRegistry.Drops(Retirement, QueueName, movedId))
+                catch (CharacterOwnershipRejectedException) when (pending.CharacterId is { } movedId && CharacterRetirementRegistry.DropsRefused(Retirement, QueueName, movedId))
                 {
                     lock (_lock)
                     {

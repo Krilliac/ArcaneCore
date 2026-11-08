@@ -51,8 +51,8 @@
   -DryRun reads everything and writes nothing (no backup either).
 
   With -AppSettings the script then runs set-optional-data.ps1 on that appsettings.json with the same -DbcDirectory and -Dump, so the
-  world also gets its optional client data (item sets, random suffixes, enchantments, readable pages, the character appearance check):
-  seven keys, each file checked first, the old file kept as a .bak. That needs the DBCs in a permanent -DbcDirectory (also holding
+  world also gets its optional client data (item sets, random suffixes, enchantments, the character appearance check):
+  five keys (readable pages come from the page_text table of the database), each file checked first, the old file kept as a .bak. That needs the DBCs in a permanent -DbcDirectory (also holding
   ItemSet.dbc, ItemRandomProperties.dbc, SpellItemEnchantment.dbc, CharSections.dbc and CharacterFacialHairStyles.dbc), not -MpqTool.
 
   The world's schema must already be the importer's: a database behind it is refused (nothing written) unless -Migrate is given.

@@ -118,6 +118,7 @@ internal static class ScenarioClassContent
         With(Hostile(S.AutoShot, "Auto Shot", school: 0, damage: 0, cost: 0, power: Mana, cast: 0, range: RangeHunter, dmgClass: 3), r =>
         {
             r.Effect1 = 58; // SPELL_EFFECT_WEAPON_DAMAGE
+            r.Speed = 40f; // spell_template 75: no visual, so each triggered repeat shot is shown by its missile speed
             r.Attributes = 0x50012; r.AttributesEx2 = 0x20; r.AttributesEx3 = 0x8000; r.InterruptFlags = 1;
             r.StartRecoveryCategory = 0; r.StartRecoveryTime = 0;
         }),

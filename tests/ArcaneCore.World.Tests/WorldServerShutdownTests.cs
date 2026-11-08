@@ -20,6 +20,7 @@ using Xunit;
 
 namespace ArcaneCore.World.Tests;
 
+[Xunit.Collection(Net.PacketCaptureCollection.Name)] // a host stop drains every open packet trace in the process
 public sealed class WorldServerShutdownTests
 {
     private static readonly TimeSpan Deadline = TimeSpan.FromSeconds(10);

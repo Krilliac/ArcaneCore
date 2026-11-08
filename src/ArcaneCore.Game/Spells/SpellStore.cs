@@ -8,7 +8,12 @@ namespace ArcaneCore.Game.Spells;
 /// </summary>
 public sealed class SpellStore
 {
-    public sealed record ScriptTarget(uint SpellId, uint Type, uint TargetEntry, uint InverseEffectMask);
+    /// <summary>One spell_script_target row. <paramref name="Condition"/> is the row's translated vmangos <c>conditionId</c> (<see cref="ScriptTargetCondition"/> text; empty is none).</summary>
+    public sealed record ScriptTarget(uint SpellId, uint Type, uint TargetEntry, uint InverseEffectMask, string Condition = "")
+    {
+        /// <summary>The parsed <see cref="Condition"/>: null when the row has none, <see cref="ScriptTargetCondition.Unsatisfiable"/> when the text cannot be read.</summary>
+        public ScriptTargetCondition? ParsedCondition { get; } = ScriptTargetCondition.Parse(Condition);
+    }
     public static readonly SpellStore Empty = new([], [], []);
 
     private readonly FrozenDictionary<uint, SpellInfo> _spells;

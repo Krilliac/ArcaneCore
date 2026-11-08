@@ -43,6 +43,12 @@ public interface IPlayerSession
     /// <summary>Queue a packet for this client. Thread-safe; never blocks on the socket.</summary>
     void Send(WorldOpcode opcode, ReadOnlySpan<byte> payload);
 
+    /// <summary>
+    /// <see cref="Send"/> for a movement relay to an observer (vmangos <c>WorldSession::SendMovementPacket</c>): a session may batch it into
+    /// SMSG_COMPRESSED_MOVES under <c>World:CompressMovementCount</c>. The default sends it at once.
+    /// </summary>
+    void SendMovement(WorldOpcode opcode, ReadOnlySpan<byte> payload) => Send(opcode, payload);
+
     /// <summary>Handle the in-world packets queued since the last tick (world thread).</summary>
     void ProcessWorldPackets(Player player);
 
@@ -66,6 +72,19 @@ public interface IPlayerSession
 public interface ICharacterSaveQueue
 {
     void Enqueue(CharacterState state);
+
+    /// <summary>
+    /// <see cref="Enqueue(CharacterState)"/>, and <paramref name="onSettled"/> runs once when this snapshot has finished its write attempt (written, retained after a failure, or dropped: the
+    /// attempt is over either way) or at once when the queue will never write it (closed, quarantined, held, retired). It may run on the queue's consumer thread or on the calling thread, before this method
+    /// returns; it must be quick and must not throw. A snapshot superseded by a newer one of the same character settles with the newer one's write. <see cref="WorldRuntime"/> uses it to keep the manual clock
+    /// from advancing past a save (<see cref="WorldPendingWork"/>). The default suits a queue that writes nothing asynchronously: it settles at once.
+    /// </summary>
+    void Enqueue(CharacterState state, Action onSettled)
+    {
+        ArgumentNullException.ThrowIfNull(onSettled);
+        Enqueue(state);
+        onSettled();
+    }
 
     /// <summary>
     /// True while a snapshot of this character is waiting to be written (not merely being written), so another snapshot of

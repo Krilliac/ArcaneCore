@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Items.ItemUse;
@@ -154,6 +155,21 @@ public sealed partial class SpellSystem
             : picked.CategoryRecoveryTime;
         uint category = itemCategory ?? picked.Category;
         bool itemOwned = itemCategory is not null || itemCooldownMs is not null || itemCategoryCooldownMs is not null || castItem is not null;
+
+        // cmangos Creature::AddCooldown: a creature's spell list entry replaces the Spell.dbc time, or the category time with its category flag.
+        if (!itemOwned && state.Unit is Creature { SpellLists: { } spellList }
+            && spellList.TryGetSpellCooldown(spell.Id, out uint listCooldownMs, out bool listCategory) && listCooldownMs != 0)
+        {
+            if (listCategory)
+            {
+                categoryRecovery = listCooldownMs;
+            }
+            else
+            {
+                recovery = listCooldownMs;
+            }
+        }
+
         if (recovery == 0 && categoryRecovery == 0)
         {
             return;

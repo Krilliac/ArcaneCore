@@ -45,14 +45,50 @@ internal sealed class PopulationMapScope
     /// sum over the maps it owns. The workers own disjoint maps, so their shares add up to the count exactly (1001 over two maps is 501 and 500). The count itself when nothing is withheld.
     /// Each worker fills only its own share, from the bots it can log in and the bots it creates, so the workers together stay at the realm-wide target instead of each trying to reach all of it.
     /// </summary>
-    public int ShareOf(int count)
+    public int ShareOf(int count) => ShareOf(count, null);
+
+    /// <summary>
+    /// <see cref="ShareOf(int)"/> weighted by a static per-map capacity, <paramref name="capacityOf"/> (the number of creature spawns the shared world data holds for a map, which every worker can read for every
+    /// allowed map without surveying terrain). The count is split in proportion to the capacities with the largest-remainder rule (ties to the lower map id), so every worker that sees the same capacities computes the same
+    /// split and the workers' shares, being sums over disjoint maps, add up to the count exactly. When <paramref name="capacityOf"/> is null, or every allowed map reports no capacity, the even split applies.
+    /// <paramref name="capacityOf"/> is called on the calling thread and must be pure. The count itself when nothing is withheld.
+    /// </summary>
+    public int ShareOf(int count, Func<uint, int>? capacityOf)
     {
         if (OwnsEverything) return count;
         if (count <= 0 || _allowed.Length == 0 || Maps.Length == 0) return 0;
         uint[] order = [.. _allowed.Order()];
-        int each = count / order.Length, extra = count % order.Length, share = 0;
+        long[] weights = new long[order.Length];
+        long total = 0;
+        if (capacityOf is not null)
+        {
+            for (int i = 0; i < order.Length; i++)
+            {
+                weights[i] = Math.Max(0, capacityOf(order[i]));
+                total += weights[i];
+            }
+        }
+        if (total <= 0)
+        {
+            Array.Fill(weights, 1L);
+            total = order.Length;
+        }
+        int[] parts = new int[order.Length];
+        long[] remainders = new long[order.Length];
+        int given = 0;
         for (int i = 0; i < order.Length; i++)
-            if (Maps.Contains(order[i])) share += each + (i < extra ? 1 : 0);
+        {
+            long scaled = count * weights[i];
+            parts[i] = (int)(scaled / total);
+            remainders[i] = scaled % total;
+            given += parts[i];
+        }
+        // order is ascending by map id, so a stable sort on the remainder alone breaks ties to the lower map id.
+        int[] byRemainder = [.. Enumerable.Range(0, order.Length).OrderByDescending(i => remainders[i])];
+        for (int k = 0; k < count - given; k++) parts[byRemainder[k]]++;
+        int share = 0;
+        for (int i = 0; i < order.Length; i++)
+            if (Maps.Contains(order[i])) share += parts[i];
         return share;
     }
 }

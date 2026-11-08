@@ -67,7 +67,10 @@ public sealed class QuestJournalWorldTests
         await client.AuthenticateAsync("QUERYSTATE", key);
         await client.SendAsync(WorldOpcode.CmsgQuestQuery, UInt32(Ordinary));
         await client.SendAsync(WorldOpcode.CmsgNpcTextQuery, TextQuery(TextId));
-        await client.AssertSilentAsync(TimeSpan.FromMilliseconds(75));
+        // No barrier exists before a character is in world (CMSG_PLAYED_TIME is dropped), so this stays a bounded read, filtered to the
+        // opcodes the two queries would answer with: an unrelated packet cannot fail it.
+        Assert.DoesNotContain(await client.CollectAsync(TimeSpan.FromMilliseconds(75)),
+            p => p.Opcode is WorldOpcode.SmsgQuestQueryResponse or WorldOpcode.SmsgNpcTextUpdate);
         await client.CreateCharacterAsync("Querystate");
     }
 

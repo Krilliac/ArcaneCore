@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- A module with a private dependency (HotDepLib, written next to it by the host tests), for the module-host allowlist tests.
+       Assembly name HotDepUse. Built only through the test project's reference (not in ArcaneCore.slnx). HotDepSwallow compiles the
+       same source with SWALLOW. -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+    <AssemblyName>HotDepUse</AssemblyName>
+    <RootNamespace>HotDepModule</RootNamespace>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\src\ArcaneCore.World\ArcaneCore.World.csproj" />
+  </ItemGroup>
+
+</Project>

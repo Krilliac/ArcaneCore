@@ -11,6 +11,9 @@ internal sealed class InMemoryAccountStore : IAccountStore, IAccountLoginInfoSto
     public Task<Account?> FindByUsernameAsync(string username, CancellationToken cancellationToken = default)
         => Task.FromResult(_accounts.TryGetValue(username.ToUpperInvariant(), out Account? a) ? a : null);
 
+    /// <summary>Remove an account (what the production admin store's delete does); true when it existed.</summary>
+    public bool Remove(string username) => _accounts.TryRemove(username.ToUpperInvariant(), out _);
+
     public Task<Account> CreateAsync(Account account, CancellationToken cancellationToken = default)
     {
         account.Username = account.Username.ToUpperInvariant();

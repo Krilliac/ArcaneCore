@@ -35,14 +35,15 @@ public static class ClusterPresenceHosting
         services.TryAddSingleton(sp => new InMemoryClusterSocialRouter(sp.GetRequiredService<InMemoryRealmPresenceDirectory>()));
         services.TryAddSingleton(sp => new PresenceHolderService(
             sp.GetRequiredService<InMemoryRealmPresenceDirectory>(),
-            sp.GetRequiredService<InMemoryClusterSocialRouter>()));
+            sp.GetRequiredService<InMemoryClusterSocialRouter>(),
+            sp.GetService<RealmAuthorityLeaseKeeper>() is { } keeper ? () => keeper.Holds(RealmAuthorityScopes.Social) : null)); // not TokenFor: a lost lease keeps its token
         services.TryAddSingleton(sp =>
         {
             RealmAuthorityLeaseKeeper? keeper = sp.GetService<RealmAuthorityLeaseKeeper>();
             PeerLinkRuntime? runtime = sp.GetService<PeerLinkRuntime>();
             PeerLinkClient? link = sp.GetService<PeerLinkClient>();
             PeerPresenceClient? fixedRemote = link is null ? null : new PeerPresenceClient(link);
-            Func<bool> holdsSocial = keeper is null ? static () => true : () => keeper.TokenFor(RealmAuthorityScopes.Social) is not null;
+            Func<bool> holdsSocial = keeper is null ? static () => true : () => keeper.Holds(RealmAuthorityScopes.Social);
             return new LeaseRoutedPresence(sp.GetRequiredService<PresenceHolderService>(), holdsSocial, () => runtime?.Presence ?? fixedRemote);
         });
         services.TryAddSingleton<IRealmPresenceDirectory>(sp => sp.GetRequiredService<LeaseRoutedPresence>());
@@ -98,11 +99,19 @@ public static class ClusterPresenceHosting
                     sp.GetRequiredService<LeaseRoutedPresence>(),
                     sp.GetRequiredService<PresenceHolderService>().Guilds,
                     keeper.NodeId,
+                    // TokenFor, not Holds, on purpose (unlike LeaseRoutedPresence): this says whether the node ever held the lease, and a deposed or stalled node keeps its token, so for a moment the guild link still calls itself the holder while the presence transport already routes remote. That is harmless: every write this node makes is refused by the commit fence and a lost lease stops the process.
                     () => keeper.TokenFor(RealmAuthorityScopes.Social) is not null,
                     sp.GetRequiredService<ILoggerFactory>().CreateLogger<PeerGuildHolderLink>());
             });
             services.TryAddSingleton<ArcaneCore.Game.Guilds.IGuildHolderLink>(sp => sp.GetRequiredService<PeerGuildHolderLink>());
             services.AddHostedService(sp => new GuildLinkStarter(sp.GetRequiredService<PeerGuildHolderLink>()));
+
+            // Battleground queues (S3e lane 8): commands and notices travel through the hub the Social holder runs; the battleground feature starts the link when it installs,
+            // and the node that owns the battleground maps becomes the queue's holder. Combined mode registers nothing, so the manager stays local.
+            services.TryAddSingleton(sp => new ClusterBattlegroundLink(
+                sp.GetRequiredService<LeaseRoutedPresence>(),
+                sp.GetRequiredService<RealmAuthorityLeaseKeeper>().NodeId,
+                sp.GetRequiredService<ILoggerFactory>().CreateLogger<ClusterBattlegroundLink>()));
         }
 
         return services;

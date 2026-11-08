@@ -2,8 +2,9 @@
 
 Status: **built, mock-client tested, not yet accepted with a real 1.12.1 client** (checklist: [CLUSTER_ACCEPTANCE.md](../CLUSTER_ACCEPTANCE.md)). This is phase 3a of
 [Hot reload tiers](../design/hot-reload-tiers.md#53-phases): a separate `ArcaneCore.Gateway` process owns the client
-socket and forwards plaintext opcodes to a World running in worker mode. There is no handoff yet: a gateway restart drops
-its clients, and a World restart drops them too. With the default configuration nothing here is active and the World
+socket and forwards plaintext opcodes to a World running in worker mode. A gateway restart drops its clients. A World restart
+drops them too, unless the opt-in `.cluster restart` hands the worker's slot to a standby (see
+[Handoff and transfers over the control channel](#handoff-and-transfers-over-the-control-channel-opt-in)). With the default configuration nothing here is active and the World
 runs exactly as before (`Combined` mode).
 
 Related: [Clustering design](../CLUSTERING_DESIGN.md) (M15.1 gateway target), [netguard](../ops/netguard.md),
@@ -69,7 +70,7 @@ After the two proofs, both directions switch to MAC-protected frames. Each end d
 with HKDF-SHA256 from the secret, salted with both nonces, and every later frame carries a 16-byte tag: HMAC-SHA256 under the
 direction's key over an 8-byte frame counter and the frame. A flipped bit, a replayed, dropped or reordered frame, or a frame
 reflected into the other direction fails the check and the receiver closes the link (every session on it ends, `LinkLost`).
-The gateway contract version is 5 (3 added the link integrity described here; 4 added the worker status frame; 5 added the unified control frames 28-32) and the peer link protocol version is 2, so a gateway or peer from before this change is
+The gateway contract version is 7 (3 added the link integrity described here; 4 added the worker status frame; 5 added the unified control frames 28-32; 6 added the handoff verb `RetireWrites`; 7 made `Promote` carry the slot the standby takes over and added the `LinkSlot` frame, 33, which names a worker link's slot right after admission) and the peer link protocol version is 2, so a gateway or peer from before this change is
 refused at the handshake instead of misreading frames. The golden vectors are pinned in `LinkIntegrityTests`. The peer link
 (`PeerLinkHost`, `PeerLinkClient`) uses the same construction with its own secret.
 
@@ -147,11 +148,11 @@ Tests: `LoginRedirectTests` (in process, including an owner that comes up 20 s i
 
 ### Transfer to a map whose owner has no link
 
-A far teleport routes the same way a login redirect does, and a worker whose link is down owns nothing for routing, whether it is dead or only between two dials of its reconnect backoff. So when the target map has a configured owner with no registered link, the gateway waits up to 10 s for that link before it answers the transfer request, and logs "waits up to 10 s for the link of its owner". The owner is dialled every 500 ms during the wait, as for a held login, so a worker that is up is reached at once. The player stays in the world and nothing is journalled while it waits. However the wait ends, the map is routed again: if it now has an owner the transfer starts, and if not the teleport is refused with `NoEligibleWorker` (`map-unassigned`) and the player sees "The teleport could not be completed." The teleport is also refused if the session ends or the gateway begins stopping during the wait. A map that no configured worker owns is refused at once. A refusal does not undo what the source worker did when it sent the request: a ghost entering its corpse's map stays revived, and a player taken off a transport stays off it. The answer goes to the source worker's current link, so a link that reconnected during the wait still ends the worker's in-flight entry; if the link is down when the answer is ready, the answer is lost and that entry blocks the character's far teleports until it expires (5 minutes).
+A far teleport routes the same way a login redirect does, and a worker whose link is down owns nothing for routing, whether it is dead or only between two dials of its reconnect backoff. So when the target map has a configured owner with no registered link, the gateway waits up to 10 s for that link before it answers the transfer request, and logs "waits up to 10 s for the link of its owner". The owner is dialled every 500 ms during the wait, as for a held login, so a worker that is up is reached at once. The player stays in the world and nothing is journalled while it waits. However the wait ends, the map is routed again: if it now has an owner the transfer starts, and if not the teleport is refused with `NoEligibleWorker` (`map-unassigned`) and the player sees "The teleport could not be completed." The teleport is also refused if the session ends or the gateway begins stopping during the wait. A map that no configured worker owns is refused at once. A refusal does not undo what the source worker did when it sent the request, so the source does nothing that cannot be taken back: a ghost entering its corpse's map is revived by the target once it has arrived, and stays a ghost when refused. A player taken off a transport is boarded again by its next move aboard. The answer goes to the source worker's current link, so a link that reconnected during the wait still ends the worker's in-flight entry; if the link is down when the answer is ready, the answer is lost and that entry blocks the character's far teleports until it expires (5 minutes).
 
 Tests: `GatewayCrossWorkerTeleportTests` (in process, the target worker up during a 30 s backoff), `GatewayTransferServiceTests` (the outcomes of the wait) and `ClusterControlChannelScenarioTests` (a late-started worker, multi-process).
 
-### Whole-World handoff (Tier 3b groundwork, in process only)
+### Whole-World handoff (Tier 3b groundwork)
 
 `WorldHandoffCoordinator` (`src/ArcaneCore.World/Cluster/Handoff/`) runs the drain protocol of design section 5.3 over
 three participants and journals each stage in the characters database (`cluster_world_handoff`, schema 62):
@@ -231,11 +232,11 @@ The gateway, the worker and a standby worker can be launched and watched by the 
 
 | Concern | Runs on | Note |
 |---|---|---|
-| Header cipher, `SMSG_AUTH_CHALLENGE`, auth digest | Gateway | The worker holds no cipher state; it reads the session key from the auth database only to start Warden |
+| Header cipher, `SMSG_AUTH_CHALLENGE`, auth digest | Gateway | The worker holds no cipher state; it only checks that the account has a session key in the auth database |
 | `PING` / `PONG` | Gateway answers; the ping is also forwarded | The worker records the latency sample (`WorldSession.LatencyMs`) and sends no pong |
 | Per-IP guards, IP bans | Both | Gateway: `NetGuard` admission and the ban check at auth. Worker: `WorldSession.RemoteEndpoint` is the client's `ip:port`, so IP bans and logs see the client address, not the gateway's |
 | Opcode rate limits, all game handlers | Worker | Unchanged `DispatchAsync` path |
-| Warden | Worker | Its opcodes are forwarded unchanged; the worker starts Warden with the session key from the auth database. The design (section 5.2) puts Warden on the gateway; moving it is needed before 3b |
+| Warden | Gateway | The gateway binds `Warden`, starts each session's Warden with the session key it holds and answers `CMSG_WARDEN_DATA` itself; it runs `Warden:Checks` and the timing scan, not the `warden_checks` table (it has no world database). A failing verdict goes to the worker over the link, with the gateway's Warden manifest; the worker refuses a manifest that differs from the one it derives from its own `Warden` section, applies the ban, and starts no Warden of its own |
 | Account claim | Both | Gateway: one connection per account. Worker: the normal `SessionRegistry` claim |
 
 ## Node role and realm authority leases
@@ -248,7 +249,7 @@ that role would have nothing to serve.
 
 Two features are realm-wide singletons: the auction house bot (the `economy` scope) and AutoBroadcast (the `social` scope). On a `MapWorker` each one
 attaches only while this node holds the matching lease, and a node attaches nothing it cannot lease; the other node (or this one, after the holder's lease
-lapses and it restarts) runs it. Warden stays attached on a map worker, because the gateway passes the client stream through to it.
+lapses and it restarts) runs it. Warden stays attached on a map worker, but it starts no session of its own there: the gateway runs Warden and reports its verdicts to the worker.
 
 | Setting | Default | Meaning |
 |---|---|---|
@@ -315,13 +316,15 @@ processes with the gateway as the one coordinator (design `_wf/handoff-control-D
 
 | Key | Where | Effect when `true` |
 |---|---|---|
-| `Cluster:Worker:Handoff:Enabled` | worker (and standby) | The worker answers the handoff verbs of an admitted gateway (`Describe`, `Warm`, `StopAdmissions`, `Freeze`, `Flush`, `Resume`, `ReleaseWriterLock`, `Retire`, `Promote`); needs `Cluster:Worker:Enabled`. Off, it answers `Disabled` |
+| `Cluster:Worker:Handoff:Enabled` | worker (and standby) | The worker answers the handoff verbs of an admitted gateway (`Describe`, `Warm`, `StopAdmissions`, `Freeze`, `Flush`, `Resume`, `RetireWrites`, `ReleaseWriterLock`, `Retire`, `Promote`); needs `Cluster:Worker:Enabled`. Off, it answers `Disabled` |
 | `Cluster:Worker:Transfers:Enabled` | worker (and standby) | The worker builds its production transfer source and target and answers the transfer verbs; a teleport to a map another worker owns becomes a transfer request. Off, it answers `Disabled` and the refusal of that teleport is unchanged |
 | `Gateway:Handoff:Enabled` | gateway | The gateway connects to the characters database (validate-only, nothing is created or upgraded), keeps a control link to each slot's standby, coordinates handoffs and operator restarts and recovers interrupted ones from the journal |
 | `Gateway:Transfers:Enabled` | gateway | The gateway coordinates cross-worker transfers and finishes interrupted ones from the journal |
 
 Each slot's standby is named on its worker entry: `Gateway:Workers:N:StandbyNodeId` (the standby's `Cluster:Worker:NodeId`, which must differ from
-every other node id), `StandbyAddress` and `StandbyPort` (its `Cluster:Worker:BindAddress` and `Cluster:Worker:Port`). The reply timeouts are
+every other node id), `StandbyAddress` and `StandbyPort` (its `Cluster:Worker:BindAddress` and `Cluster:Worker:Port`). Handoff rows name processes;
+transfer rows, bundles and verbs name the slot (`Gateway:Workers:N:NodeId`) whichever process serves it. The gateway tells a process that name: `Promote` does for a standby, and every worker link does
+right after admission (the `LinkSlot` frame), so a promoted process relaunched as active, whose own `Cluster:Worker:NodeId` is still the standby's, runs transfers again once its link is back. The reply timeouts are
 `Gateway:Control:*` and the recovery cadence `Gateway:Handoff:*`. One gateway per realm is the contract: a worker reports how many gateways it has
 admitted and the coordinator refuses to begin when it is more than one. The gateway and every worker must run the same link contract version.
 
@@ -346,26 +349,30 @@ scenarios (a cross-worker teleport, `.cluster restart`) are `ClusterControlChann
 
 ## Cross-worker player transfer, gateway side (S5c)
 
-`GatewayTransferRouter` is the gateway half of `ITransferGatewayRouter`. The source worker's coordinator host
-(`PlayerTransferCoordinatorHost` with `LinkTransferGatewayRouter`) sends `TransferStage`, `TransferCancel` and `TransferCommit` control
-frames on the worker's own gateway link (`GatewayTransferWire`; each is answered with a `TransferAck`). Stage buffers the session's client
+`GatewayTransferRouter` is the gateway half of `ITransferGatewayRouter`. With `Gateway:Transfers:Enabled` the coordinator runs on the gateway, not on a worker: a worker submits the
+request (`ControlSubmit`), and `GatewayTransferService` runs `PlayerTransferCoordinator` through a `PlayerTransferCoordinatorHost` of its own. That coordinator reaches each slot through
+`RemoteTransferSourceWorker` and `RemoteTransferTargetWorker` on the slot's control channel (`GatewayTransferWiring.ForServer`) and calls `GatewayTransferRouter` in process (through
+`GatewayCommitTolerantRouter`). Stage buffers the session's client
 packets (at most 256 packets and 256 KiB), opens a session on the target worker and sends a synthesized `SMSG_TRANSFER_PENDING`. Cancel
 replays the buffer to the source and closes the target session. Commit replays the buffer to the target in order, re-points the connection
 (link and generation) and retires the old generation, so packets still stamped with it are dropped. A buffer overflow frees the buffer, closes
-the target session and disconnects the client; the later commit is then a no-op. Node ids in the frames are the `Gateway:Workers:N:NodeId` values.
-Not built: the worker-side peer-link participant for the target, and the session of the target being resolvable by the shadow loader before
-stage 4 (the target session opens at stage 4, after the passive shadow install).
+the target session and disconnects the client; the later commit is then a no-op. Node ids in these calls are the `Gateway:Workers:N:NodeId` values.
+The S5c path with the coordinator on the source worker is unused: `PlayerTransferCoordinatorHost.Create` and `LinkTransferGatewayRouter` (`TransferStage`, `TransferCancel` and
+`TransferCommit` frames on the worker's gateway link, `GatewayTransferWire`, each answered with a `TransferAck`) have no caller in `src` or `tests`, and no worker builds them. The gateway
+still answers those frames (`GatewayTransferRouter.HandleControlAsync`), but nothing sends them.
+The worker side is built: with `Cluster:Worker:Transfers:Enabled` the worker's production `WorkerTransferTarget` (`TransferHosting`) loads the character through
+`CharacterHooksShadowLoader` and answers the gateway coordinator's transfer verbs. The target session opens at stage 4,
+after the passive shadow install, so the shadow load starts when the acceptor reports that session opening (`WorkerTransferTarget.OnSessionOpened`); if the acceptor was
+restarted without that hook, the install after the commit re-probes and loads at once. The probe and the loader match the session by account only.
 
 ## Not done yet (rest of 3a and beyond)
 
 - **Real-client acceptance** (the 3a exit criterion in the design) has not been run; everything above is mock-client only. The checklist and log-capture procedure for that run, with an empty results table, is [CLUSTER_ACCEPTANCE.md](../CLUSTER_ACCEPTANCE.md).
-- Warden runs on the worker, not the gateway.
-- The movement anticheat's receive time is stamped on the worker, so link jitter is added to the times it compares.
-- The manifest's schema and content versions are operator labels, not read from the databases.
 - The gateway records its metrics but starts no Prometheus or OTLP exporter: it needs a scrape port of its own, which is not chosen yet.
-- Phase 3b's handoff relies on a same-map `SMSG_NEW_WORLD` the client accepts; the spike (`.worldport`, [code hot reload](code-hot-reload.md#worldport-tier-3-spike-administrator-only-when-enabled)) showed on a real 1.12.1 client that it does (design section 5.5). The gateway's seamless reroute is built and tested in process only, not on a real client.
+- Phase 3b's handoff relies on a same-map `SMSG_NEW_WORLD` the client accepts; the spike (`.worldport`, [code hot reload](code-hot-reload.md#worldport-tier-3-spike-administrator-only-when-enabled)) showed on a real 1.12.1 client that it does (design section 5.5). The gateway's seamless reroute is built and tested in process, and over real gateway and world processes under the opt-in keys with a mock client (`CrossWorkerTransferTests`, `ClusterControlChannelScenarioTests`, skipped without `ARCANECORE_TEST_POSTGRES`), but never on a real client.
 - The seamless reroute is untested on a real client in three respects: B's whole login burst follows the synthesized `SMSG_NEW_WORLD` without waiting for `MSG_MOVE_WORLDPORT_ACK` (B ignores that ACK when no teleport is pending, whereas the spike added the player after it); a fresh login on B has re-login side effects (message of the day, friend and guild "came online" notices); and a character aboard a ship gets the plain 4-byte `SMSG_TRANSFER_PENDING`, not the transport form a passenger teleport sends.
-- A gateway or World restart still drops every client. An authenticated operator trigger for the handoff is not built.
+- A gateway restart still drops every client: `.cluster restart` takes only a worker. A World restart drops its clients too, unless it goes through that handoff, which needs the opt-in handoff keys and a standby for the slot; without them a `.cluster restart` starts nothing. That path has run only with a mock client over real gateway and world processes (`ClusterControlChannelScenarioTests`, opt-in and skipped without `ARCANECORE_TEST_POSTGRES`), never with a real 5875 client.
+- The gateway's Warden runs `Warden:Checks` and the timing scan, not the `warden_checks` table the design gives it: the gateway has no world database.
 - The link protocol (channel, session wire, frame types, contracts, manifest) now lives in `ArcaneCore.Cluster.Protocol`, but the
   gateway still references `ArcaneCore.World` for `WorldSession` constants, `AddonInfo`, the build protocols (over Game), the session
   link client and the handoff router seam; those need their own split before the reference can go.

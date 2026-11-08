@@ -60,7 +60,7 @@ public static class SpellStoreFactory
 
         return new SpellStore(spells, createSpells, positions,
             content.ScriptTargets.Where(r => known.Contains(r.SpellId))
-                .Select(r => new SpellStore.ScriptTarget(r.SpellId, r.Type, r.TargetEntry, r.InverseEffectMask)));
+                .Select(r => new SpellStore.ScriptTarget(r.SpellId, r.Type, r.TargetEntry, r.InverseEffectMask, r.TargetCondition)));
     }
 
     /// <summary>One <c>spell_template</c> row as a <see cref="SpellInfo"/> (indices resolved; an unknown index reads as 0, like a DBC lookup miss).</summary>
@@ -108,6 +108,7 @@ public static class SpellStoreFactory
             TargetCreatureType = row.TargetCreatureType,
             RequiresSpellFocus = row.RequiresSpellFocus,
             CastTime = castTime,
+            HasCastTimeEntry = castTimes.ContainsKey(row.CastingTimeIndex),
             RecoveryTime = row.RecoveryTime,
             CategoryRecoveryTime = row.CategoryRecoveryTime,
             InterruptFlags = (SpellInterruptFlags)row.InterruptFlags,

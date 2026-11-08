@@ -239,7 +239,7 @@ public sealed class KalimdorWorldMapData : WorldMapData
 
         if (creatures.ClosestOfEntry(go, NpcBlackwoodWarrior, FurbolgFoodRange, aliveOnly: true) is { } warrior)
         {
-            if (!warrior.Combat.IsInCombat && Instance.Combat.Hooks.CanAttack(warrior, player))
+            if (!warrior.Combat.IsInCombat && Instance.Combat.CanAttackSingleTarget(warrior, player))
             {
                 warrior.AI?.AttackStart(player);
             }
@@ -302,7 +302,7 @@ public sealed class KalimdorWorldMapData : WorldMapData
         Creature? last = furbolgs.Count > 0 ? furbolgs[^1] : null;
         foreach (Creature furbolg in furbolgs)
         {
-            if (furbolg.Combat.IsInCombat || !furbolg.IsAlive || !Instance.Combat.Hooks.CanAttack(furbolg, player))
+            if (furbolg.Combat.IsInCombat || !furbolg.IsAlive || !Instance.Combat.CanAttackSingleTarget(furbolg, player))
             {
                 continue;
             }

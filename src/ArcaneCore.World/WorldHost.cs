@@ -47,6 +47,7 @@ public sealed class WorldHost(
     private volatile bool _standby = workerOptions?.Value is { Enabled: true, Standby: true };
     private Task? _promotion;
     private volatile bool _standbyStarted;
+    private volatile bool _promotionCompleted;
 
     /// <summary>Whether a listener will bind <c>World:Port</c> after this host (test seam); null looks for a registered <see cref="Net.WorldServer"/>.</summary>
     internal bool? ListenerExpected { get; init; }
@@ -85,6 +86,12 @@ public sealed class WorldHost(
     /// included; <see cref="PromoteAsync"/> runs them under the taken-over ownership.
     /// </summary>
     public bool IsStandby => _standby;
+
+    /// <summary>
+    /// True once <see cref="PromoteAsync"/> has finished: the features are attached, the simulation runs and admissions are open. <see cref="IsStandby"/> turns false earlier (at the ownership
+    /// takeover, so Describe reports the promotion at once), but the features the transfer participants are built over are not attached until this is true.
+    /// </summary>
+    public bool PromotionCompleted => _promotionCompleted;
 
     /// <summary>This process's ownership incarnation: the one a handoff's epoch takeover hands the characters ownership to.</summary>
     public Guid Incarnation => _incarnation;
@@ -135,7 +142,7 @@ public sealed class WorldHost(
         }
         catch
         {
-            // The host never calls StopAsync for a failed start: give back only a lock this start took itself. A lock WorldStartup took stays held
+            // The host never calls StopAsync for a failed start, except that WorldStartup.RunAsync stops the host after a port-in-use refusal (that stop takes the not-attached branch and does nothing): give back only a lock this start took itself. A lock WorldStartup took stays held
             // until the container disposes it (after the hosted services stop), which in production is the end of the process.
             if (acquiredHere) writerGuard?.Dispose();
             throw;
@@ -174,13 +181,15 @@ public sealed class WorldHost(
                 directory.Load(identities);
 
                 // A node with a cluster role (Cluster:Node:Role other than Combined) first takes the realm singleton leases it can get (before the item load below, whose orphaned-loot sweep runs only for the maintenance holder), then attaches
-                // only the features its role runs (the auction bot and AutoBroadcast only for a lease it holds). Combined attaches everything, as always.
+                // only the features its role runs (the auction bot and AutoBroadcast run only while it holds their lease: a map worker attaches them dormant and they wake on a takeover). Combined attaches everything, as always.
                 Func<IWorldFeature, bool>? admit = null;
                 Cluster.Social.ClusterNodeRole role = nodeOptions?.Value.Role ?? Cluster.Social.ClusterNodeRole.Combined;
                 if (role != Cluster.Social.ClusterNodeRole.Combined && roleFilter is not null && leaseKeeper is not null)
                 {
                     await leaseKeeper.AcquireAtStartAsync(_incarnation, cancellationToken).ConfigureAwait(false);
-                    admit = feature => roleFilter.ShouldAttachFeature(feature.GetType(), role, leaseKeeper.NodeId, leaseKeeper.TokenFor, leaseKeeper.UtcNow, _incarnation);
+                    // The realm singletons are attached on every map worker, dormant until the node holds their lease (at start or by a run-time takeover).
+                    admit = feature => Cluster.Social.ClusterRoleFeatureFilter.AttachesDormant(feature.GetType(), role)
+                        || roleFilter.ShouldAttachFeature(feature.GetType(), role, leaseKeeper.NodeId, leaseKeeper.TokenFor, leaseKeeper.UtcNow, _incarnation);
                 }
 
                 // Item content before any feature attaches: creatures built while the features attach (script and world-state spawns, the first
@@ -273,7 +282,7 @@ public sealed class WorldHost(
         string Describe(Type feature)
         {
             string scope = Cluster.Social.ClusterRoleFeatureFilter.LeaseScopeFor(feature)!;
-            return keeper.TokenFor(scope) is { } token ? $"{feature.Name} attached here (token {token})" : $"{feature.Name} not attached (lease held by another node)";
+            return keeper.TokenFor(scope) is { } token ? $"{feature.Name} attached here (token {token})" : $"{feature.Name} dormant (lease held by another node; it starts here if that node's lease lapses)";
         }
 
         string instances = keeper.TokenFor(ArcaneCore.Kernel.Cluster.Social.RealmAuthorityScopes.Instances) is { } instancesToken
@@ -363,6 +372,7 @@ public sealed class WorldHost(
         // leaves a promoted world that owns the database but does not run: the host is stopped (as for a failed start), never re-opened as a standby.
         await AttachAndStartAsync(cancellationToken).ConfigureAwait(false);
         admission?.Open();
+        _promotionCompleted = true;
     }
 
     /// <summary>
@@ -533,7 +543,7 @@ public sealed class WorldHost(
     /// <summary>
     /// Stop the bots, the world thread and the features, drain the save queue, then give back the ownership. Runs once: a start that failed has already
     /// stopped the world itself (<see cref="StopAfterFailedStartAsync"/>), and the host still stops it when the stop was requested during start
-    /// (<see cref="WorldStartup.RunAsync"/>); later calls return the first stop's task.
+    /// (<see cref="WorldStartup.RunAsync"/>) or the start was refused because its port is in use (nothing was attached, so that stop does nothing); later calls return the first stop's task.
     /// </summary>
     public Task StopAsync(CancellationToken cancellationToken)
     {
@@ -642,7 +652,8 @@ public sealed class WorldHost(
         try { probe.Start(); }
         catch (SocketException ex)
         {
-            throw new InvalidOperationException($"the world port {address}:{options.Port} is already in use (another world process?); refusing to start before any playerbot is restored", ex);
+            // Any failed bind ends the start here, before the ownership claim and the bot restore: a clash is "in use", anything else (an address this host does not have, a privileged port) is reported as itself.
+            throw Net.WorldBindFailedException.For("world port", $"{address}:{options.Port}", ex, "refusing to start before any playerbot is restored");
         }
         finally { probe.Stop(); }
     }
@@ -821,7 +832,7 @@ public sealed class WorldHost(
         return false;
     }
 
-    /// <summary>Starts recording this worker's heartbeat on its ownership row every <see cref="CharacterFencingOptions.HeartbeatSeconds"/> (Worker scope only). A heartbeat the row refuses means the shard was reclaimed or reaped: the save queue goes terminal and the host stops.</summary>
+    /// <summary>Starts recording this worker's heartbeat in its <c>character_ownership_heartbeat</c> row every <see cref="CharacterFencingOptions.HeartbeatSeconds"/> (Worker scope only). A heartbeat the row refuses means the shard was reclaimed or reaped: the save queue goes terminal and the host stops.</summary>
     private void StartHeartbeat(CharacterOwnershipToken token)
     {
         // Not synchronised: start, promote and stop are sequenced by the host lifecycle (StopHeartbeatAsync does its exchange only after both have returned).
@@ -854,9 +865,11 @@ public sealed class WorldHost(
                     ICharacterOwnershipStore store = scope.ServiceProvider.GetRequiredService<ICharacterOwnershipStore>();
                     if (!await store.HeartbeatAsync(token, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), stop).ConfigureAwait(false))
                     {
-                        saveQueue.FailTerminal(new InvalidOperationException(
-                            $"the worker scope '{token.Scope}' at epoch {token.Epoch} no longer belongs to this world (it was reclaimed or reaped)"));
-                        return;
+                        if (saveQueue.FailTerminal(new InvalidOperationException(
+                            $"the worker scope '{token.Scope}' at epoch {token.Epoch} no longer belongs to this world (it was reclaimed or reaped)")))
+                        {
+                            return;
+                        }
                     }
                 }
                 catch (OperationCanceledException) when (stop.IsCancellationRequested)
@@ -913,9 +926,11 @@ public sealed class WorldHost(
                     ICharacterOwnershipStore? store = scope.ServiceProvider.GetService<ICharacterOwnershipStore>();
                     if (store is not null && await store.IsAnyOwnedAsync(stop).ConfigureAwait(false))
                     {
-                        saveQueue.FailTerminal(new InvalidOperationException(
-                            "the characters database was claimed by a fenced world while this world runs with fencing disabled"));
-                        return;
+                        if (saveQueue.FailTerminal(new InvalidOperationException(
+                            "the characters database was claimed by a fenced world while this world runs with fencing disabled")))
+                        {
+                            return;
+                        }
                     }
                 }
                 catch (OperationCanceledException) when (stop.IsCancellationRequested)

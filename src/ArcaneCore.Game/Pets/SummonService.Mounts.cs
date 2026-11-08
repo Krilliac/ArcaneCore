@@ -55,8 +55,8 @@ public sealed partial class SummonService
     /// Pet::LoadPetFromDB (Pet.cpp:401-404): a pet that comes back while its owner rides starts greyed out, before its bar is sent
     /// (Player::PetSpellInitialize carries the enabled byte); no SMSG_PET_MODE is sent for it. A taxi flight's display does not count:
     /// vmangos loads no pet during a flight (Pet.cpp:216-221, IsPetNeedBeTemporaryUnsummoned's IsTaxiFlying, Player.cpp:20944-20945),
-    /// and TaxiFlightSystem lands without a dismount event, so a pet greyed out then (a hunter pet loaded at login while the saved
-    /// route resumes) would stay greyed out after landing.
+    /// and TaxiFlightSystem lands without a dismount event (its FlightEnded only brings back a pet that was put away, NpcServicesFeature), so a
+    /// pet greyed out then (a hunter pet loaded at login while the saved route resumes) would stay greyed out after landing.
     /// </summary>
     private static void GreyOutForMountedOwner(Player owner, CharmInfo charm)
     {

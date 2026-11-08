@@ -1,5 +1,6 @@
 using System.Numerics;
 using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Creatures.AI;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
@@ -26,7 +27,27 @@ public sealed partial class Creature : Unit, ICombatCreature
     public uint TargetNotReachableMs { get; internal set; }
 
     /// <summary>The script driving this creature (null outside a creature map system).</summary>
-    public CreatureAI? AI { get; internal set; }
+    public CreatureAI? AI
+    {
+        get;
+        internal set
+        {
+            field = value;
+            if (value is not { RunsSpellList: true })
+            {
+                SpellLists = null; // a charm's or a pet's PetAI: nothing may run or read the list while it drives (cmangos PetAI::UpdateAI has no UpdateSpellLists)
+            }
+        }
+    }
+
+    /// <summary>
+    /// The creature's spell list scheduler; null without a list or with an AI that does not run one (CreatureMapSystem.SpellLists.cs). <see cref="AI"/> keeps
+    /// that true for every AI change, and a new AI that does run one binds through <c>CreatureMapSystem.CreateAi</c>.
+    /// </summary>
+    internal CreatureSpellListScheduler<Unit>? SpellLists { get; set; }
+
+    /// <summary>The content version the list was bound at; a reload moves <see cref="CreatureContent.DefinitionsVersion"/> past it.</summary>
+    internal int SpellListVersion { get; set; }
 
     /// <summary>Where combat began (vmangos m_combatStartX/Y/Z): waypoint movers evade back here.</summary>
     internal CreatureHome? CombatStart { get; set; }
@@ -114,7 +135,7 @@ public sealed partial class Creature : Unit, ICombatCreature
             return;
         }
 
-        if (Map is not { } map || Combat.Victim is not null || !IsAlive || !map.Combat.Hooks.CanAttack(this, attacker))
+        if (Map is not { } map || Combat.Victim is not null || !IsAlive || !map.Combat.CanAttackSingleTarget(this, attacker))
         {
             return;
         }

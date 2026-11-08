@@ -21,7 +21,7 @@ name: Docker publish
 # failure fails the check, which is its whole purpose. An arm64 miss is not retried until main moves (the skip check compares commits only).
 # Git tags ending in -debug are refused: <tag>-debug is the Debug image tag of tag <tag>.
 #
-# Old sha- tags are NOT pruned here; see "Pruning" in docs/guide/docker.md.
+# Old sha- tags are pruned by the prune job (only the schedule deletes; a hand run only lists); see "Pruning" in docs/guide/docker.md.
 on:
   schedule:
     - cron: "23 2 * * *"
@@ -208,3 +208,58 @@ jobs:
           if [ -n "$TAGS" ]; then
             printf '  tags: %s\n' "$(echo "$TAGS" | tr '\n' ' ')" >> "$GITHUB_STEP_SUMMARY"
           fi
+
+  # Deletes only package versions whose tags are ALL nightly sha- tags (sha-<7 hex>-debug / sha-<7 hex>-release) and that are older than 30
+  # days. A version that also carries edge, edge-release, a release tag or a manual-sha- tag is kept, a version with no tag at all (the per-platform
+  # manifests a live multi-arch tag points at) is never touched. Only the nightly schedule deletes, and only when the repository variable
+  # PRUNE_SHA_TAGS is "true"; every other run, a hand run included, only lists what it would delete. The job is continue-on-error: a prune
+  # failure (403, 404, a refused delete) must not turn the run red, because the changed job skips on the last SUCCESSFUL run.
+  # The first live run must be checked by the repository owner (docs/guide/docker.md, Pruning).
+  prune:
+    name: prune old sha- tags
+    needs: publish
+    if: ${{ !cancelled() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      OWNER: ${{ github.repository_owner }}
+      PRUNE: ${{ vars.PRUNE_SHA_TAGS == 'true' && github.event_name == 'schedule' }}
+    steps:
+      - name: Prune
+        run: |
+          set -euo pipefail
+          owner="${OWNER,,}"
+          kind=$(gh api "users/$owner" --jq '.type')
+          if [ "$kind" = "Organization" ]; then scope="orgs/$owner"; else scope="users/$owner"; fi
+          cutoff=$(date -u -d '30 days ago' +%Y-%m-%dT%H:%M:%SZ)
+          echo "## Image pruning (sha- tags older than $cutoff, delete=$PRUNE)" >> "$GITHUB_STEP_SUMMARY"
+          for target in world realm tools; do
+            pkg="arcanecore-$target"
+            ids=$(gh api --paginate "$scope/packages/container/$pkg/versions?per_page=100" | jq -r --arg cutoff "$cutoff" '.[]
+                  | select((.metadata.container.tags | length) > 0)
+                  | select(all(.metadata.container.tags[]; test("^sha-[0-9a-f]{7}-(debug|release)$")))
+                  | select(.created_at < $cutoff)
+                  | "\(.id) \(.metadata.container.tags | join(","))"')
+            if [ -z "$ids" ]; then
+              echo "- $pkg: nothing to prune" >> "$GITHUB_STEP_SUMMARY"
+              continue
+            fi
+            while read -r id tags; do
+              if [ "$PRUNE" = "true" ]; then
+                gh api -X DELETE "$scope/packages/container/$pkg/versions/$id"
+                echo "- $pkg: deleted version $id ($tags)" >> "$GITHUB_STEP_SUMMARY"
+              else
+                echo "- $pkg: would delete version $id ($tags)" >> "$GITHUB_STEP_SUMMARY"
+              fi
+            done <<< "$ids"
+          done
+      - name: Report a prune failure
+        if: ${{ failure() }}
+        run: |
+          echo "::warning::Image pruning failed; the run stays green. Read the Prune step log and docs/guide/docker.md (Pruning)."
+          echo "- PRUNING FAILED: see the Prune step log (the run is not failed by it)" >> "$GITHUB_STEP_SUMMARY"

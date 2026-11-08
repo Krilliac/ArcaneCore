@@ -6,6 +6,7 @@ using ArcaneCore.Protocol;
 using ArcaneCore.World.AntiCheat.PacketHeuristics;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.PacketHeuristics;
@@ -13,7 +14,7 @@ namespace ArcaneCore.World.Tests.PacketHeuristics;
 /// <summary>
 /// The packet heuristics on the client path: real sessions over loopback sockets, every packet through <c>WorldSession.DispatchAsync</c> and,
 /// for world opcodes, the world queue and <c>ProcessWorldPackets</c>. Each check is proven to fire (RED when its hook is removed) and the
-/// switches (off by default, exempt staff) are proven to keep everything silent.
+/// switches (explicitly off, exempt staff) are proven to keep everything silent.
 /// </summary>
 public sealed class PacketHeuristicsClientTests
 {
@@ -22,20 +23,21 @@ public sealed class PacketHeuristicsClientTests
     private static string Key(PacketCheck check) => Subsystem + "/" + PacketChecks.Code(check);
 
     [Fact]
-    public async Task OffByDefault_ABurstOfBadPackets_RecordsNothingAndAllocatesNoState()
+    public async Task ConfiguredOff_ABurstOfBadPackets_RecordsNothingAndAllocatesNoState()
     {
-        await using var host = WorldTestHost.Start();
+        await using var host = WorldTestHost.Start(configureServices: services => services.AddSingleton(
+            Microsoft.Extensions.Options.Options.Create(new PacketHeuristicsOptions { Enabled = false }))); // the section says Enabled = false
         PacketHeuristicsFeature feature = PacketHeuristicsTestKit.FeatureOf(host);
         Assert.False(feature.Active);
         var ledger = new AnomalyLedger();
-        feature.Ledger = ledger; // the options were never switched on: this is the shipped default
+        feature.Ledger = ledger;
         (WorldTestClient client, WorldSession session) = await PacketHeuristicsTestKit.EnterClientAsync(host, "PHOFF", "Phoffone");
         await using (client)
         {
             using AnomalyCapture capture = ledger.Capture();
             for (int i = 0; i < 20; i++)
             {
-                await client.SendAsync(WorldOpcode.CmsgNewSpellSlot, []);
+                await client.SendAsync(WorldOpcode.MsgChannelStart, []);
                 await client.SendAsync((WorldOpcode)826, [1, 2, 3]);
                 await client.SendAsync(WorldOpcode.CmsgStandstatechange, [0, 0, 0, 0, 9]);
                 await client.SendAsync(WorldOpcode.CmsgEmote, PacketHeuristicsTestKit.U32(0));
@@ -52,6 +54,29 @@ public sealed class PacketHeuristicsClientTests
             }
 
             Assert.Null(session.HeuristicsState); // no per-session state exists while the feature is off
+        }
+    }
+
+    [Fact]
+    public async Task WithTheDefaultOptions_TheChecksRun_WithoutAnyConfiguration()
+    {
+        // A server with no World:PacketHeuristics section resolves the default options; the test host pins them off, so this one asks for them.
+        await using var host = WorldTestHost.Start(configureServices: services => services.AddSingleton(Microsoft.Extensions.Options.Options.Create(new PacketHeuristicsOptions())));
+        PacketHeuristicsFeature feature = PacketHeuristicsTestKit.FeatureOf(host);
+        Assert.True(feature.Active);
+        var ledger = new AnomalyLedger();
+        feature.Ledger = ledger;
+        (WorldTestClient client, WorldSession session) = await PacketHeuristicsTestKit.EnterClientAsync(host, "PHDEF", "Phdefone");
+        await using (client)
+        {
+            using AnomalyCapture capture = ledger.Capture();
+
+            await client.SendAsync(WorldOpcode.CmsgCharEnum, []); // allowed at the character screen only
+            await WorldTestHost.WaitForAsync(() => feature.Count(PacketCheck.WrongState, PacketTraffic.Player) >= 1, "the wrong-state finding");
+
+            Assert.Single(capture.Notices, n => n.Key == Key(PacketCheck.WrongState));
+            Assert.NotNull(session.HeuristicsState);
+            Assert.Equal(SessionState.InWorld, session.State); // report only: the session is where it was
         }
     }
 
@@ -103,21 +128,21 @@ public sealed class PacketHeuristicsClientTests
     public async Task UnknownOpcode_IsInfoWhenNamed_AndWarningWhenOutsideTheTableOrAServerOpcode()
     {
         await using var host = WorldTestHost.Start();
-        Assert.False(host.Opcodes.TryGet(WorldOpcode.CmsgNewSpellSlot, out _));
+        Assert.False(host.Opcodes.TryGet(WorldOpcode.MsgChannelStart, out _));
         (WorldTestClient client, WorldSession session) = await PacketHeuristicsTestKit.EnterClientAsync(host, "PHUNK", "Phunkone");
         await using (client)
         {
             (PacketHeuristicsFeature feature, AnomalyLedger ledger) = PacketHeuristicsTestKit.Enable(host);
             using AnomalyCapture capture = ledger.Capture();
 
-            await client.SendAsync(WorldOpcode.CmsgNewSpellSlot, []);
+            await client.SendAsync(WorldOpcode.MsgChannelStart, []);
             await client.SendAsync((WorldOpcode)826, [1, 2, 3]);
             await client.SendAsync(WorldOpcode.SmsgPong, [0, 0, 0, 0]);
             await PacketHeuristicsTestKit.SettleAsync(host, client, session);
 
             Assert.Equal(3, feature.Count(PacketCheck.UnknownOpcode, PacketTraffic.Player));
             IReadOnlyList<AnomalyNotice> notices = capture.Notices;
-            Assert.Equal(AnomalySeverity.Info, Assert.Single(notices, n => n.Detail.StartsWith("CMSG_NEW_SPELL_SLOT", StringComparison.Ordinal)).Severity);
+            Assert.Equal(AnomalySeverity.Info, Assert.Single(notices, n => n.Detail.StartsWith("MSG_CHANNEL_START", StringComparison.Ordinal)).Severity);
             AnomalyNotice outside = Assert.Single(notices, n => n.Detail.Contains("outside the opcode table", StringComparison.Ordinal));
             Assert.Equal(AnomalySeverity.Warning, outside.Severity);
             AnomalyNotice server = Assert.Single(notices, n => n.Detail.StartsWith("SMSG_PONG", StringComparison.Ordinal));
@@ -357,14 +382,14 @@ public sealed class PacketHeuristicsClientTests
             (PacketHeuristicsFeature feature, AnomalyLedger ledger) = PacketHeuristicsTestKit.Enable(host);
             using AnomalyCapture capture = ledger.Capture();
 
-            await client.SendAsync(WorldOpcode.CmsgNewSpellSlot, []);
+            await client.SendAsync(WorldOpcode.MsgChannelStart, []);
             await PacketHeuristicsTestKit.SettleAsync(host, client, session);
             Assert.Empty(capture.Notices);
             Assert.Equal(0, PacketHeuristicsTestKit.Total(feature, PacketCheck.UnknownOpcode));
             Assert.Null(session.HeuristicsState);
 
             feature.SetExemptStaff(false);
-            await client.SendAsync(WorldOpcode.CmsgNewSpellSlot, []);
+            await client.SendAsync(WorldOpcode.MsgChannelStart, []);
             await WorldTestHost.WaitForAsync(() => feature.Count(PacketCheck.UnknownOpcode, PacketTraffic.Staff) >= 1, "the staff finding");
             Assert.Equal(0, feature.Count(PacketCheck.UnknownOpcode, PacketTraffic.Player));
             Assert.Single(capture.Notices, n => n.Key == Key(PacketCheck.UnknownOpcode));
@@ -379,12 +404,12 @@ public sealed class PacketHeuristicsClientTests
         await using (client)
         {
             (PacketHeuristicsFeature feature, AnomalyLedger ledger) = PacketHeuristicsTestKit.Enable(host);
-            await client.SendAsync(WorldOpcode.CmsgNewSpellSlot, []);
+            await client.SendAsync(WorldOpcode.MsgChannelStart, []);
             await WorldTestHost.WaitForAsync(() => feature.Count(PacketCheck.UnknownOpcode, PacketTraffic.Player) == 1, "one finding while on");
 
             feature.SetEnabled(false);
             Assert.False(feature.Active);
-            await client.SendAsync(WorldOpcode.CmsgNewSpellSlot, []);
+            await client.SendAsync(WorldOpcode.MsgChannelStart, []);
             await PacketHeuristicsTestKit.SettleAsync(host, client, session);
             Assert.Equal(1, feature.Count(PacketCheck.UnknownOpcode, PacketTraffic.Player));
 

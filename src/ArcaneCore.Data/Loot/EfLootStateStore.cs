@@ -155,10 +155,11 @@ public sealed class EfLootStateStore(CharacterDbContext db, IRealmLeaseFenceSour
     {
         // In a cluster only the Instances lease holder purges orphan chests (writer-lock design section 4, row 4): another worker may have committed an instance row
         // this node has not seen. A non-holder reads the states as they are; the holder's purge is verified against the lease row.
-        if (LeaseFencedWrite.IsHolder(leaseFences, RealmAuthorityScopes.Instances))
+        // TryBeginSweep reads the fence once, before the holder check, so a release in between cannot leave the purge without a fence (unchecked).
+        if (LeaseFencedWrite.TryBeginSweep(leaseFences, RealmAuthorityScopes.Instances, out RealmLeaseFence? sweepFence))
         {
             await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
-            if (leaseFences?.FenceFor(RealmAuthorityScopes.Instances) is { } fence)
+            if (sweepFence is { } fence)
             {
                 await LeaseFencedWrite.EnsureHeldAsync(db, fence, cancellationToken).ConfigureAwait(false);
             }

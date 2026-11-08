@@ -59,6 +59,18 @@ public static class SpellPackets
         return writer.ToArray();
     }
 
+    /// <summary>
+    /// SMSG_SUPERCEDED_SPELL: u16 old spell, u16 new spell (vmangos Server/Packets/Spell.cpp SupercededSpell::AppendBodyTo; sent from
+    /// Player::AddSpell, Player.cpp:3640-3680, when a higher rank replaces a lower rank in the spellbook).
+    /// </summary>
+    public static byte[] BuildSupercededSpell(uint oldSpellId, uint newSpellId)
+    {
+        var writer = new PacketWriter(4);
+        writer.WriteUInt16((ushort)oldSpellId);
+        writer.WriteUInt16((ushort)newSpellId);
+        return writer.ToArray();
+    }
+
     /// <summary>SMSG_REMOVED_SPELL: u16 spell (vmangos Player::RemoveSpell; gtker smsg_removed_spell).</summary>
     public static byte[] BuildRemovedSpell(uint spellId)
     {
@@ -247,6 +259,21 @@ public static class SpellPackets
         var writer = new PacketWriter(8);
         writer.WriteUInt32(spellId);
         writer.WriteUInt32(durationMs);
+        return writer.ToArray();
+    }
+
+    /// <summary>SMSG_SPELL_UPDATE_CHAIN_TARGETS: u64 caster, u32 spell, u32 count, count x u64 target (vmangos WorldPackets::Spell::SpellUpdateChainTargets, Spell.cpp:622-629).</summary>
+    public static byte[] BuildSpellUpdateChainTargets(ulong casterGuid, uint spellId, IReadOnlyList<ulong> targets)
+    {
+        var writer = new PacketWriter(16 + (targets.Count * 8));
+        writer.WriteUInt64(casterGuid);
+        writer.WriteUInt32(spellId);
+        writer.WriteUInt32((uint)targets.Count);
+        foreach (ulong target in targets)
+        {
+            writer.WriteUInt64(target);
+        }
+
         return writer.ToArray();
     }
 

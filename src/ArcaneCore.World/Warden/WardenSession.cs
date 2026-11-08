@@ -465,6 +465,13 @@ public sealed class WardenSession
             return;
         }
 
+        // An unnumbered (id 0) check is never confirmed and so never acts under ConfirmFailedScans (MaNGOS Zero produces no decision for it); log it.
+        if (check.UnconfirmableUnnumbered)
+        {
+            _report(new WardenVerdict($"failed scan {check.Id} ({what}){detail}; an unnumbered check is not confirmable, logged only", WardenAction.Log, false, check.Id));
+            return;
+        }
+
         // Not confirmable (timing, scripted): actionable evidence acts at once, health and corroboration evidence is logged.
         _report(new WardenVerdict($"failed scan {check.Id} ({what}){detail}", WardenEvidence.IsActionable(check.EvidenceClass) ? action : WardenAction.Log, false, check.Id));
     }

@@ -42,6 +42,9 @@ internal sealed class PlayerbotMount
     private uint _backoffUntil;
     private int _failures;
     private bool _casting;
+
+    /// <summary>Test seam: a summon cast in flight (<see cref="IsBusy"/>).</summary>
+    internal bool CastingForTests { set => _casting = value; }
     private uint _activeSpellId;
     private Vector3 _castStartPos;
     private uint _scanAt;

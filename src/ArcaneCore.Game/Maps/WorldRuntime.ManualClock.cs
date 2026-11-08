@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.Kernel.Safety;
 
 namespace ArcaneCore.Game.Maps;
 
@@ -124,7 +125,7 @@ public sealed partial class WorldRuntime
     /// world thread after every tick) holds — true — or <paramref name="maxMilliseconds"/> of game time have passed —
     /// false. Without a condition it simply advances and completes true. Concurrent advances share the ticks.
     /// </summary>
-    public Task<bool> AdvanceClockUntilAsync(uint maxMilliseconds, Func<bool>? condition)
+    public Task<bool> AdvanceClockUntilAsync(uint maxMilliseconds, [RunsOnWorldThread] Func<bool>? condition)
     {
         if (!_manualClock)
         {

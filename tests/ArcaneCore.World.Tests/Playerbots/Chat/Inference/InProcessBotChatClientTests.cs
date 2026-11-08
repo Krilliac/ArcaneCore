@@ -117,36 +117,77 @@ public sealed class InProcessBotChatClientTests
         }
     }
 
+    // The two tests below call Overran/Finish directly instead of driving concurrent requests through the engine: a fast reply
+    // could finish before a third request is admitted, which would make the result depend on timing. The client is built with chat
+    // disabled so it starts no model load; a circuit threshold of 7 puts "7 replies" in the report's detail, which keeps the shared
+    // ledger capture from matching another test's report.
+    private static InProcessBotChatClient DirectClient(PlayerbotOptions options, ManualTime time)
+    {
+        options.Chat.Enabled = false;
+        return new InProcessBotChatClient(new FakeBotChatClient(), options, Path.GetTempPath(), new ListLogger(), time);
+    }
+
+    private static AnomalyCapture CaptureTrips()
+        => AnomalyLedger.Shared.Capture(n => n.Key == CircuitOpen && n.Detail.Contains("7 replies", StringComparison.Ordinal));
+
     [Fact]
     public void An_overrun_finishing_while_the_circuit_is_open_does_not_retrip_it()
     {
         PlayerbotOptions options = Options("tiny.gguf", o =>
         {
-            o.CircuitBreakerOverruns = 2;
+            o.CircuitBreakerOverruns = 7;
             o.CircuitBreakerSeconds = 60;
         });
         var time = new ManualTime();
-        using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Key == CircuitOpen);
-        using var client = new InProcessBotChatClient(new FakeBotChatClient(), options, Path.GetTempPath(), new ListLogger(), time);
-        var overran = typeof(InProcessBotChatClient).GetMethod("Overran", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
-        var until = typeof(InProcessBotChatClient).GetField("_circuitOpenUntil", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+        using AnomalyCapture capture = CaptureTrips();
+        using InProcessBotChatClient client = DirectClient(options, time);
 
-        // Two overruns trip the circuit; the third finishes afterwards (a request admitted before the trip, MaxConcurrent >= 2).
-        overran.Invoke(client, [options.Chat.InProcess]);
-        overran.Invoke(client, [options.Chat.InProcess]);
-        object openUntil = until.GetValue(client)!;
+        // Seven overruns trip the circuit; the eighth finishes afterwards (a request admitted before the trip).
+        for (int i = 0; i < 7; i++) client.Overran(options.Chat.InProcess);
+        DateTimeOffset openUntil = client.CircuitOpenUntil;
         time.Advance(TimeSpan.FromSeconds(10));
-        overran.Invoke(client, [options.Chat.InProcess]);
+        client.Overran(options.Chat.InProcess);
 
         InProcessChatStats stats = client.Stats();
-        Assert.Equal(3, stats.Overruns);
+        Assert.Equal(8, stats.Overruns);
         Assert.Equal(1, stats.CircuitOpens);
-        Assert.Equal(openUntil, until.GetValue(client));
+        Assert.Equal(openUntil, client.CircuitOpenUntil);
         Assert.Equal(1, capture.Count(CircuitOpen));
 
         // Half-open is unchanged: after the rest one more overrun reopens it.
         time.Advance(TimeSpan.FromSeconds(61));
-        overran.Invoke(client, [options.Chat.InProcess]);
+        client.Overran(options.Chat.InProcess);
+        Assert.Equal(2, client.Stats().CircuitOpens);
+    }
+
+    [Fact]
+    public void A_success_finishing_while_the_circuit_is_open_leaves_the_half_open_counter_alone()
+    {
+        PlayerbotOptions options = Options("tiny.gguf", o =>
+        {
+            o.CircuitBreakerOverruns = 7;
+            o.CircuitBreakerSeconds = 60;
+        });
+        var time = new ManualTime();
+        using InProcessBotChatClient client = DirectClient(options, time);
+        for (int i = 0; i < 7; i++) client.Overran(options.Chat.InProcess);
+        Assert.Equal(1, client.Stats().CircuitOpens);
+
+        // A reply admitted before the trip succeeds inside the rest.
+        time.Advance(TimeSpan.FromSeconds(10));
+        var done = new ChatGenerationResult(ChatGenerationStatus.Completed, "hello", 4, 0, 1, 0, 0, "stop", []);
+        Assert.Equal(BotChatOutcome.Ok, client.Finish(done, Prompt, options.Chat.InProcess).Outcome);
+        Assert.Equal(1, client.Stats().Replies);
+
+        // After the rest one more overrun still reopens the circuit at once.
+        time.Advance(TimeSpan.FromSeconds(61));
+        client.Overran(options.Chat.InProcess);
+        Assert.Equal(2, client.Stats().CircuitOpens);
+
+        // A success once the circuit is closed does reset the run: it then takes a full run of overruns to trip again.
+        time.Advance(TimeSpan.FromSeconds(61));
+        client.Finish(done, Prompt, options.Chat.InProcess);
+        client.Overran(options.Chat.InProcess);
         Assert.Equal(2, client.Stats().CircuitOpens);
     }
 

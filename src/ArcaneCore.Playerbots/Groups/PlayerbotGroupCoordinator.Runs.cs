@@ -79,12 +79,17 @@ public sealed partial class PlayerbotGroupCoordinator
     internal Func<double> RunRoll { get; set; } = () => Random.Shared.NextDouble();
 
     /// <summary>The runs completed and given up so far (status and tests).</summary>
-    internal (int Completed, int GivenUp) RunTotals => (_runsCompleted, _runsGivenUp);
+    internal (int Completed, int GivenUp) RunTotals => (Volatile.Read(ref _runsCompleted), Volatile.Read(ref _runsGivenUp));
 
-    private readonly int[] _runOutcomes = new int[3];
+    private readonly int[] _runOutcomes = new int[PlayerbotRunMeters.OutcomeSlots];
 
     /// <summary>How many runs of this coordinator ended with <paramref name="outcome"/> (a <see cref="PlayerbotRunMeters"/> label), counted beside the process-wide runs metric, which every coordinator in the process feeds.</summary>
-    internal int RunOutcomeCount(string outcome) => Volatile.Read(ref _runOutcomes[PlayerbotRunMeters.IndexOf(outcome)]);
+    internal int RunOutcomeCount(string outcome)
+    {
+        int slot = PlayerbotRunMeters.IndexOf(outcome);
+        if (slot < 0) throw new ArgumentOutOfRangeException(nameof(outcome), outcome, "not a run outcome label");
+        return Volatile.Read(ref _runOutcomes[slot]);
+    }
 
     /// <summary>
     /// The encounters in force (<see cref="InstanceEncounterCatalog"/>): the <c>instance_encounter</c> table as read when this
@@ -98,26 +103,50 @@ public sealed partial class PlayerbotGroupCoordinator
     /// </summary>
     internal IReadOnlyList<InstanceEncounter> ReplaceEncounters(IReadOnlyList<InstanceEncounter> encounters) => EncounterCatalog.Replace(encounters);
 
+    private Task _encounterLoad = Task.CompletedTask;
+
+    // Cancelled by StopAsync only (a detach keeps a read under way, and so does the re-attach after a failed quiesce).
+    private CancellationTokenSource? _encounterCancel;
+
+    /// <summary>The <c>instance_encounter</c> read started by the last attach; completed when it ended (tests wait on it).</summary>
+    internal Task EncounterLoading => _encounterLoad;
+
     /// <summary>
-    /// Read the <c>instance_encounter</c> rows into the core catalogue (first attach; blocking, as the other content loads of the attach). A
-    /// catalogue already loaded (a re-attach, or a reload) is kept. An empty table is an empty catalogue, logged.
+    /// Start reading the <c>instance_encounter</c> rows into the core catalogue (first attach). The read runs on the thread pool, so an
+    /// attach (a hot re-attach on a live world included) never waits on the database; until it ends the catalogue is empty and no run
+    /// is planned, and <see cref="Catalogue"/> rebuilds by itself when the rows are swapped in. A catalogue already loaded (a re-attach,
+    /// or a reload) is kept, and so is a read already under way. An empty table is an empty catalogue, logged.
     /// </summary>
     private void LoadEncounters()
     {
-        if (EncounterCatalog.IsLoaded) return;
+        if (EncounterCatalog.IsLoaded || !_encounterLoad.IsCompleted) return;
         if (services.GetService<IServiceScopeFactory>() is not { } scopes) return;
+        object? origin = _world?.Identity;
+        if (_encounterCancel is null || _encounterCancel.IsCancellationRequested) _encounterCancel = new CancellationTokenSource();
+        CancellationToken stop = _encounterCancel.Token;
+        _encounterLoad = Task.Run(() => LoadEncountersAsync(scopes, origin, stop));
+    }
+
+    private async Task LoadEncountersAsync(IServiceScopeFactory scopes, object? origin, CancellationToken stop)
+    {
         try
         {
-            using IServiceScope scope = scopes.CreateScope();
+            await using AsyncServiceScope scope = scopes.CreateAsyncScope();
             if (scope.ServiceProvider.GetService<IInstanceEncounterStore>() is not { } store)
             {
                 logger.LogInformation("Playerbot runs: no instance_encounter store is registered; no dungeon or raid runs");
                 return;
             }
 
-            EncounterCatalog.Replace(store.LoadAsync().GetAwaiter().GetResult());
-            if (CurrentEncounters.Count == 0)
+            IReadOnlyList<InstanceEncounter> rows = await store.LoadAsync(stop).ConfigureAwait(false);
+            // A .reload instance_encounter that ran while this read was under way wins: the check and the swap are one step in the catalogue.
+            if (!EncounterCatalog.ReplaceIfNotLoaded(rows)) return;
+            if (rows.Count == 0)
                 logger.LogInformation("Playerbot runs: the instance_encounter table is empty (refresh the world database from a classic-db dump); no dungeon or raid runs");
+        }
+        catch (OperationCanceledException) when (stop.IsCancellationRequested)
+        {
+            // The world is stopping: the read was cut short, which is not a fault.
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
@@ -125,7 +154,7 @@ public sealed partial class PlayerbotGroupCoordinator
             PlayerbotGroupAnomalies.ReportSystem(PlayerbotGroupAnomalies.RunFault,
                 "instance_encounter",
                 string.Create(CultureInfo.InvariantCulture, $"instance_encounter table could not be read ({ex.GetType().Name}: {ex.Message})"),
-                _world?.Identity);
+                origin);
             logger.LogWarning(ex, "Playerbot runs: the instance_encounter table could not be read ({Type}: {Message}); no dungeon or raid runs", ex.GetType().Name, ex.Message);
         }
     }
@@ -140,6 +169,9 @@ public sealed partial class PlayerbotGroupCoordinator
         // a catalogue built from it finds no spawn for any boss and leaves every wing out as no-spawned-boss (logged for all 48 wings at
         // each startup). Build nothing, cache nothing and log nothing until the real spawns are in place.
         if (_world is null || CatalogueCreatures(services.GetService<CreatureWorldFeature>()) is not { } creatures) return PlayerbotRunCatalogue.Empty;
+        // Likewise while the instance_encounter read started at attach is still under way: the catalogue is empty and is not built (or its
+        // 48 wings logged as left out) from it; it is built once the rows are swapped in, or once the read ended without any.
+        if (!EncounterCatalog.IsLoaded && !_encounterLoad.IsCompleted) return PlayerbotRunCatalogue.Empty;
         WorldMaps maps = WorldMaps.Of(_world);
         IReadOnlyCollection<AreaTriggerTemplate> triggers = maps.AreaTriggers;
         if (ReferenceEquals(_catalogueRegistry, maps.Registry) && ReferenceEquals(_catalogueTriggers, triggers)
@@ -557,11 +589,13 @@ public sealed partial class PlayerbotGroupCoordinator
         string? reason = run.Complete ? null : run.Reason ?? group.Reason ?? "disbanded";
         string outcome = PlayerbotRunMeters.OutcomeOf(run.Complete, reason);
         PlayerbotRunMeters.Count(outcome);
-        Interlocked.Increment(ref _runOutcomes[PlayerbotRunMeters.IndexOf(outcome)]);
-        if (run.Complete) _runsCompleted++;
+        // All three tallies use Interlocked: the tests and the status read them from other threads (Volatile.Read), so no thread-affinity assumption is needed.
+        int slot = PlayerbotRunMeters.IndexOf(outcome);
+        if (slot >= 0) Interlocked.Increment(ref _runOutcomes[slot]);
+        if (run.Complete) Interlocked.Increment(ref _runsCompleted);
         else
         {
-            _runsGivenUp++;
+            Interlocked.Increment(ref _runsGivenUp);
             ReportRunFailed(group, run, reason!);
         }
     }
@@ -708,7 +742,7 @@ public sealed partial class PlayerbotGroupCoordinator
             }
 
         return string.Create(CultureInfo.InvariantCulture,
-            $"runs {(runs.Enabled ? "enabled" : "disabled")}: dungeon {dungeons}/{runs.MaxConcurrentRuns} raid {raids}/{(runs.Raids.Enabled ? runs.Raids.MaxConcurrentRaids : 0)} completed {_runsCompleted} given-up {_runsGivenUp}; {_catalogue.Plans.Count} wings known, {_catalogue.Exclusions.Count} left out.");
+            $"runs {(runs.Enabled ? "enabled" : "disabled")}: dungeon {dungeons}/{runs.MaxConcurrentRuns} raid {raids}/{(runs.Raids.Enabled ? runs.Raids.MaxConcurrentRaids : 0)} completed {Volatile.Read(ref _runsCompleted)} given-up {Volatile.Read(ref _runsGivenUp)}; {_catalogue.Plans.Count} wings known, {_catalogue.Exclusions.Count} left out.");
     }
 
     private static string DescribeRun(PlayerbotRunMachine run)

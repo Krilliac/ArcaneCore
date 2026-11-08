@@ -1,7 +1,10 @@
+using System.Text.RegularExpressions;
 using ArcaneCore.Data.Content.Names;
+using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData.Chat;
 using ArcaneCore.World.Chat;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.Chat;
@@ -32,6 +35,68 @@ public sealed class ChatWordFilterTests
 
         Assert.Equal(clean, filter.Apply(clean));
         Assert.Equal(1, ledger.Snapshot().Where(s => s.Site == "chat.word-filter-timeout").Sum(s => s.Count));
+    }
+
+    [Fact]
+    public void PatternsTheLinearEngineSupports_UseNonBacktracking_AndOthersFallBack()
+    {
+        var ledger = new FaultLedger();
+        var filter = new ChatWordFilter(
+            [
+                new ChatWordFilterRule(1, @"^(a+)+$", ChatWordFilterScope.Names, ChatWordFilterAction.Block),
+                new ChatWordFilterRule(2, @"^(a+)+\1$", ChatWordFilterScope.Names, ChatWordFilterAction.Block),
+            ],
+            TimeSpan.FromMilliseconds(1),
+            ledger);
+
+        Assert.Equal(2, filter.NamePatterns.Length);
+        Assert.True(filter.NamePatterns[0].Options.HasFlag(RegexOptions.NonBacktracking));
+        Assert.False(filter.NamePatterns[1].Options.HasFlag(RegexOptions.NonBacktracking)); // a backreference needs the backtracking engine
+        Assert.Equal(Regex.InfiniteMatchTimeout, filter.NamePatterns[0].MatchTimeout);
+        Assert.Equal(TimeSpan.FromMilliseconds(1), filter.NamePatterns[1].MatchTimeout); // the fallback keeps the supplied timeout, not the default
+    }
+
+    [Fact]
+    public void ATimedOutBlockRule_LogsOnce_WhileTheLedgerCountsEveryTimeout()
+    {
+        var ledger = new FaultLedger();
+        ledger.Configure(new DiagnosticsOptions { FaultLogLimit = 1 }); // one log per signature, then the ledger's once-a-minute throttle
+        var logger = new CountingLogger();
+        var filter = new ChatWordFilter(
+            [new ChatWordFilterRule(77, @"(a+)+\1$", ChatWordFilterScope.Chat, ChatWordFilterAction.Block)],
+            TimeSpan.FromMilliseconds(1),
+            ledger,
+            logger);
+        string clean = new string('a', 40) + "!";
+
+        Assert.Equal(clean, filter.Apply(clean));
+        Assert.Equal(clean, filter.Apply(clean));
+        Assert.Equal(clean, filter.Apply(clean));
+
+        Assert.Equal(3, ledger.Snapshot().Where(s => s.Site == "chat.word-filter-timeout").Sum(s => s.Count));
+        Assert.Equal(1, logger.Warnings); // the ledger's throttle: the limit of one, then once a minute
+        Assert.Contains("id 77", logger.LastMessage); // the warning names the rule
+    }
+
+    private sealed class CountingLogger : ILogger
+    {
+        public int Warnings { get; private set; }
+
+        public string LastMessage { get; private set; } = string.Empty;
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel == LogLevel.Warning)
+            {
+                Warnings++;
+                LastMessage = formatter(state, exception);
+            }
+        }
     }
 
     [Fact]

@@ -86,10 +86,8 @@ public sealed partial class ReputationFeature(IServiceProvider services, IServic
         }
 
         world.PlayerLoggingOut += OnPlayerLoggingOut;
-        if (services.GetService<IReputationChangeSource>() is null)
-        {
-            service.ReputationChanged += OnReputationChanged;
-        }
+        // The one delivery path to QuestNpcServices.ReputationChanged (nothing registers an IReputationChangeSource in the container).
+        service.ReputationChanged += OnReputationChanged;
         _logger.LogInformation("Loaded {Factions} factions, {OnKill} kill reputation entries, {Spillovers} spillover templates and {Rates} reward rates",
             service.Factions.Count, service.OnKillCount, service.Content.SpilloverCount, service.Content.RateCount);
         ReportStatus(service);

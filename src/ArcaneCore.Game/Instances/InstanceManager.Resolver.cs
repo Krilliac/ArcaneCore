@@ -193,6 +193,13 @@ public sealed partial class InstanceManager
             return loaded;
         }
 
+        // A worker without instance copies (Cluster:Worker:AllowInstanceMaps off) still loads every bound save at startup, so a save here does not
+        // mean this worker may create its map: GetMap would throw, and the ghost being restored would lose its body. The body stays out of every map.
+        if (!_world.Owns(mapId, instanceId))
+        {
+            return null;
+        }
+
         // A live save gets its map the way an entry creates it: managed, so it unloads on its timer and the timed reset of the
         // save still sees it. A deleted or unknown instance gets none (the body stays out of every map).
         return _saves.TryGetValue(instanceId, out InstanceSave? save) && save.MapId == mapId && !save.IsDeleted

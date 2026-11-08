@@ -70,6 +70,34 @@ public sealed partial class WorldRuntime
         return new SerialScope(_serialGate);
     }
 
+    /// <summary>
+    /// Guards a read of a world-wide table that only gated code or the world thread may touch (the group manager: its writers are packet
+    /// handlers and bots, which run under the serial gate). A caller already inside the gate, or outside the parallel phase, gets a
+    /// no-op scope. A caller outside the gate during the parallel phase (for example a map-local or ungated stage) is reported once per
+    /// <paramref name="table"/> to the anomaly ledger (subsystem "parallel", code "ungated-read"), counted as an owner violation, and
+    /// made to take the gate for the read. That excludes every writer that also runs under the gate; a writer that World:Parallel:Ungated=Packets lets run ungated is not excluded. Dispose the scope to leave.
+    /// </summary>
+    public SerialScope EnterSerialForRead(string table)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(table);
+        if (!_parallelPhase || Monitor.IsEntered(_serialGate))
+        {
+            return default;
+        }
+
+        Interlocked.Increment(ref _ownerViolations);
+        if (_ownerViolationSites.Count < 256 && _ownerViolationSites.TryAdd("read|" + table, 0))
+        {
+            Map? current = TickOwner.CurrentMap;
+            string detail = $"read of {table} outside the serial gate from thread '{Thread.CurrentThread.Name}' ({Environment.CurrentManagedThreadId}) "
+                + (current is null ? "outside any map update" : $"updating map {current.MapId} instance {current.InstanceId}");
+            AnomalyLedger.Shared.Report("parallel", "ungated-read", table, detail, AnomalySeverity.Error, Identity);
+            _logger.LogError("Parallel ungated read: {Detail}", detail);
+        }
+
+        return EnterSerial();
+    }
+
     /// <summary>Whether the current thread holds the serial gate (or no parallel phase is running).</summary>
     public bool HoldsSerialGate => !_parallelPhase || Monitor.IsEntered(_serialGate);
 

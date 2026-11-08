@@ -123,13 +123,16 @@ public interface IGroupAuthorityLink
 /// </para>
 /// <para>
 /// Thread-safety: one lock guards all state; <see cref="Execute"/> and <see cref="Drain"/> may be called from any thread. Memory: the groups, plus at most
-/// <see cref="MaxQueuedEventsPerWorker"/> events per worker (the oldest are dropped).
+/// <see cref="MaxQueuedEventsPerWorker"/> events per worker (the oldest are dropped) and <see cref="MaxCommandsHeldForReload"/> commands during a reload (<see cref="GroupCommandKind.Relay"/> commands are not held).
 /// </para>
 /// </summary>
 public sealed class GroupAuthority(IRealmPresenceDirectory directory)
 {
     /// <summary>Most undelivered events kept per worker; a worker that never drains loses its oldest.</summary>
     public const int MaxQueuedEventsPerWorker = 8192;
+
+    /// <summary>Most commands kept while the table is held (<see cref="HoldForReload"/>): 16384, four workers' full outage backlogs (the routing queue holds 4096 each), because after a takeover the backlogs of several workers land here. Past it the oldest is dropped and counted in <see cref="CommandsEvictedWhileHeld"/>. Relay commands never count: they are not held.</summary>
+    public const int MaxCommandsHeldForReload = 16384;
 
     /// <summary>Encoded size past which <see cref="Drain"/> stops adding events to one reply.</summary>
     public const int MaxDrainBytes = 48 * 1024;
@@ -146,6 +149,11 @@ public sealed class GroupAuthority(IRealmPresenceDirectory directory)
     private readonly Dictionary<ObjectGuid, long> _readyAnswerAt = [];
     private readonly Dictionary<ObjectGuid, Draft> _drafts = [];
     private uint _nextId = 1;
+    private Queue<(string WorkerId, GroupCommand Command)>? _heldForReload;
+    private bool _closed;
+    private long _relaysDroppedWhileHeld;
+    private long _commandsEvictedWhileHeld;
+    private long _commandsRefusedAfterClose;
 
     private sealed class Draft
     {
@@ -202,6 +210,54 @@ public sealed class GroupAuthority(IRealmPresenceDirectory directory)
         }
     }
 
+    /// <summary><see cref="GroupCommandKind.Relay"/> commands (stats, pings, rolls) dropped, not held, while the table was held for a reload.</summary>
+    public long RelaysDroppedWhileHeld
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _relaysDroppedWhileHeld;
+            }
+        }
+    }
+
+    /// <summary>Held commands pushed out by the cap (<see cref="MaxCommandsHeldForReload"/>): real commands that were lost.</summary>
+    public long CommandsEvictedWhileHeld
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _commandsEvictedWhileHeld;
+            }
+        }
+    }
+
+    /// <summary>Commands that reached <see cref="Execute"/> after <see cref="CloseHeldTable"/> or <see cref="CloseTable"/> and were not applied.</summary>
+    public long CommandsRefusedAfterClose
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _commandsRefusedAfterClose;
+            }
+        }
+    }
+
+    /// <summary>Commands waiting for <see cref="ReleaseHeldCommands"/>.</summary>
+    public int HeldCommandCount
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _heldForReload?.Count ?? 0;
+            }
+        }
+    }
+
     /// <summary>Forget every group, invite and queued event (before a restore at a lease gain).</summary>
     public void Reset()
     {
@@ -212,6 +268,90 @@ public sealed class GroupAuthority(IRealmPresenceDirectory directory)
             _hint.Clear();
             _queues.Clear();
             _readyAnswerAt.Clear();
+        }
+    }
+
+    /// <summary>
+    /// The table is about to be replaced by a read: from now on <see cref="Execute"/> keeps each command, in order, instead of applying it, because <see cref="Reset"/> would throw its result away; a <see cref="GroupCommandKind.Relay"/> command is dropped and counted in <see cref="RelaysDroppedWhileHeld"/>. Idempotent. On a node that
+    /// does not hold the Social lease the table is held from attach, so no command reaches a table that was never loaded. At most <see cref="MaxCommandsHeldForReload"/> are kept (the oldest goes first, counted in <see cref="CommandsEvictedWhileHeld"/>).
+    /// </summary>
+    public void HoldForReload()
+    {
+        lock (_gate)
+        {
+            _heldForReload ??= new Queue<(string WorkerId, GroupCommand Command)>();
+        }
+    }
+
+    /// <summary>
+    /// The reload is over: the oldest held commands, at most <paramref name="maxCommands"/>, run in order on the new table. Returns how many failed (the rest still ran); <paramref name="onFailure"/> gets the worker, the command and the exception of each, so the caller can say which. The table stays held while any are left, so a command
+    /// that comes in meanwhile waits behind them; the hold ends with the call that runs the last one. A caller on the world thread passes a limit and calls again on the next tick, so a full backlog does not stall one tick.
+    /// </summary>
+    public int ReleaseHeldCommands(int maxCommands = int.MaxValue, Action<string, GroupCommand, Exception>? onFailure = null)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxCommands);
+        lock (_gate)
+        {
+            if (_heldForReload is not { } held)
+            {
+                return 0;
+            }
+
+            int failed = 0;
+            for (int i = 0; i < maxCommands && held.TryDequeue(out (string WorkerId, GroupCommand Command) next); i++)
+            {
+                try
+                {
+                    Apply(next.WorkerId, next.Command);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    failed++;
+                    onFailure?.Invoke(next.WorkerId, next.Command, ex);
+                }
+            }
+
+            if (held.Count == 0)
+            {
+                _heldForReload = null;
+            }
+
+            return failed;
+        }
+    }
+
+    /// <summary>
+    /// The node is stopping and this table was never loaded, so it never will be here: the held commands are lost (the count is returned for the caller to log) and from now on nothing is applied to this table:
+    /// <see cref="TryExecute"/> answers false and <see cref="Execute"/> drops and counts (<see cref="CommandsRefusedAfterClose"/>). Works in any stop order: it does not matter whether the peer link is still up. A table that is not held is left as it is. Idempotent.
+    /// Not for a loaded table with a replay under way: those commands belong on it, so the caller runs them with <see cref="ReleaseHeldCommands"/>.
+    /// </summary>
+    public int CloseHeldTable()
+    {
+        lock (_gate)
+        {
+            if (_heldForReload is not { } held)
+            {
+                return 0;
+            }
+
+            _heldForReload = null;
+            _closed = true;
+            return held.Count;
+        }
+    }
+
+    /// <summary>
+    /// The node is stopping and this table is about to be written for the last time (called after the replay and before the final sync, so that sync's snapshot is the boundary): from now on nothing is applied, loaded or not. <see cref="TryExecute"/> answers false (a peer command is answered "not the holder", so its sender keeps it for the next holder) and <see cref="Execute"/> drops and counts
+    /// (<see cref="CommandsRefusedAfterClose"/>); a command acked after that snapshot would otherwise be lost with the table. Does not depend on the order the hosted services stop in. Returns how many held commands were discarded (none when the replay ran to its end). Idempotent.
+    /// </summary>
+    public int CloseTable()
+    {
+        lock (_gate)
+        {
+            int held = _heldForReload?.Count ?? 0;
+            _heldForReload = null;
+            _closed = true;
+            return held;
         }
     }
 
@@ -348,33 +488,76 @@ public sealed class GroupAuthority(IRealmPresenceDirectory directory)
         return size;
     }
 
-    /// <summary>Apply one command of the character on <paramref name="workerId"/> and queue the resulting events.</summary>
+    /// <summary>Apply one command of the character on <paramref name="workerId"/> and queue the resulting events (or keep it, while the table is held). After <see cref="CloseHeldTable"/> or <see cref="CloseTable"/> it is dropped and counted.</summary>
     public void Execute(string workerId, GroupCommand command)
+    {
+        lock (_gate)
+        {
+            if (!TryExecute(workerId, command))
+            {
+                _commandsRefusedAfterClose++;
+            }
+        }
+    }
+
+    /// <summary>As <see cref="Execute"/>, but false, with nothing done, once the table is closed (<see cref="CloseHeldTable"/>, <see cref="CloseTable"/>): the peer path answers that as "not the holder", so the sender keeps the command for the next holder.</summary>
+    public bool TryExecute(string workerId, GroupCommand command)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workerId);
         ArgumentNullException.ThrowIfNull(command);
         lock (_gate)
         {
-            _drafts.Clear();
-            var actor = new ObjectGuid(command.Actor);
-            if (command.Kind != GroupCommandKind.Logout)
+            if (_closed)
             {
-                _hint[actor] = (workerId, MillisecondsClock());
+                return false;
             }
 
-            try
+            if (_heldForReload is { } held)
             {
-                Dispatch(command, actor);
-            }
-            finally
-            {
-                if (command.Kind == GroupCommandKind.Logout)
+                if (command.Kind == GroupCommandKind.Relay)
                 {
-                    _hint.Remove(actor);
+                    // Transient (party stats, pings, rolls): a replay would be stale, and the once-a-second stats pass would push the commands that matter (Leave, Logout, Kick) out of the cap.
+                    _relaysDroppedWhileHeld++;
+                    return true;
                 }
 
-                Flush();
+                if (held.Count >= MaxCommandsHeldForReload)
+                {
+                    held.Dequeue();
+                    _commandsEvictedWhileHeld++;
+                }
+
+                held.Enqueue((workerId, command));
+                return true;
             }
+
+            Apply(workerId, command);
+            return true;
+        }
+    }
+
+    /// <summary>Under the gate: runs one command on the table.</summary>
+    private void Apply(string workerId, GroupCommand command)
+    {
+        _drafts.Clear();
+        var actor = new ObjectGuid(command.Actor);
+        if (command.Kind != GroupCommandKind.Logout)
+        {
+            _hint[actor] = (workerId, MillisecondsClock());
+        }
+
+        try
+        {
+            Dispatch(command, actor);
+        }
+        finally
+        {
+            if (command.Kind == GroupCommandKind.Logout)
+            {
+                _hint.Remove(actor);
+            }
+
+            Flush();
         }
     }
 

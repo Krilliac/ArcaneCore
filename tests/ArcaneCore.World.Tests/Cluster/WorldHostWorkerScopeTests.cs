@@ -196,7 +196,7 @@ public sealed class WorldHostWorkerScopeTests
 
         await using HostKit worker = db.NewWorker(ShardA, "0,1", heartbeat: TimeSpan.FromMilliseconds(40));
         await worker.Host.StartAsync(CancellationToken.None);
-        long first = (await db.RowAsync(worker.Host.OwnershipScope)).HeartbeatAtMs ?? 0;
+        long first = await db.HeartbeatAsync(worker.Host.OwnershipScope);
         Assert.True(first > 0);
 
         long latest = first;
@@ -204,10 +204,126 @@ public sealed class WorldHostWorkerScopeTests
         while (latest <= first && DateTime.UtcNow < deadline)
         {
             await Task.Delay(50);
-            latest = (await db.RowAsync(worker.Host.OwnershipScope)).HeartbeatAtMs ?? 0;
+            latest = await db.HeartbeatAsync(worker.Host.OwnershipScope);
         }
 
         Assert.True(latest > first, "the heartbeat never advanced");
+    }
+
+    /// <summary>
+    /// The heartbeat's refusal while a handoff is undecided (the queue is sealed) is no reason to stop, and the loop keeps beating: after the handoff aborts and the source resumes, the same refusal
+    /// stops the queue. A loop that returned on the first refusal would never see the resume. The ownership row is moved on by a takeover, as a handoff's commit moves it.
+    /// </summary>
+    [Fact]
+    public async Task TheWorkerHeartbeat_KeepsLoopingWhileTheQueueIsSealed_AndGoesTerminalAfterTheResume()
+    {
+        using var directory = new TempDirectory("arcanecore-workerscope-", sqlite: true);
+        await using Scratch db = await Scratch.CreateAsync(directory);
+        var beats = new RefusedBeats();
+        await using HostKit worker = db.NewWorker(ShardA, "0,1", heartbeat: TimeSpan.FromMilliseconds(25), configure: services => CountRefusedBeats(services, beats));
+        var fatal = new TaskCompletionSource<Exception>(TaskCreationOptions.RunContinuationsAsynchronously);
+        worker.SaveQueue.FatalFailure += error => fatal.TrySetResult(error);
+        await worker.Host.StartAsync(CancellationToken.None);
+        CharacterOwnershipToken mine = worker.World.CharacterOwnership!;
+
+        worker.SaveQueue.SealWrites(); // a handoff has flushed and not decided
+        await TakeOverAsync(worker, mine);
+
+        // Several beats are refused while the queue is sealed (observed, not assumed): the loop must still be running after them, and nothing stops.
+        await WorldTestHost.WaitForAsync(() => beats.Count >= 4, "four heartbeats to be refused while the queue is sealed");
+        Assert.False(fatal.Task.IsCompleted);
+        Assert.Null(worker.SaveQueue.TerminalFailure);
+
+        worker.SaveQueue.UnsealWrites(); // the handoff aborted, the source resumed
+        Exception failure = await fatal.Task.WaitAsync(TimeSpan.FromSeconds(15));
+
+        Assert.Contains("no longer belongs to this world", failure.Message);
+        Assert.Same(failure, worker.SaveQueue.TerminalFailure);
+    }
+
+    /// <summary>A retired world is done: the heartbeat's refusal after the takeover never stops the queue, whatever happens to the loop.</summary>
+    [Fact]
+    public async Task TheWorkerHeartbeat_AfterTheRetirement_NeverStopsTheQueue()
+    {
+        using var directory = new TempDirectory("arcanecore-workerscope-", sqlite: true);
+        await using Scratch db = await Scratch.CreateAsync(directory);
+        var beats = new RefusedBeats();
+        await using HostKit worker = db.NewWorker(ShardA, "0,1", heartbeat: TimeSpan.FromMilliseconds(25), configure: services => CountRefusedBeats(services, beats));
+        var fatal = new TaskCompletionSource<Exception>(TaskCreationOptions.RunContinuationsAsynchronously);
+        worker.SaveQueue.FatalFailure += error => fatal.TrySetResult(error);
+        await worker.Host.StartAsync(CancellationToken.None);
+        CharacterOwnershipToken mine = worker.World.CharacterOwnership!;
+
+        worker.SaveQueue.RetireEveryCharacter();
+        await TakeOverAsync(worker, mine);
+        await WorldTestHost.WaitForAsync(() => beats.Count >= 1, "a heartbeat to be refused after the retirement"); // the refusal really reached the queue's decision; whether the loop then ends is not asserted here
+
+        Assert.False(fatal.Task.IsCompleted);
+        Assert.Null(worker.SaveQueue.TerminalFailure);
+    }
+
+    /// <summary>Counts the heartbeats the ownership row refused, so a test can wait for a refused beat instead of a fixed delay.</summary>
+    private sealed class RefusedBeats
+    {
+        private int _count;
+
+        public int Count => Volatile.Read(ref _count);
+
+        public void Add() => Interlocked.Increment(ref _count);
+    }
+
+    private static void CountRefusedBeats(IServiceCollection services, RefusedBeats beats)
+        => services.Replace(ServiceDescriptor.Scoped<ICharacterOwnershipStore>(sp => new CountingOwnershipStore(new EfCharacterOwnershipStore(sp.GetRequiredService<CharacterDbContext>()), beats)));
+
+    /// <summary>The real ownership store with every member forwarded (the interface's defaults throw), counting the heartbeats that returned false.</summary>
+    private sealed class CountingOwnershipStore(EfCharacterOwnershipStore inner, RefusedBeats beats) : ICharacterOwnershipStore
+    {
+        public Task<bool> IsOwnedAsync(string scope, CancellationToken cancellationToken = default) => inner.IsOwnedAsync(scope, cancellationToken);
+
+        public Task<CharacterOwnershipToken?> GetCurrentAsync(string scope, CancellationToken cancellationToken = default) => inner.GetCurrentAsync(scope, cancellationToken);
+
+        public Task<CharacterOwnershipToken?> TryAcquireAsync(string scope, string ownerNode, Guid incarnation, CancellationToken cancellationToken = default)
+            => inner.TryAcquireAsync(scope, ownerNode, incarnation, cancellationToken);
+
+        public Task<CharacterOwnershipToken?> TryTakeoverAsync(CharacterOwnershipToken observed, string ownerNode, Guid newIncarnation, CancellationToken cancellationToken = default)
+            => inner.TryTakeoverAsync(observed, ownerNode, newIncarnation, cancellationToken);
+
+        public Task<bool> IsAnyOwnedAsync(CancellationToken cancellationToken = default) => ((ICharacterOwnershipStore)inner).IsAnyOwnedAsync(cancellationToken);
+
+        public Task<CharacterOwnershipToken?> TryAcquireAsync(string scope, string ownerNode, Guid incarnation, IReadOnlyCollection<uint>? ownedMaps, CancellationToken cancellationToken = default)
+            => ((ICharacterOwnershipStore)inner).TryAcquireAsync(scope, ownerNode, incarnation, ownedMaps, cancellationToken);
+
+        public Task<CharacterOwnershipToken?> TryTakeoverAsync(CharacterOwnershipToken observed, string ownerNode, Guid newIncarnation, IReadOnlyCollection<uint>? ownedMaps, CancellationToken cancellationToken = default)
+            => ((ICharacterOwnershipStore)inner).TryTakeoverAsync(observed, ownerNode, newIncarnation, ownedMaps, cancellationToken);
+
+        public Task<CharacterOwnershipToken?> TryReclaimAsync(CharacterOwnershipToken observed, string ownerNode, Guid newIncarnation, IReadOnlyCollection<uint>? ownedMaps, CancellationToken cancellationToken = default)
+            => ((ICharacterOwnershipStore)inner).TryReclaimAsync(observed, ownerNode, newIncarnation, ownedMaps, cancellationToken);
+
+        public Task<bool> ReapAsync(CharacterOwnershipToken observed, long nowUnixMs, long minHeartbeatAgeMs, CancellationToken cancellationToken = default)
+            => ((ICharacterOwnershipStore)inner).ReapAsync(observed, nowUnixMs, minHeartbeatAgeMs, cancellationToken);
+
+        public async Task<bool> HeartbeatAsync(CharacterOwnershipToken token, long nowUnixMs, CancellationToken cancellationToken = default)
+        {
+            bool beat = await ((ICharacterOwnershipStore)inner).HeartbeatAsync(token, nowUnixMs, cancellationToken).ConfigureAwait(false);
+            if (!beat)
+            {
+                beats.Add();
+            }
+
+            return beat;
+        }
+
+        public Task ReleaseAsync(CharacterOwnershipToken token, CancellationToken cancellationToken = default) => inner.ReleaseAsync(token, cancellationToken);
+    }
+
+    /// <summary>The takeover a handoff's commit performs on the shard's ownership row: the epoch moves on under another incarnation, so the old token's heartbeat is refused.</summary>
+    private static async Task TakeOverAsync(HostKit worker, CharacterOwnershipToken observed)
+    {
+        await using AsyncServiceScope scope = worker.Scopes.CreateAsyncScope();
+        CharacterOwnershipToken? taken = await scope.ServiceProvider.GetRequiredService<ICharacterOwnershipStore>()
+            .TryTakeoverAsync(observed, "node-other", Guid.NewGuid());
+        Assert.NotNull(taken);
+        Assert.Equal(observed.Epoch + 1, taken.Epoch);
     }
 
     [Fact]
@@ -434,6 +550,13 @@ public sealed class WorldHostWorkerScopeTests
             return await db.Set<CharacterOwnershipRow>().AsNoTracking().SingleAsync(r => r.Scope == scope);
         }
 
+        /// <summary>The shard's last heartbeat (characters schema 75 keeps it in its own table); 0 before the first beat.</summary>
+        public async Task<long> HeartbeatAsync(string scope)
+        {
+            await using CharacterDbContext db = PlainContext();
+            return await db.Set<CharacterOwnershipHeartbeatRow>().AsNoTracking().Where(r => r.Scope == scope).Select(r => r.HeartbeatAtMs).SingleOrDefaultAsync();
+        }
+
         public async Task<bool> AnyActiveAsync()
         {
             await using CharacterDbContext db = PlainContext();
@@ -489,9 +612,10 @@ public sealed class WorldHostWorkerScopeTests
     {
         private readonly ServiceProvider _services;
 
-        private HostKit(ServiceProvider services, WorldRuntime world, WorldHost host, WorldWriterGuard guard, Feature feature)
+        private HostKit(ServiceProvider services, WorldRuntime world, WorldHost host, WorldWriterGuard guard, Feature feature, CharacterSaveQueue saveQueue)
         {
             _services = services;
+            SaveQueue = saveQueue;
             World = world;
             Host = host;
             Guard = guard;
@@ -500,6 +624,7 @@ public sealed class WorldHostWorkerScopeTests
         }
 
         public WorldRuntime World { get; }
+        public CharacterSaveQueue SaveQueue { get; }
         public WorldHost Host { get; }
         public WorldWriterGuard Guard { get; }
         public Feature Feature { get; }
@@ -517,7 +642,7 @@ public sealed class WorldHostWorkerScopeTests
             var host = new WorldHost(world, saveQueue, new CharacterDirectory(), scopes, NullLogger<WorldHost>.Instance, fencingOptions,
                 ownershipContext: services.GetRequiredService<CharacterOwnershipContext>(), writerGuard: guard, workerOptions: workerOptions,
                 nodeOptions: node is null ? null : Options.Create(node)) { ListenerExpected = false, HeartbeatInterval = heartbeat };
-            return new HostKit(services, world, host, guard, (Feature)services.GetServices<IWorldFeature>().Single());
+            return new HostKit(services, world, host, guard, (Feature)services.GetServices<IWorldFeature>().Single(), saveQueue);
         }
 
         public async ValueTask DisposeAsync()

@@ -116,7 +116,7 @@ public sealed class EfGroupStore(CharacterDbContext db, IRealmLeaseFenceSource? 
     public async Task SaveGroupAsync(GroupRecord group, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(group);
-        LeaseFencedWrite.RequireFence(leaseFences, RealmAuthorityScopes.Social); // groups are realm state the Social holder owns (writer-lock design section 2b)
+        RealmLeaseFence? fence = LeaseFencedWrite.RequireFence(leaseFences, RealmAuthorityScopes.Social); // groups are realm state the Social holder owns (writer-lock design section 2b)
         if (group.TargetIcons.Count != 8)
         {
             throw new ArgumentException("a group has eight target icons", nameof(group));
@@ -126,7 +126,7 @@ public sealed class EfGroupStore(CharacterDbContext db, IRealmLeaseFenceSource? 
         List<int> memberIds = [.. group.Members.Select(m => m.CharacterId)];
         db.ChangeTracker.Clear();
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
-        await FenceAsync(cancellationToken).ConfigureAwait(false);
+        await FenceAsync(fence, cancellationToken).ConfigureAwait(false);
         await db.Set<GroupMemberRow>().Where(m => m.GroupId == id || memberIds.Contains(m.CharacterId))
             .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
         GroupRow? row = await db.Set<GroupRow>().FirstOrDefaultAsync(g => g.GroupId == id, cancellationToken).ConfigureAwait(false);
@@ -169,21 +169,22 @@ public sealed class EfGroupStore(CharacterDbContext db, IRealmLeaseFenceSource? 
 
     public async Task DeleteGroupAsync(uint groupId, CancellationToken cancellationToken = default)
     {
-        LeaseFencedWrite.RequireFence(leaseFences, RealmAuthorityScopes.Social);
+        RealmLeaseFence? fence = LeaseFencedWrite.RequireFence(leaseFences, RealmAuthorityScopes.Social);
         long id = groupId;
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
-        await FenceAsync(cancellationToken).ConfigureAwait(false);
+        await FenceAsync(fence, cancellationToken).ConfigureAwait(false);
         await db.Set<GroupMemberRow>().Where(m => m.GroupId == id).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
         await db.Set<GroupRow>().Where(g => g.GroupId == id).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     // The holder's write is verified against the lease row inside its own transaction; a node with no keeper is not fenced.
-    private async Task FenceAsync(CancellationToken cancellationToken)
+    // The fence is the one the caller's RequireFence read: asking the keeper again could see it already released and skip the check.
+    private async Task FenceAsync(RealmLeaseFence? fence, CancellationToken cancellationToken)
     {
-        if (leaseFences?.FenceFor(RealmAuthorityScopes.Social) is { } fence)
+        if (fence is { } held)
         {
-            await LeaseFencedWrite.EnsureHeldAsync(db, fence, cancellationToken).ConfigureAwait(false);
+            await LeaseFencedWrite.EnsureHeldAsync(db, held, cancellationToken).ConfigureAwait(false);
         }
     }
 }

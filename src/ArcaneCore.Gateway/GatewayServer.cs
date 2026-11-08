@@ -150,6 +150,9 @@ public sealed class GatewayServer : BackgroundService
     /// </summary>
     internal Action<GatewayClientConnection, ArcaneCore.Protocol.WorldOpcode>? BeforeRouteClientPacket { get; set; }
 
+    /// <summary>Test seam: runs on a client read loop after the transfer router let a packet through and before its link is chosen under the redirect gate. Null (the default) in production.</summary>
+    internal Action<GatewayClientConnection, ArcaneCore.Protocol.WorldOpcode>? AfterInterceptClientPacket { get; set; }
+
     /// <summary>The connection whose current session generation is <paramref name="generation"/>, or null.</summary>
     internal GatewayClientConnection? FindConnection(long generation)
     {
@@ -1045,7 +1048,7 @@ public sealed class GatewayWorkerLink
         {
             IPEndPoint worker = _target;
             Volatile.Write(ref _status, (int)GatewayWorkerLinkStatus.Connecting);
-            var link = new GatewaySessionLinkClient(_config.ToManifest(_incarnation), worker, _config.LinkSecret, _loggers.CreateLogger<GatewaySessionLinkClient>(), _warden?.Posture);
+            var link = new GatewaySessionLinkClient(_config.ToManifest(_incarnation), worker, _config.LinkSecret, _loggers.CreateLogger<GatewaySessionLinkClient>(), _warden?.Posture, NodeId);
             string node = NodeId;
             GatewayRealmLiveness? liveness = _realmLiveness;
             bool linkEnded = false; // guarded by _statusGate: a report that arrives after this link went down must not repopulate _lastReport
@@ -1064,7 +1067,7 @@ public sealed class GatewayWorkerLink
 
             if (_transfers is { } transfers)
             {
-                // The worker's coordinator drives staged transfers over this link; each frame is answered with an ack on the same link.
+                // A coordinator on a worker would drive staged transfers over this link (no worker builds one: production's runs on the gateway); each frame is answered with an ack on the same link.
                 link.TransferControlReceived = control => _ = transfers.HandleControlAsync(control, link.SendTransferAck, stoppingToken);
             }
 

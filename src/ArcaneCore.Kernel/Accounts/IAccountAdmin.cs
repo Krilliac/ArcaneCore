@@ -21,6 +21,13 @@ public interface IAccountAdmin
     /// </summary>
     Task<bool> RevokeSessionKeyAsync(int accountId, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Delete the account row named <paramref name="username"/> (case-insensitive) and nothing else: ban history, realm character counts
+    /// and every other table stay as they are, so a caller that wants them gone removes them itself first. Returns false for an unknown
+    /// account. The caller is responsible for authorisation and confirmation; this is irreversible.
+    /// </summary>
+    Task<bool> DeleteAsync(string username, CancellationToken cancellationToken = default);
+
     /// <summary>The account names of <paramref name="accountIds"/> (unknown ids are absent), for <c>.baninfo</c> and <c>.banlist</c>.</summary>
     Task<IReadOnlyDictionary<int, string>> GetUsernamesAsync(
         IReadOnlyCollection<int> accountIds, CancellationToken cancellationToken = default);

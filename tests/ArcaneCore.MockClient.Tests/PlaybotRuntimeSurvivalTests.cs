@@ -21,8 +21,10 @@ public sealed class PlaybotRuntimeSurvivalTests(ITestOutputHelper output)
     [Fact]
     public async Task DamagedNormalPlayerEatsOneOwnedStackThroughRealItemUseAndLogsOut()
     {
-        using var bound = new CancellationTokenSource(TimeSpan.FromSeconds(65));
+        using var bound = new CancellationTokenSource();
         await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync(bound.Token);
+        // The fixture starts under its own hang bound; the scenario deadline is armed after it returns (TestDeadlines).
+        bound.CancelAfter(TimeSpan.FromSeconds(65));
         await server.AddAccountAsync("FOODBOT", "FOODBOTPASSWORD", bound.Token);
         ItemsFeature items = server.Services.GetRequiredService<ItemsFeature>();
         await items.EnsureLoadedAsync(bound.Token);
@@ -73,8 +75,10 @@ public sealed class PlaybotRuntimeSurvivalTests(ITestOutputHelper output)
     [Fact]
     public async Task UnsolicitedNormalNpcAttackIsObservedAndAnsweredThroughClientMelee()
     {
-        using var bound = new CancellationTokenSource(TimeSpan.FromSeconds(50));
+        using var bound = new CancellationTokenSource();
         await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync(bound.Token);
+        // The fixture starts under its own hang bound; the scenario deadline is armed after it returns (TestDeadlines).
+        bound.CancelAfter(TimeSpan.FromSeconds(50));
         await server.AddAccountAsync("DEFENDBOT", "DEFENDBOTPASS", bound.Token);
         var selector = new ArrangeOnce(async () => await server.World.InvokeAsync(() =>
         {

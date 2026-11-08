@@ -3,7 +3,7 @@ using ArcaneCore.Game.Entities;
 namespace ArcaneCore.Game.Spells.Shaman;
 
 /// <summary>
-/// The Earthshatterer 8-piece bonus (28820; vmangos Aura::TriggerSpell, SpellAuras.cpp:1438-1450, and the 18350 dummy trigger, SpellEffects.cpp:900-919):
+/// The Earthshatterer 8-piece bonus (28820; vmangos Aura::TriggerSpell, SpellAuras.cpp:1438-1450, and the 18350 dummy trigger, SpellEffects.cpp:902-927, the removal at :922):
 /// the aura that the Lightning Shield cast puts on the shaman (15 mana per 5 s) checks on every 5 s tick whether a Lightning Shield (CF_SHAMAN_LIGHTNING_SHIELD,
 /// bit 10) is still up, and removes itself when none is.
 /// </summary>

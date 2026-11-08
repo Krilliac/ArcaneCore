@@ -1082,6 +1082,7 @@ public sealed class ConfigReloadTests : IDisposable
                 && p.PropertyType != typeof(global::ArcaneCore.World.Playerbots.Chat.PlayerbotSpeechOptions)
                 && p.PropertyType != typeof(global::ArcaneCore.World.Playerbots.Chat.PlayerbotConversationOptions)
                 && p.PropertyType != typeof(global::ArcaneCore.World.Playerbots.Chat.PlayerbotVoiceOptions)
+                && p.PropertyType != typeof(global::ArcaneCore.World.Playerbots.Chat.PlayerbotLfgOptions)
                 // Chat:InProcess (the in-process model) is read when the model loads at startup: a change takes a restart (17d3a10e), so none of its keys is a reload key.
                 && p.PropertyType != typeof(global::ArcaneCore.World.Playerbots.Chat.PlayerbotChatInProcessOptions)))
         {
@@ -1102,6 +1103,11 @@ public sealed class ConfigReloadTests : IDisposable
         foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.Chat.PlayerbotVoiceOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
         {
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Chat)}:Voice:{property.Name}");
+        }
+
+        foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.Chat.PlayerbotLfgOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Chat)}:Lfg:{property.Name}");
         }
         foreach (PropertyInfo property in typeof(PlayerbotGroupOptions).GetProperties()
             .Where(p => p.SetMethod is { IsPublic: true } && p.PropertyType != typeof(global::ArcaneCore.World.Playerbots.PlayerbotRunOptions) && p.PropertyType != typeof(global::ArcaneCore.World.Playerbots.PlayerbotCooperationOptions)
@@ -1141,6 +1147,12 @@ public sealed class ConfigReloadTests : IDisposable
         foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.PlayerbotWorldBossOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
         {
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Groups)}:{nameof(PlayerbotGroupOptions.WorldBosses)}:{property.Name}");
+        }
+
+        // Summons (Ritual of Summoning, meeting stones) are live key by key (docs/areas/playbots-groups.md, Summons).
+        foreach (PropertyInfo property in typeof(PlayerbotSummonOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Summon)}:{property.Name}");
         }
 
         // Following and catch-up is live key by key (docs/areas/playbots.md, Following and catch-up).
@@ -1275,6 +1287,12 @@ public sealed class ConfigReloadTests : IDisposable
         foreach (PropertyInfo property in typeof(PlayerbotEconomyOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
         {
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Economy)}:{property.Name}");
+        }
+
+        // The capital city trips section is live key by key (docs/areas/playbots-city.md).
+        foreach (PropertyInfo property in typeof(PlayerbotCityOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.City)}:{property.Name}");
         }
 
         // The bot budget and mounts sections are live key by key (docs/areas/playbots-economy.md).

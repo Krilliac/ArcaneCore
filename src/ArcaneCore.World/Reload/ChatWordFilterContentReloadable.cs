@@ -3,6 +3,7 @@ using ArcaneCore.Game.Reload;
 using ArcaneCore.Kernel.WorldData.Chat;
 using ArcaneCore.World.Chat;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Reload;
 
@@ -19,7 +20,9 @@ public sealed class ChatWordFilterContentReloadable(IServiceProvider services) :
         using IServiceScope scope = services.CreateScope();
         IChatWordFilterStore store = scope.ServiceProvider.GetService<IChatWordFilterStore>()
             ?? throw new InvalidOperationException("no chat word filter store is registered");
-        var filter = new ChatWordFilter(await store.LoadAsync(cancellationToken).ConfigureAwait(false));
+        var filter = new ChatWordFilter(
+            await store.LoadAsync(cancellationToken).ConfigureAwait(false),
+            services.GetService<ILoggerFactory>()?.CreateLogger<ChatWordFilter>());
         return new Candidate(feature, filter);
     }
 

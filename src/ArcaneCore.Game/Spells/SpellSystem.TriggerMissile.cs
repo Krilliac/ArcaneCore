@@ -23,6 +23,6 @@ public sealed partial class SpellSystem
             ? context.Cast.Targets.Dest
             : (context.Target.X, context.Target.Y, context.Target.Z);
         var targets = new SpellCastTargets { Mask = SpellCastTargetFlags.DestLocation, Dest = dest };
-        CastSpell(context.Caster, missile.Id, targets, triggered: true, triggeringSpell: context.Spell);
+        CastSpell(context.Caster, missile.Id, targets, triggered: true, triggeringSpell: context.Spell, originalCaster: context.Cast.OriginalCaster);
     });
 }

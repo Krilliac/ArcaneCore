@@ -25,6 +25,8 @@ public sealed class InferredSpellScriptTests
     private const uint Enigma = 26127;
     private const uint ArcaneMissilesLike = 970_111;
     private const uint Kick = 970_110;
+    private const uint StunBolt = 970_112;
+    private const uint SilenceBolt = 970_113;
     private const uint FamilyMage = 3;
     private const ulong BlizzardFlags = 0x80080;
     private const int ChannelMs = 8000;
@@ -56,7 +58,7 @@ public sealed class InferredSpellScriptTests
             SpellVisual = 1,
             School = SpellSchool.Frost,
             PreventionType = 1,
-            ChannelInterruptFlags = (SpellAuraInterruptFlags)SpellChannelInterruptFlags.Delay | SpellAuraInterruptFlags.Action,
+            ChannelInterruptFlags = (SpellAuraInterruptFlags)SpellChannelInterruptFlags.Delay | SpellAuraInterruptFlags.Action | SpellAuraInterruptFlags.Moving,
             SpellFamilyName = FamilyMage,
             SpellFamilyFlags = familyFlags,
             StartRecoveryCategory = 0,
@@ -84,13 +86,25 @@ public sealed class InferredSpellScriptTests
             StartRecoveryTime = 0,
         };
 
+    /// <summary>An enemy-cast aura on its target: <paramref name="aura"/> (stun or silence), the two ways besides movement that end a channel the roll protected.</summary>
+    private static SpellInfo CrowdControl(uint id, AuraType aura) =>
+        Spell(id, Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitEnemy, aura)) with
+        {
+            Duration = new SpellDuration(4000, 0, 4000),
+            School = SpellSchool.Normal,
+            RangeIndex = 4,
+            Range = new SpellRange(0, 30),
+            StartRecoveryCategory = 0,
+            StartRecoveryTime = 0,
+        };
+
     private static void FlushSpellBatch(SpellTestKit kit) => kit.Advance(kit.System.SpellBatchWindowMs);
 
     private sealed class EnigmaScene : IDisposable
     {
         public EnigmaScene(int roll, bool withBonus, uint channel = Blizzard)
         {
-            Kit = new SpellTestKit(Channel(Blizzard, BlizzardFlags), Channel(ArcaneMissilesLike, 0x200), EnigmaBonus(), InterruptEffect());
+            Kit = new SpellTestKit(Channel(Blizzard, BlizzardFlags), Channel(ArcaneMissilesLike, 0x200), EnigmaBonus(), InterruptEffect(), CrowdControl(StunBolt, AuraType.ModStun), CrowdControl(SilenceBolt, AuraType.ModSilence));
             Random = new RollRandom(roll);
             Kit.System.Random = Random;
             (Attacker, _) = Kit.AddPlayer(1);
@@ -134,6 +148,21 @@ public sealed class InferredSpellScriptTests
         {
             Kit.System.CastSpell(Attacker, Kick, SpellCastTargets.ForUnit(Caster.Guid), triggered: true);
             FlushSpellBatch(Kit);
+        }
+
+        public void CastOnCaster(uint spellId)
+        {
+            Kit.System.CastSpell(Attacker, spellId, SpellCastTargets.ForUnit(Caster.Guid), triggered: true);
+            FlushSpellBatch(Kit);
+        }
+
+        public void Walk()
+        {
+            Caster.ApplyMovement(new MovementInfo
+            {
+                Flags = Caster.Movement.Flags | MovementFlags.Forward, X = Caster.X + 3, Y = Caster.Y, Z = Caster.Z, Orientation = Caster.Orientation,
+            }, Kit.Now);
+            Kit.Advance(100);
         }
 
         public void Dispose() => Kit.Dispose();
@@ -208,6 +237,54 @@ public sealed class InferredSpellScriptTests
         using var scene = new EnigmaScene(roll: 0, withBonus: true);
 
         scene.Kit.System.CancelChannel(scene.Caster); // only interrupt effects and pushback are blocked
+
+        Assert.Null(scene.Kit.System.GetState(scene.Caster.Guid)!.CurrentCast);
+    }
+
+    [Fact]
+    public void EnigmaBonus_AWinningChannel_StillEndsWhenTheCasterMoves()
+    {
+        using var scene = new EnigmaScene(roll: 0, withBonus: true);
+        Assert.True(scene.Cast.Uninterruptible);
+
+        scene.Walk();
+
+        Assert.Null(scene.Kit.System.GetState(scene.Caster.Guid)!.CurrentCast);
+    }
+
+    [Fact]
+    public void EnigmaBonus_AWinningChannel_StillEndsWhenTheCasterIsStunned()
+    {
+        using var scene = new EnigmaScene(roll: 0, withBonus: true);
+        Assert.True(scene.Cast.Uninterruptible);
+
+        scene.CastOnCaster(StunBolt);
+
+        Assert.True(scene.Kit.System.HasAura(scene.Caster, StunBolt));
+        Assert.Null(scene.Kit.System.GetState(scene.Caster.Guid)!.CurrentCast);
+    }
+
+    [Fact]
+    public void EnigmaBonus_AWinningChannel_StillEndsWhenTheCasterIsSilenced()
+    {
+        using var scene = new EnigmaScene(roll: 0, withBonus: true);
+        Assert.True(scene.Cast.Uninterruptible);
+
+        scene.CastOnCaster(SilenceBolt);
+
+        Assert.True(scene.Kit.System.HasAura(scene.Caster, SilenceBolt));
+        Assert.Null(scene.Kit.System.GetState(scene.Caster.Guid)!.CurrentCast);
+    }
+
+    [Fact]
+    public void EnigmaBonus_AWinningChannel_StillEndsWhenTheCasterDies()
+    {
+        using var scene = new EnigmaScene(roll: 0, withBonus: true);
+        Assert.True(scene.Cast.Uninterruptible);
+
+        scene.Caster.Health = 0;
+        Assert.False(scene.Caster.IsAlive);
+        scene.Kit.System.OnUnitDied(scene.Caster); // RemoveAurasOnDeath cancels the current cast; Cancel has no Uninterruptible check
 
         Assert.Null(scene.Kit.System.GetState(scene.Caster.Guid)!.CurrentCast);
     }
@@ -429,6 +506,35 @@ public sealed class InferredSpellScriptTests
         scene.Cast();
 
         Assert.Same(scene.Bystander, busy.Combat.Victim);
+    }
+
+    [Fact]
+    public void AgroDrones_ACharmedDroneIsLeftAlone()
+    {
+        using var scene = new DroneScene();
+        // The controller is a creature guid, not a player: a player controller would make Hooks.CanAttack refuse the unflagged victim on its own,
+        // so the test would pass without the guard. With a creature controller the attack succeeds unless AgroDronesEffectScript skips the drone.
+        Creature charmed = scene.Spawn(AgroDronesEffectScript.VeknissDroneEntry, 10);
+        charmed.SetUInt64(UpdateFields.UnitFieldCharmedby, ObjectGuid.WithEntry(HighGuid.Unit, 5006, 999).Value);
+
+        scene.Cast();
+
+        Assert.Null(charmed.Combat.Victim);
+        Assert.False(charmed.Combat.IsInCombat);
+    }
+
+    [Fact]
+    public void AgroDrones_AnOwnedDroneIsLeftAlone()
+    {
+        using var scene = new DroneScene();
+        // Creature controller for the same reason as the charmed case: only the script's guard keeps this drone out of the fight.
+        Creature owned = scene.Spawn(AgroDronesEffectScript.VeknissDroneEntry, 10);
+        owned.SetUInt64(UpdateFields.UnitFieldSummonedby, ObjectGuid.WithEntry(HighGuid.Unit, 5006, 999).Value);
+
+        scene.Cast();
+
+        Assert.Null(owned.Combat.Victim);
+        Assert.False(owned.Combat.IsInCombat);
     }
 
     [Fact]

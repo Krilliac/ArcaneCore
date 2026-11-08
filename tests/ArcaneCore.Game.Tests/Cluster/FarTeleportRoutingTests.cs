@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Death;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Graveyards;
@@ -266,6 +267,52 @@ public sealed class FarTeleportRoutingTests
 
             TeleportDestination destination = Assert.Single(router.Calls).Destination;
             Assert.Equal(new TeleportDestination(1, 1000, 2000, 30, 1f), destination);
+        }
+    }
+
+    /// <summary>
+    /// The router took the request, but the gateway has not decided and can still refuse: the ghost must stay a ghost with its body, because a revive cannot be taken back and a refusal would
+    /// leave it alive for free. The target worker revives it once it has arrived (<c>WorkerTransferTargetProductionTests</c>).
+    /// </summary>
+    [Fact]
+    public void AGhostSentToTheDungeonOfItsBody_StaysAGhost_WhileTheGatewayHasNotDecided()
+    {
+        (WorldRuntime world, TeleportService teleports, Player player, _, RecordingRouter router) = Setup("0", allowInstanceMaps: false);
+        using (world)
+        {
+            DeathHooks.Register(world, new DeathHooks(new DeathOptions(), new FixedDeathClock(1_700_000_000)));
+            player.Map!.Combat.RestoreGhost(player, new CorpseSnapshot(33, 10, 20, 30, 0, 1_699_999_000, (byte)CorpseType.ResurrectablePve));
+
+            Assert.True(teleports.TeleportTo(player, 33, 10, 20, 30, 0));
+            world.RunTick(50);
+
+            Assert.Equal(33u, Assert.Single(router.Calls).Destination.MapId);
+            Assert.NotEqual(0u, (uint)(player.Flags & PlayerFlags.Ghost));
+            Assert.Equal(DeathState.Dead, player.Combat.DeathState);
+            Assert.False(player.IsAlive);
+            Assert.NotNull(player.Combat.Corpse);
+        }
+    }
+
+    /// <summary>
+    /// A ghost whose body lies on a continent another worker owns (it crossed workers): this worker must not touch that map (GetMap throws for it, which lost the body), so the ghost keeps
+    /// the body outside every map, for the next save and for the owner to put back when the ghost returns.
+    /// </summary>
+    [Fact]
+    public void AGhostWhoseBodyIsOnAContinentAnotherWorkerOwns_KeepsTheBody_OutsideEveryMap()
+    {
+        (WorldRuntime world, _, Player player, _, _) = Setup("0");
+        using (world)
+        {
+            DeathHooks.Register(world, new DeathHooks(new DeathOptions(), new FixedDeathClock(1_700_000_000)));
+
+            player.Map!.Combat.RestoreGhost(player, new CorpseSnapshot(1, 10, 20, 30, 0, 1_699_999_000, (byte)CorpseType.ResurrectablePve));
+
+            Corpse corpse = Assert.IsType<Corpse>(player.Combat.Corpse);
+            Assert.Equal(1u, corpse.MapId);
+            Assert.Null(corpse.Map);
+            Assert.Null(world.FindMap(1));
+            Assert.NotEqual(0u, (uint)(player.Flags & PlayerFlags.Ghost));
         }
     }
 }

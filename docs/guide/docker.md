@@ -73,11 +73,18 @@ changes visibility.
 
 ### Pruning
 
-Old `sha-` tags are not pruned yet (about 4 new tags per image per night). Deleting package versions needs a token with package
-delete permission on the package, and a multi-arch image is an index plus per-platform manifests that are untagged versions: a naive
-"delete old versions" would delete manifests that a live tag still needs. That cannot be verified without a first push, so it is a
-follow-up: after the packages exist, add a pruning job that deletes only versions whose tags are all `sha-*` and older than 30 days,
-and check it on a copy first.
+Old nightly `sha-<7 hex>-debug` and `sha-<7 hex>-release` tags are pruned by the `prune` job of the workflow (only the schedule deletes; a hand run only lists). A prune failure never fails the run: the job is `continue-on-error`, so the skip check above still sees a successful run, and a warning annotation plus a summary line show the failure.
+It lists each package's versions and deletes only a version whose tags are all such `sha-` tags and that is older than 30 days. A version
+that also carries `edge`, `edge-release`, a release tag or a `manual-sha-` tag is kept, and an untagged version is never deleted: a
+multi-arch image is an index plus per-platform manifests that are untagged versions, and a live tag still needs them. The cost is that
+the untagged platform manifests of a pruned index stay behind until a package cleanup by hand.
+
+The job deletes nothing unless the repository variable `PRUNE_SHA_TAGS` is `true` and the run is the nightly schedule; every other run
+(including a hand run) only lists what it would delete in the run summary. The first run could not be verified without the packages, so
+the owner checks it: start the workflow by hand, read the "would delete" list in the summary, then set `PRUNE_SHA_TAGS=true`. If the
+job's `packages: write` token is refused (HTTP 403) because the package is not linked to the repository, the package needs the `admin` role for the workflow's token. The repository that published the package has it by default; for a package
+published elsewhere, add the repository under the package's Manage Actions access with the Admin role, or use a token with package
+delete permission. `sha-` tags are kept 30 days once pruning is enabled, so a rollback or a VPS pin to a `sha-` tag older than that fails on pull.
 
 Pick a version and pull it: set `ARCANE_IMAGE_TAG` in `.env` (for example to `edge`, or to a release tag), then
 `docker compose -f docker-compose.prod.yml pull`.

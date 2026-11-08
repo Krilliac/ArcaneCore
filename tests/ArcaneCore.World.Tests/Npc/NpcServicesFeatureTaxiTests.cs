@@ -1,10 +1,17 @@
 using ArcaneCore.Game;
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Npc;
+using ArcaneCore.Game.Pets;
+using ArcaneCore.Game.Pets.Control;
+using ArcaneCore.Game.Ranged;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Characters.Pets;
 using ArcaneCore.Kernel.Npc;
+using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using ArcaneCore.TestSupport;
@@ -13,6 +20,7 @@ using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Npc;
 using ArcaneCore.World.Persistence;
+using ArcaneCore.World.Spells;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -24,13 +32,20 @@ namespace ArcaneCore.World.Tests.Npc;
 /// landing delete reach the queue, a stored route is resumed and then cleared, a save that cannot be persisted returns the
 /// character to the departure node and clears the route (what the synchronous save did), the login barrier refuses while a
 /// write is not durable, a later logout retries it, and <see cref="WorldFeatures.StopWorldFeaturesAsync"/> drains the queue.
+/// The end of a flight also brings back the pet the owner could not have in the air (vmangos FlightPathMovementGenerator::Finalize -> Player::Unmount).
 /// </summary>
 public sealed class NpcServicesFeatureTaxiTests
 {
     private const uint Gryphon = 3837;
     private const uint GryphonDisplay = 1147;
     private const float Z = 83.5f;
+    private const uint Imp = 416;
+    private const uint SummonImp = 688;
     private static readonly TimeSpan Budget = TimeSpan.FromSeconds(10);
+
+    private static readonly CreatureContent Demons = new(
+        [new CreatureTemplate { Entry = Imp, Name = "Imp", DisplayIds = [4449], MinLevel = 5, MaxLevel = 5, MinLevelHealth = 100, MaxLevelHealth = 100, Faction = 14, CreatureType = CharmService.CreatureTypeDemon }],
+        [], [], [], []);
 
     // Node 1 (0,0) → node 2 (64,0) over path 10, with a midpoint waypoint; a second leg to node 3 over path 11.
     private static readonly NpcContent TaxiContent = NpcContent.Empty with
@@ -86,6 +101,100 @@ public sealed class NpcServicesFeatureTaxiTests
         Assert.Equal(90f, relogged.Z);
     }
 
+    /// <summary>The relog of a warlock whose route resumes in the air: the login's RestoreCurrentPet (PersistentPetFeature.Publish, after this feature's resume) only remembers the demon.</summary>
+    private static async Task<Player> WarlockReloggedInTheAirAsync(Rig rig)
+    {
+        CharacterRecord stored = Assert.IsType<CharacterRecord>(await rig.Characters.GetByIdAsync(rig.CharacterId));
+        stored.X = 32;
+        stored.Z = 90;
+        await rig.Store.SaveAsync(rig.CharacterId, new TaxiFlightRoute([1, 2], [10], [0]));
+        Player relogged = await rig.LoadAsync();
+        relogged.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Warlock);
+        rig.Enter(relogged);
+        Assert.True(rig.Npcs.Flights!.IsFlying(relogged));
+
+        var saved = new PersistentPetSnapshot(rig.CharacterId, 77, Imp, 10, 0, 50, 10, 0, 1, [], [], Name: "Zagrik", CreatedBySpell: SummonImp);
+        Assert.Null(rig.Pets.RestoreCurrentPet(relogged, saved));
+        Assert.True(rig.Pets.HasTemporarilyUnsummonedPet(relogged));
+        Assert.True(relogged.PetGuid.IsEmpty);
+        return relogged;
+    }
+
+    private static void AssertTheDemonIsBack(Rig rig, Player owner)
+    {
+        Creature back = Assert.IsType<Creature>(owner.Map!.FindObject(owner.PetGuid));
+        Assert.Equal(owner.Guid, back.OwnerGuid);
+        Assert.Equal(77u, back.Summon!.Charm!.PetNumber);
+        Assert.Equal("Zagrik", back.Summon.Charm.Name);
+        Assert.False(rig.Pets.HasTemporarilyUnsummonedPet(owner));
+    }
+
+    [Fact]
+    public async Task ADemonRememberedAtALoginInTheAir_ComesBackWhenTheFlightLands()
+    {
+        await using var rig = await Rig.CreateAsync(petCreatures: Demons);
+        Player warlock = await WarlockReloggedInTheAirAsync(rig);
+
+        rig.FlyUntilLanded(warlock); // the flight ends in the map update, through TaxiFlightSystem
+        Assert.Equal((64f, 0f), (warlock.X, warlock.Y));
+        rig.World.RunTick(0); // the commands phase after the landing
+
+        AssertTheDemonIsBack(rig, warlock);
+    }
+
+    [Fact]
+    public async Task ADemonRememberedAtALoginInTheAir_ComesBackWhenTheFlightIsAborted()
+    {
+        await using var rig = await Rig.CreateAsync(petCreatures: Demons);
+        Player warlock = await WarlockReloggedInTheAirAsync(rig);
+
+        rig.Npcs.Flights!.Abort(warlock);
+        Assert.False(rig.Npcs.Flights.IsFlying(warlock));
+        rig.World.RunTick(0);
+
+        AssertTheDemonIsBack(rig, warlock);
+    }
+
+    [Fact]
+    public async Task AFlightAbortedBecauseThePlayerLeavesItsMap_KeepsTheDemonRememberedForTheTeleportsEnd()
+    {
+        await using var rig = await Rig.CreateAsync(petCreatures: Demons);
+        Player warlock = await WarlockReloggedInTheAirAsync(rig);
+        Map left = warlock.Map!;
+
+        left.RemovePlayer(warlock); // TaxiFlightSystem.OnPlayerRemoved aborts while the player still has its map
+        Assert.False(rig.Npcs.Flights!.IsFlying(warlock));
+        rig.World.RunTick(0);
+
+        Assert.True(rig.Pets.HasTemporarilyUnsummonedPet(warlock)); // no demon was spawned on the map the owner left
+        Assert.True(warlock.PetGuid.IsEmpty);
+    }
+
+    [Fact]
+    public async Task ResumedFlight_ChargesALaterLegAtThePurse_ItNeverRefusesAndTheFlightGoesOn()
+    {
+        // vmangos FlightPathMovementGenerator::Update charges a later leg with ModifyMoney(-cost), which clamps at zero (Player.h:1025-1031):
+        // a character that cannot pay the second leg's fare after a relog pays what it has and still reaches the last node.
+        await using var rig = await Rig.CreateAsync(questNpcs: true);
+        CharacterRecord stored = Assert.IsType<CharacterRecord>(await rig.Characters.GetByIdAsync(rig.CharacterId));
+        stored.X = 32;
+        stored.Z = 90;
+        stored.Money = 20;
+        await rig.Store.SaveAsync(rig.CharacterId, new TaxiFlightRoute([1, 2, 3], [10, 11], [0, 50]));
+
+        Player relogged = await rig.LoadAsync();
+        rig.Enter(relogged);
+        QuestNpcServices quests = rig.Services.GetRequiredService<QuestNpcFeature>().Services;
+        quests.CompleteLoad(quests.Track(relogged), CharacterQuestData.Empty);
+        Assert.True(rig.Npcs.Flights!.IsFlying(relogged));
+        Assert.Equal(20u, relogged.Money);
+
+        rig.FlyUntilLanded(relogged);
+
+        Assert.Equal((64f, 64f), (relogged.X, relogged.Y));
+        Assert.Equal(0u, relogged.Money);
+    }
+
     [Fact]
     public async Task LogoutMidFlight_SavesTheRoute_AndTheResumedFlightClearsItWhenItLands()
     {
@@ -111,6 +220,31 @@ public sealed class NpcServicesFeatureTaxiTests
         await rig.Npcs.RouteWrites!.FlushAsync().WaitAsync(Budget);
         Assert.Null(rig.Store.Saved(rig.CharacterId));
         Assert.Equal(["save 1", "delete 1"], rig.Store.Calls);
+    }
+
+    [Fact]
+    public async Task StartingAFlight_EndsASuccessfulFeignDeath_ThroughTheFeaturesBeforeFlightStep()
+    {
+        // vmangos WorldSession::SendDoFlight (TaxiHandler.cpp:113-114) ends Feign Death; the production wiring is the lambda NpcServicesFeature gives the flight system.
+        await using var rig = await Rig.CreateAsync(withSpells: true);
+        Player flyer = await rig.LoginAsync();
+        SpellSystem spells = rig.Services.GetRequiredService<SpellFeature>().System;
+        const uint feignSpell = 9909201;
+        spells.Store = new SpellStore([new SpellInfo
+        {
+            Id = feignSpell, Name = "Synthetic Feign Death", RangeIndex = SpellConstants.RangeIndexSelfOnly,
+            Effects = [new SpellEffectInfo { Effect = SpellEffectName.ApplyAura, AuraType = AuraType.FeignDeath, BaseDice = 1, DieSides = 1,
+                TargetA = SpellImplicitTarget.UnitCaster }],
+        }], [], []);
+        RangedHandlers.Register(spells);
+        Assert.True(spells.AddAura(flyer, feignSpell, permanent: true));
+        Assert.True(spells.IsFeigningDeath(flyer));
+
+        Assert.True(rig.Npcs.Flights!.StartFlight(flyer, [1, 2], [10], Gryphon));
+
+        Assert.False(spells.IsFeigningDeath(flyer));
+        Assert.False(spells.HasAura(flyer, feignSpell));
+        Assert.True(rig.Npcs.Flights.IsFlying(flyer));
     }
 
     [Fact]
@@ -259,6 +393,7 @@ public sealed class NpcServicesFeatureTaxiTests
         }
 
         public ServiceProvider Services { get; }
+        public SummonService Pets => Services.GetRequiredService<SummonService>();
         public FakeTaxiStore Store { get; }
         public InMemoryCharacterStore Characters { get; }
         public CharacterSaveQueue Saves { get; }
@@ -266,7 +401,11 @@ public sealed class NpcServicesFeatureTaxiTests
         public NpcServicesFeature Npcs { get; }
         public int CharacterId { get; }
 
-        public static async Task<Rig> CreateAsync(ShutdownDrain? drain = null)
+        /// <param name="drain">The shutdown drain, if the test needs one.</param>
+        /// <param name="withSpells">When true, a <see cref="SpellFeature"/> is the spell service the feature finds.</param>
+        /// <param name="petCreatures">When set, a <see cref="SummonService"/> over these creatures is the service the feature finds (<see cref="Pets"/>).</param>
+        /// <param name="questNpcs">When true, a <see cref="QuestNpcFeature"/> is built first and takes the taxi content (see below).</param>
+        public static async Task<Rig> CreateAsync(ShutdownDrain? drain = null, bool withSpells = false, CreatureContent? petCreatures = null, bool questNpcs = false)
         {
             var store = new FakeTaxiStore();
             var characters = new InMemoryCharacterStore();
@@ -279,6 +418,22 @@ public sealed class NpcServicesFeatureTaxiTests
             if (drain is not null)
             {
                 collection.AddSingleton(drain);
+            }
+
+            if (withSpells)
+            {
+                collection.AddSingleton(sp => new SpellFeature(sp.GetRequiredService<IServiceScopeFactory>(), NullLogger<SpellFeature>.Instance));
+            }
+
+            CreatureMapSystem? petSystem = null;
+            if (petCreatures is not null)
+            {
+                collection.AddSingleton(new SummonService(systems: _ => petSystem));
+            }
+
+            if (questNpcs)
+            {
+                collection.AddSingleton(sp => new QuestNpcFeature(sp, sp.GetRequiredService<IServiceScopeFactory>(), NullLogger<QuestNpcFeature>.Instance));
             }
 
             ServiceProvider services = collection
@@ -300,8 +455,18 @@ public sealed class NpcServicesFeatureTaxiTests
             CharacterSaveQueue saves = services.GetRequiredService<CharacterSaveQueue>();
             saves.Start();
             var world = new WorldRuntime(new WorldRuntimeOptions { AutosaveIntervalMs = 0 }, saves, NullLogger<WorldRuntime>.Instance);
+            if (petCreatures is not null)
+            {
+                petSystem = new CreatureMapSystem(world.GetMap(0), petCreatures, random: new Random(1));
+                world.GetMap(0).AddUpdater(petSystem);
+            }
+
+            // The quest feature is built first: its ctor extends the NPC feature with an empty store. NpcServicesFeature.Node prefers the
+            // quest feature's store, so that store takes the taxi content too, and Extend then leaves Flights on the same content.
+            QuestNpcFeature? questFeature = questNpcs ? services.GetRequiredService<QuestNpcFeature>() : null;
             NpcServicesFeature npcs = services.GetRequiredService<NpcServicesFeature>();
             npcs.Attach(world);
+            questFeature?.Services.ReplaceNpcs(new NpcStore(TaxiContent));
             npcs.Extend(new QuestNpcDependencies(), new NpcStore(TaxiContent));
             return new Rig(services, store, characters, saves, world, npcs, record.Id);
         }

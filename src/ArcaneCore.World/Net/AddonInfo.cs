@@ -129,12 +129,18 @@ public static class AddonInfo
             return false;
         }
 
-        // The zlib header (RFC 1950): CMF low nibble 8 (deflate) and CMF*256 + FLG a multiple of 31. Checked here so a block that is
-        // not zlib never reaches ZLibStream, which would raise a first-chance exception for every such connection.
-        if (addonBlock.Length < 6 || (addonBlock[4] & 0x0F) != 8 || (addonBlock[4] * 256 + addonBlock[5]) % 31 != 0)
+        // The zlib header (RFC 1950): CMF low nibble 8 (deflate), window size CINFO (high nibble) at most 7, no preset dictionary (FDICT, FLG bit 5),
+        // and CMF*256 + FLG a multiple of 31. Checked here so a block that is not zlib never reaches ZLibStream, which would raise a first-chance
+        // exception for every such connection.
+        if (addonBlock.Length < 6 || (addonBlock[4] & 0x0F) != 8 || (addonBlock[4] >> 4) > 7 || (addonBlock[5] & 0x20) != 0
+            || (addonBlock[4] * 256 + addonBlock[5]) % 31 != 0)
         {
-            logger?.LogDebug("[{Endpoint}] addon block is not zlib (CMF {Cmf}, len {Length}); sending empty addon info",
-                endpoint, addonBlock.Length > 4 ? $"0x{addonBlock[4]:X2}" : "n/a", addonBlock.Length);
+            if (logger is { } log && log.IsEnabled(LogLevel.Debug))
+            {
+                log.LogDebug("[{Endpoint}] addon block is not zlib (CMF {Cmf}, len {Length}); sending empty addon info",
+                    endpoint, addonBlock.Length > 4 ? $"0x{addonBlock[4]:X2}" : "n/a", addonBlock.Length);
+            }
+
             return false;
         }
 

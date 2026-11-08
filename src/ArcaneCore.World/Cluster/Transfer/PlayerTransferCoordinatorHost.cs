@@ -8,7 +8,7 @@ using Microsoft.Extensions.Logging;
 namespace ArcaneCore.World.Cluster.Transfer;
 
 /// <summary>
-/// The production <see cref="ITransferGatewayRouter"/> on a source worker: each call is a control frame (<see cref="GatewayTransferWire"/>) on the link
+/// An <see cref="ITransferGatewayRouter"/> for a coordinator on a source worker (the S5c path; unused: nothing constructs it, production's coordinator runs on the gateway): each call is a control frame (<see cref="GatewayTransferWire"/>) on the link
 /// that carries the player's session (<see cref="GatewaySessionLinkHost.TrySendTransferControl"/>), and the call completes when the gateway's
 /// <see cref="GatewayTransferAck"/> for that transfer and phase arrives. A refusal, a missing link or a missing ack within <see cref="AckTimeout"/> throws, so
 /// the coordinator aborts (stages 1..4) or rolls forward again later (post-commit; the gateway treats a repeated commit as done).
@@ -117,8 +117,8 @@ public sealed class LinkTransferGatewayRouter : ITransferGatewayRouter
 }
 
 /// <summary>
-/// Runs <see cref="PlayerTransferCoordinator"/> on the source worker (S5c): the source participant is the worker's own, the targets are reached through
-/// the participants registered for them (the peer link), the gateway through <see cref="LinkTransferGatewayRouter"/> over the worker's gateway link and
+/// Runs <see cref="PlayerTransferCoordinator"/>. Production builds it on the gateway (<c>GatewayTransferService</c>): the sources and targets are the remote participants on each
+/// slot's control channel, the router is the gateway's own in process and
 /// every decision is journalled in the <see cref="ITransferDecisionStore"/> (production: <c>EfTransferDecisionStore</c>).
 /// <para>
 /// <see cref="TransferAsync"/> allows one transfer per character at a time. A failure before the commit is aborted (the source resumes, the gateway
@@ -148,7 +148,7 @@ public sealed class PlayerTransferCoordinatorHost
         _logger = logger;
     }
 
-    /// <summary>Builds the coordinator for this worker: <paramref name="source"/> is the local participant, <paramref name="targets"/> the participants of the other workers.</summary>
+    /// <summary>Builds a coordinator on a worker (the S5c path; no caller): <paramref name="source"/> is the local participant, <paramref name="targets"/> the participants of the other workers.</summary>
     public static PlayerTransferCoordinatorHost Create(
         IClusterMapRouter mapRouter,
         ITransferDecisionStore store,

@@ -23,6 +23,7 @@ public sealed class LogonFaultsTests
     [InlineData(LogonFaults.AdmitSite, "logon/admit")]
     [InlineData(LogonFaults.TagFaultContextSite, "logon/tag-fault-context")]
     [InlineData(LogonFaults.VerifyVersionFormatSite, "logon/verify-version/format")]
+    [InlineData(LogonFaults.PatchWarmSite, "realm.patch-warm")]
     public void SharedKeys_KeepTheirOriginalValues(string actual, string expected) => Assert.Equal(expected, actual);
 
     [Theory]
@@ -44,6 +45,7 @@ public sealed class LogonFaultsTests
             ("logon/listener", LogonFaults.ListenerSite),
             ("logon/admit", LogonFaults.AdmitSite),
             ("logon/tag-fault-context", LogonFaults.TagFaultContextSite),
+            ("realm.patch-warm", LogonFaults.PatchWarmSite),
             ("logon/verify-version/format", LogonFaults.VerifyVersionFormatSite),
             ("logon/logon-challenge/crypto", LogonFaults.SessionFaultSite("logon-challenge", "crypto")),
             ("logon/realm-list/resilience", LogonFaults.SessionFaultSite("realm-list", "resilience")),

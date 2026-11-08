@@ -71,6 +71,28 @@ internal enum QaSignalKind
     /// (at least <c>Warning</c> severity with 5+ occurrences or 3+ distinct bot subjects).
     /// </summary>
     Anomaly,
+
+    /// <summary>
+    /// The server refused a bot's vendor, trainer, inventory or loot request: a suspicious refusal (the vendor does not sell the item, the trainer cannot
+    /// teach a valid spell, an unsupported loot) at once, an expected one (no money, bags full, too far) only when one bot keeps repeating it
+    /// (<see cref="PlayerbotQaInteractionRules"/>).
+    /// </summary>
+    InteractionFailed,
+
+    /// <summary>
+    /// A quest a bot met does not work: the server refused its exchange (QUEST_INVALID, QUEST_FAILED, a quest the server cannot support), the quest
+    /// failed, or an objective never progressed although the bot killed, used or looted what it asks for.
+    /// </summary>
+    QuestBroken,
+
+    /// <summary>A bot used a game object and the server does not implement that use (an unhandled type, a chest whose loot cannot be stored, a spell action). Bot-independent: one occurrence is enough.</summary>
+    ObjectUnsupported,
+
+    /// <summary>A creature AI or script needs what the server lacks (an unknown AIName, unsupported EventAI parts, a summon of a missing creature_template, an escort with no points). Bot-independent.</summary>
+    ScriptUnsupported,
+
+    /// <summary>A bot sent an opcode the world thread has no handler for (none at all, or a session-only one). Bot-independent.</summary>
+    OpcodeUnhandled,
 }
 
 /// <summary>
@@ -182,6 +204,12 @@ internal sealed record QaSignal
 
     /// <summary>A game object entry an interaction is about.</summary>
     public uint GameObject { get; init; }
+
+    /// <summary>
+    /// A protocol code of the interaction kinds: the BuyResult, SellResult, trainer reason, InventoryResult or LootResult of an interaction, the
+    /// QuestInvalidReason of a quest refusal, the game object type of an unsupported use, the opcode of an unhandled one.
+    /// </summary>
+    public int Code { get; init; }
 
     /// <summary>The bot's class (1..11, <c>ArcaneCore.Game.Class</c>); zero when unknown. Shown as the classes that met a finding.</summary>
     public byte BotClass { get; init; }

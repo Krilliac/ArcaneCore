@@ -51,6 +51,7 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
     private readonly ILogger _logger = loggers.CreateLogger<BattlegroundFeature>();
     private readonly Dictionary<uint, MatchRuntime> _matches = [];
     private readonly List<MatchRuntime> _matchScratch = [];
+    private readonly List<Map> _closingMaps = [];   // maps of deleted matches that still had players; world thread
     private bool _matchScratchInUse;
     private readonly Dictionary<ObjectGuid, GmMove> _gmMoves = [];
     private readonly System.Collections.Concurrent.ConcurrentDictionary<ObjectGuid, BattlegroundEntryPoint> _entryPoints = new();
@@ -62,6 +63,7 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
     private BattlegroundWorldHost? _host;
     private BattlegroundClusterQueue? _cluster;
     private BattlegroundWorkerClient? _worker;
+    private ArcaneCore.World.Cluster.Social.ClusterBattlegroundLink? _link;
     private WorldRuntime? _world;
     private Task? _writer;
 
@@ -123,6 +125,7 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
         _cluster = new BattlegroundClusterQueue(host, StoreEntryPointAt);
         _manager = new BattlegroundManager(Options, _cluster, host.BasePorts());
         _cluster.Bind(_manager);
+        _link = services.GetService<ArcaneCore.World.Cluster.Social.ClusterBattlegroundLink>();   // registered in cluster mode only
         _writer = Task.Run(WriteLoopAsync);
 
         // Everything that needs the other features (they attach in type-name order, after this one): the first world command.
@@ -141,6 +144,7 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
     {
         WorldRuntime world = World;
         RegisterTemplates();
+        ConfigureClusterLink();
 
         var resolver = new BattlegroundMapResolver(this);
         if (world.MapResolver is InstanceManager instances)
@@ -351,6 +355,11 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
             SweepGmMoves();
         }
 
+        if (_closingMaps.Count > 0)
+        {
+            CloseEmptyingMaps();
+        }
+
         WireSpiritGuideTimer();
     }
 
@@ -531,6 +540,69 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
             match.Detach();
             if (match.Map is { } map)
             {
+                CloseMap(map);
+            }
+        }
+    }
+
+    /// <summary>
+    /// The map of a deleted match closes: everyone still on it (a game master that visited, or a participant whose leave has not run) is sent to
+    /// its entry point, or its bind point, and the map is unloaded once nobody is on it. <see cref="WorldRuntime.UnloadMap"/> drops a request for a
+    /// map that still has players, so a map that is not empty yet is asked again by <see cref="OnWorldTick"/> until it is. This follows vmangos <c>Map::TeleportAllPlayersTo</c>
+    /// (Map.cpp:2045-2072) with <c>TELEPORT_LOCATION_BG_ENTRY_POINT</c>, <c>TeleportToBGEntryPoint</c> falling back to the bind point (Player.cpp:2144). World thread.
+    /// </summary>
+    private void CloseMap(Map map)
+    {
+        EvictFromClosedMap(map);
+        if (map.PlayerCount == 0)
+        {
+            World.UnloadMap(map);
+        }
+        else if (!_closingMaps.Contains(map))
+        {
+            _closingMaps.Add(map);
+        }
+    }
+
+    /// <summary>Send every player on a closing map, whose teleport is not already under way, to its entry point or bind point. A refused teleport is tried again next tick.</summary>
+    private void EvictFromClosedMap(Map map)
+    {
+        if (services.GetService<TeleportFeature>()?.TeleportsIfAttached is not { } teleports)
+        {
+            return;
+        }
+
+        foreach (Player player in map.Players.ToArray())
+        {
+            if (teleports.IsBeingTeleported(player))
+            {
+                continue;
+            }
+
+            if (EntryPointOf(player.Guid) is { } point
+                && teleports.TeleportTo(player, point.MapId, point.X, point.Y, point.Z, point.Orientation))
+            {
+                ForgetEntryPoint(player.Guid);
+                continue;
+            }
+
+            if (teleports.TeleportToHomebind(player))
+            {
+                ForgetEntryPoint(player.Guid);
+            }
+        }
+    }
+
+    /// <summary>Retry the closing maps: evict whoever is left and request the unload of those that are empty.</summary>
+    private void CloseEmptyingMaps()
+    {
+        for (int i = _closingMaps.Count - 1; i >= 0; i--)
+        {
+            Map map = _closingMaps[i];
+            EvictFromClosedMap(map);
+            if (map.PlayerCount == 0)
+            {
+                _closingMaps.RemoveAt(i);
                 World.UnloadMap(map);
             }
         }
@@ -641,6 +713,11 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
     public async Task StopAsync()
     {
         _writes.Writer.TryComplete();
+        if (_link is { } link)
+        {
+            await link.DisposeAsync().ConfigureAwait(false);
+        }
+
         if (_writer is { } writer)
         {
             await writer.ConfigureAwait(false);
@@ -698,11 +775,12 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
             return GmBattlegroundGo.NotBattleground;
         }
 
-        manager.ClearStaleBinding(subject.Guid);
         if (_gmMoves.ContainsKey(subject.Guid))
         {
             return GmBattlegroundGo.MoveInProgress;
         }
+
+        manager.ClearStaleBinding(subject.Guid);
 
         BattlegroundPlayerState state = manager.StateOf(subject.Guid);
         if (state.InBattleground && state.InstanceId == match.InstanceId && state.Type == match.Type)
@@ -1005,6 +1083,59 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
     internal void SubmitClusterCommand(string workerId, BattlegroundCommand command)
         => (_cluster ?? throw new InvalidOperationException("the battleground feature is not attached")).Submit(workerId, command);
 
+    /// <summary>
+    /// Cluster mode (the cluster hosting registered a <see cref="ArcaneCore.World.Cluster.Social.ClusterBattlegroundLink"/>): every node sends its players' queue commands to the
+    /// holder and applies its notices; a node that owns the maps of all three battlegrounds (so it can run a match) also offers itself as the holder, and the hub picks one.
+    /// World thread, from <see cref="Install"/>, before the first player queues.
+    /// </summary>
+    private void ConfigureClusterLink()
+    {
+        if (_link is not { } link)
+        {
+            return;
+        }
+
+        // The gateway's rule for where a far transfer to a battleground map lands (GatewayRouteTable.Resolve): a worker whose list names the map wins, otherwise the first worker that owns
+        // everything. Instance-copy ownership (AllowInstanceMaps, on by default) is not enough: the transfer names instance 0, so such a node would run matches the players never reach.
+        bool canHold = CanHoldQueues(World.Ownership);
+
+        ConfigureWorker(link.NodeId, link);
+        if (canHold)
+        {
+            ConfigureHolder(link.NodeId, link);
+        }
+
+        // A node whose list names the battleground maps is where the gateway sends the transfers, so it wins the election over a node that only owns everything.
+        link.Bind(SubmitClusterCommand, ReceiveNotice, canHold, preferred: canHold && ListsBattlegroundMaps(World.Ownership));
+        link.Start(ArcaneCore.World.Cluster.Social.ClusterPresenceHosting.ChatPumpInterval);
+        _logger.LogInformation("battlegrounds: cluster queue link started as {Node} ({Role})", link.NodeId, canHold ? "eligible to be the holder" : "worker only");
+    }
+
+    /// <summary>
+    /// Whether a node with this ownership can be the holder: it owns everything or its list names each battleground map. A node that merely owns everything is only the fallback:
+    /// the gateway prefers a worker that lists the map (<see cref="ListsBattlegroundMaps"/>), and the hub election gives that worker the role.
+    /// </summary>
+    internal static bool CanHoldQueues(MapOwnership ownership)
+    {
+        ArgumentNullException.ThrowIfNull(ownership);
+        return ownership.OwnsEverything || ListsBattlegroundMaps(ownership);
+    }
+
+    /// <summary>Whether the list of this ownership names all three battleground maps (the gateway's first choice for a transfer to one of them).</summary>
+    internal static bool ListsBattlegroundMaps(MapOwnership ownership)
+    {
+        ArgumentNullException.ThrowIfNull(ownership);
+        return ownership.ListsMap(BattlegroundManager.MapOfType(BattlegroundType.AlteracValley))
+            && ownership.ListsMap(BattlegroundManager.MapOfType(BattlegroundType.WarsongGulch))
+            && ownership.ListsMap(BattlegroundManager.MapOfType(BattlegroundType.ArathiBasin));
+    }
+
+    /// <summary>
+    /// True when this node's <see cref="Manager"/> holds the queue state of its players: always outside the cluster, in cluster mode only while this node is the elected holder.
+    /// A plain worker keeps no queue state (the holder does), so anything that reads the local manager to learn whether a player is queued or invited (the playerbots) must not queue there.
+    /// </summary>
+    internal bool HoldsQueueState => _worker is null || _link is { IsHolder: true };
+
     /// <summary>The holder's notice arrived at this worker (any thread); it is applied on the world thread.</summary>
     internal void ReceiveNotice(BattlegroundNotice notice)
     {
@@ -1019,6 +1150,13 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
         {
             case BattlegroundStatusNotice n:
                 host.SendStatus(n.Player, n.QueueSlot, n.Subject, n.Status, n.Time1, n.Time2);
+                break;
+            case BattlegroundListNotice n:
+                if (World.FindOnlinePlayer(n.Player) is { } listed)
+                {
+                    SendBattlefieldListPacket(listed, n.Source, n.MapId, n.Bracket, n.InstanceIds);
+                }
+
                 break;
             case BattlegroundGroupJoinedNotice n:
                 host.SendGroupJoined(n.Player, n.Result);

@@ -2,9 +2,10 @@
 
 Heuristic checks over the packets sessions send to the server. Each finding goes to the anomaly ledger (subsystem `packet`, code =
 the check name) and to a per-check counter; nothing else happens. **A packet is never dropped, changed, delayed, answered
-differently, kicked or banned because of a finding, and no finding feeds the [AntiCheat](anticheat.md) score or escalation.** A
-packet that dispatched before still dispatches and one that was dropped is still dropped, identically. The feature is **off by
-default** (`World:PacketHeuristics:Enabled` = false); `.packetcheck on` switches it on at runtime.
+differently, kicked or banned because of a finding, and no finding feeds the [AntiCheat](anticheat.md) score or escalation unless the `FeedAntiCheatScore` option is switched on (it is off by default; see [Feeding the AntiCheat score](#feeding-the-anticheat-score)).** A
+packet that dispatched before still dispatches and one that was dropped is still dropped, identically. The feature is **on by
+default** (`World:PacketHeuristics:Enabled` = true, so a server with no `World:PacketHeuristics` section runs it); `Enabled` = false
+switches it off at startup and `.packetcheck off` at runtime. Bots and staff stay exempt by default.
 
 It exists to answer one question on a live server: with real clients and the playerbots on, what do the sessions send that no 1.12.1
 client builds, and is it a cheat, a bot bug or a server bug.
@@ -30,8 +31,8 @@ player in GM mode, refreshed from every world packet the session dispatches, so 
 bot, staff) of the status table. **A packet a packet tool injected** (`InjectAsync`, which goes through the same dispatcher) is never attributed to the
 target's account: it is checked whenever the feature is on, whatever the target is (neither exemption applies), counted in the `tool` column and reported
 under the subject `tool N` (N is the target's account), so tool use stays visible and does not look like the player's own traffic. The tool
-shares the target session's cadence and replay state with the real client. The injection gate and the tools themselves are untouched. The bot sessions are almost all the traffic on this server, so the usual way to use it here is
-`.packetcheck on` and `.packetcheck bots on`.
+shares the target session's cadence and replay state with the real client. The injection gate and the tools themselves are untouched. The bot sessions are almost all the traffic on this server and are exempt by default, so to see their traffic use
+`.packetcheck bots on`.
 
 `.packetcheck status | on | off | bots on|off | staff on|off | reset` (Administrator; works from chat, the console and RA). A change lasts
 until the next restart, which returns to `World:PacketHeuristics`. `status` prints whether the checks run, who is exempt and the
@@ -48,13 +49,23 @@ with `bot ` (capped, never evicted), so findings would crowd out its own. Detail
 formatted only when a report is actually made: the reasons passed to the throttle are constants, the session state, the opcode name and every number are
 formatted inside the report, so a flood costs no allocation (asserted by `AThrottledFinding_AllocatesNothing_OnEveryReportingPath`).
 
+## Stream output
+
+Each report that reaches the ledger is also published to the `anticheat` channel of the [GM stream](../ops/gm-stream.md) (`.arcane stream on anticheat [target|near|all]`, GameMaster): `packet CODE (Player:guid) account N: text [Severity]`, or `packet CODE account N: text [Severity]` while the session has no player yet. Injected tool traffic and bot traffic carry a `tool` or `bot` marker after the code, so they do not read as the target cheating. The line has the GUID and the account id only, never a name, and no position, so it reaches `all` scopes and a `target` scope whose GM has that player selected, never `near`. It is published only for reports that went out (the throttle applies) and only while a GM follows the channel (one lock-free flag read otherwise); a publish that throws is logged and never stops the count. The movement findings of the AntiCheat manager use the same channel (see [anticheat](anticheat.md#stream-output)).
+
+## Feeding the AntiCheat score
+
+Off by default. With `FeedAntiCheatScore` on, a reported finding of a real player's traffic adds `ScoreWeight` (default 3) to that player's AntiCheat score, as violation type `Packet`. Only `shape`, `dev-opcode` and `malformed` are fed: the checks whose only honest cause is a modified client. Every check that has an honest false-positive risk in the table below never is: `wrong-state`, `unknown-opcode` and `incapacitated-action` (latency, in-flight packets, unimplemented client features), `cadence` (a client entering a crowded city bursts queries), `orphan-ack` (a late acknowledgement after a second change superseded the first) and `replay` (an opcode that legitimately repeats an identical payload). Bot, staff and tool-injected traffic is never fed. The score is requested from whatever thread reports, queued (512 at most between world ticks) and applied on the world thread, where the manager's own exemptions apply as well. One score per reported finding, so `ReportIntervalSeconds` throttles the score too.
+
+Escalation arithmetic at the defaults: one session, check and opcode reports at most once per 10 s, each adding 3, and the score decays by `AntiCheat:DecayPerSecond` (2) per second, so a repeated finding peaks at 3 and is gone in 1.5 s, well under the GM alert at 30. Only about ten distinct check and opcode pairs reporting within a second or two reach it. The default therefore records and streams findings without escalating on its own; an operator who wants an escalation sets `ScoreWeight` to the alert threshold or more (30 reaches `GmAlert` in one finding, 60 `Rubberband`, 120 `Kick`) and an `AntiCheat:Action` ceiling above `Log`. `PacketScoreFeedTests` asserts a finding at weight 30 under the real decay reaching the `GmAlert` verdict and one at the default weight staying at `Log`. The packet itself is still never touched: dispatch is unchanged, with the option on or off. Details: [anticheat](anticheat.md#packet-findings-and-the-score).
+
 ## The checks
 
 | Code | Severity | Detects | False-positive risks |
 |---|---|---|---|
 | `wrong-state` | Warning (Info for a second `CMSG_PLAYER_LOGIN`) | an opcode dropped because the session state does not allow it: a world opcode at the character screen, a session opcode in a disallowed state, a world packet dequeued after the session left the world or while the player has no map | packets in flight: none are reported for `WrongStateGraceMs` (5 s) after the session left the world, nor while the player is in a far teleport (`TeleportService.StageOf` is `FarScheduled`, `Far` or `Arriving`: instance portal, hearthstone across continents, release; the whole loading screen, from `SMSG_TRANSFER_PENDING` until the tick after `MSG_MOVE_WORLDPORT_ACK`, however long it takes, not a timer), nor once the session is closing or kicked; a map-less player outside any transfer is still reported. A double-clicked Enter World sends a second `CMSG_PLAYER_LOGIN` while the first is logging in: Info. A bot's refused action is the same check, with the same transfer grace |
 | `unknown-opcode` | Info (named but unhandled), Warning (outside the opcode table, or a server opcode sent by a client) | an opcode with no handler | a client feature the server does not implement yet: Info is expected noise |
-| `dev-opcode` | Warning | one of the stripped developer, GM, cheat or debug opcodes (`CMSG_GODMODE`, `CMSG_CHEAT_SETMONEY`, `MSG_GM_SUMMON`, ... `StrippedDevOpcodes`, vmangos `INVALID_PACKET`) that the 1.12.1 release client never sends. The packet is dropped unread with no reply, counted in `DevOpcodeTracker` (not in the unhandled-opcode counters) and logged, with the account id, at most once per 10 s per session. The ledger finding exists only while `World.PacketHeuristics.Enabled` is true (the shipped default is false); with the heuristics off the counter, the metric and that log line are the whole record. A staff session (Moderator and above, or a player in GM mode) is audited (`.arcane gmlog`, command `dev-opcode <NAME>`, coalesced to one entry per 10 s per session and opcode, with the number of repeats) instead of flagged; a bot or a packet tool is flagged under its own traffic kind | a modified client, a hand-made tool or a bot, by definition; a name that was misclassified would flag honest players, which is why doubtful names stay in `unknown-opcode` |
+| `dev-opcode` | Warning | one of the stripped developer, GM, cheat or debug opcodes (`CMSG_GODMODE`, `CMSG_CHEAT_SETMONEY`, `MSG_GM_SUMMON`, ... `StrippedDevOpcodes`, vmangos `INVALID_PACKET`) that the 1.12.1 release client never sends. The packet is dropped unread with no reply, counted in `DevOpcodeTracker` (not in the unhandled-opcode counters) and logged, with the account id, at most once per 10 s per session. The ledger finding exists only while `World.PacketHeuristics.Enabled` is true (the shipped default is true); with the heuristics off the counter, the metric and that log line are the whole record. A staff session (Moderator and above, or a player in GM mode) is audited (`.arcane gmlog`, command `dev-opcode <NAME>`, coalesced to one entry per 10 s per session and opcode, with the number of repeats) instead of flagged; a bot or a packet tool is flagged under its own traffic kind | a modified client, a hand-made tool or a bot, by definition; a name that was misclassified would flag honest players, which is why doubtful names stay in `unknown-opcode` |
 | `malformed` | Error | a payload a handler rejected as truncated or invalid, a bad frame header, a `CMSG_PING` without its sequence number, a bot payload over the frame limit | none expected; a real client never sends these |
 | `shape` | Warning | a payload whose length differs from the fixed length of its message (trailing or missing bytes) | a modified client or a different build with another layout; see the section below |
 | `cadence` | Warning | an opcode class above its ceiling in any sliding second (`CadenceLimits`), and a `CMSG_PING` closer than `PingMinIntervalMs` to the previous one (`overspeed-ping`) | `QueryPerSecond`: a client entering a crowded city bursts queries (raise it if that is all you see); casts and uses are limited by the global cooldown, so 10/s is far above what a client produces |
@@ -134,9 +145,28 @@ packet per session per simulated 100 ms tick): the number is in the test output 
 (asserted). Per-session state is created lazily on the first checked packet and guarded by a small per-session lock; the shared counters
 are `Interlocked`.
 
-## Not in v1 (future work)
+What the bounds cover. The ns-per-packet and ms-per-tick bounds in that test are on `OnClientPacket` only (shape, cadence and replay on the
+network path). `OnWorldPacket`, the incapacitated-action hook every world packet passes on the world thread, has its own test
+(`TheWorldPacketHook_PaysAdmitAndTheOpcodeMask_AndAllocatesNothing`, `PERF world-hook` line), which prices `Admit` plus the opcode mask lookup
+with an opcode that needs no player state; a packet that does reach the player (dead, taxi or far-transfer check) reads the player's life state and unit flags and,
+for the far-transfer case, a service lookup, and is not separately bounded. `Admit` itself is a volatile settings read, the session flags and the
+state lookup, and is part of both measurements.
 
-Movement-clock long-term drift (the [SpeedHackDetector](anticheat.md) covers part of it), feeding findings into the AntiCheat score or
-escalation, possessed-unit checks, and the checks that were dropped as infeasible or noisy: a teleport-counter comparison beyond the
-handler's own (the counter is only known to the handler), and enum-range checks (they need the variable layouts, which the shape table
-deliberately does not model).
+What a checked client packet pays beyond the disabled gate: one acquisition of the session's own lock (uncontended except when a finding races
+the next packet; it is never held while reporting) and, for the replay check, one FNV-1a hash over the first 256 payload bytes plus the length
+(at most 256 multiply-xor steps, no allocation). With the feature off a packet costs one volatile read.
+
+The anomaly ring the Atlas map feed keeps (`MapFeedAnomalyRing`) bounds packet findings separately: they carry no owner, so each account
+may put at most 16 in the ring per minute and all accounts together 512, otherwise one client cycling opcodes would overwrite the ring's 4096
+slots. The ledger still counts every finding; only the ring's copy is limited. The ring keeps a count of what it turned away (`PacketDropped`), but only tests read it: Atlas's `Lost` figure covers overwritten notices, not these, so an operator cannot see from Atlas that packet findings were dropped (the ledger's own counts and logs still show them).
+
+Limits of that bound. The 512 total ignores severity, so an Error `malformed` finding is turned away like an Info one once the window is full. 32 accounts at 16 each fill the window and starve every other client's packet findings until the next minute; at 512 per minute packet findings can still turn over the whole 4096-slot ring in about 8 minutes. Findings of other subsystems are never budgeted. The single-client flood is closed; a flood from many accounts is only slowed.
+
+## Movement-clock drift and possessed units
+
+Neither is a packet check. The movement-clock long-term drift is in the AntiCheat clock detector, behind its own option (off by default; [anticheat](anticheat.md#long-term-clock-drift)), and the possessed-unit movement checks already exist there ([anticheat](anticheat.md#possessed-units)).
+
+## Not done
+
+Checks dropped as infeasible or noisy: a teleport-counter comparison beyond the handler's own (the counter is only known to the handler), and
+enum-range checks (they need the variable layouts, which the shape table deliberately does not model).

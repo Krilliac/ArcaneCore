@@ -1,4 +1,5 @@
 using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.World.AntiCheat.PacketHeuristics;
 
 namespace ArcaneCore.World.Ops.MapFeed;
 
@@ -24,12 +25,30 @@ internal sealed record AnomalyPage(AnomalySlot[] Slots, long Latest, long Lost, 
 /// A bounded ring of the anomalies this world reported (docs/areas/atlas-insight.md, "Anomalies"). The ledger is process-global and
 /// raises <c>Reported</c> on the reporting thread, so <see cref="Offer"/> copies only the notice's own immutable values into a
 /// preallocated slot under a short lock; it never touches a world object (positions are resolved later, by a query on the world thread).
-/// A notice is kept only when it belongs to this ring's owner (the world's identity token), or has no owner and unowned notices are wanted.
+/// A notice is kept only when it belongs to this ring's owner (the world's identity token), or has no owner and unowned notices are wanted;
+/// an unowned packet-heuristic finding must also fit the per-account and per-window packet budgets below.
 /// </summary>
 internal sealed class MapFeedAnomalyRing : IDisposable
 {
     /// <summary>Slots in the ring.</summary>
     public const int Capacity = 4096;
+
+    /// <summary>Length of the window the packet-finding budgets below are counted in.</summary>
+    public const int PacketWindowMs = 60_000;
+
+    /// <summary>
+    /// Packet-heuristic findings one subject (one account) may put in the ring per window. Packet findings carry no owner and are
+    /// raised by what a client sends, so without a bound one client cycling opcodes (each opcode reports once per interval) would
+    /// overwrite all <see cref="Capacity"/> slots with its own findings.
+    /// </summary>
+    public const int PacketPerSubjectPerWindow = 16;
+
+    /// <summary>
+    /// Packet-heuristic findings all subjects together may put in the ring per window (an eighth of the ring). The subject table gains
+    /// one entry per admitted finding at most, so this number bounds it too. The total ignores severity and subject: enough accounts at
+    /// <see cref="PacketPerSubjectPerWindow"/> each fill it for a window.
+    /// </summary>
+    public const int PacketPerWindow = Capacity / 8;
 
     private readonly AnomalyLedger _ledger;
     private readonly object _owner;
@@ -38,9 +57,13 @@ internal sealed class MapFeedAnomalyRing : IDisposable
     private readonly AnomalySlot[] _slots = new AnomalySlot[Capacity];
     private readonly object _gate = new();
     private readonly Action<AnomalyNotice> _handler;
+    private readonly Dictionary<string, int> _packetPerSubject = new(PacketPerWindow);
     private long _seq;
     private long _accepted;
     private long _refused;
+    private long _packetDropped;
+    private long _packetWindowStartMs;
+    private int _packetInWindow;
     private bool _subscribed;
 
     public MapFeedAnomalyRing(AnomalyLedger ledger, object owner, bool keepUnowned, TimeProvider? time = null)
@@ -68,7 +91,7 @@ internal sealed class MapFeedAnomalyRing : IDisposable
         }
     }
 
-    /// <summary>Notices kept so far (every notice that passed the owner check; the ring holds the last <see cref="Capacity"/>).</summary>
+    /// <summary>Notices kept so far (every notice that passed the owner check and, for an unowned packet finding, the packet budget; the ring holds the last <see cref="Capacity"/>).</summary>
     public long Accepted => Interlocked.Read(ref _accepted);
 
     /// <summary>Notices the owner check refused.</summary>
@@ -84,15 +107,68 @@ internal sealed class MapFeedAnomalyRing : IDisposable
             return;
         }
 
-        DateTimeOffset now = _time.GetUtcNow();
         lock (_gate)
         {
+            DateTimeOffset now = _time.GetUtcNow();
+            if (origin is null && notice.Subsystem == PacketChecks.Subsystem && !AdmitPacketFinding(notice.Subject, now))
+            {
+                _packetDropped++;
+                return;
+            }
+
             long seq = ++_seq;
             _slots[(int)((seq - 1) % Capacity)] = new AnomalySlot(
                 seq, now, notice.Key, notice.Subsystem, notice.Code, notice.Severity, notice.Subject, notice.Detail, notice.Count);
         }
 
         Interlocked.Increment(ref _accepted);
+    }
+
+    /// <summary>Packet findings the per-subject or per-window budget turned away (the ledger itself still counted them). Read by tests only: it is not part of <see cref="AnomalyPage"/>, so Atlas does not see it.</summary>
+    public long PacketDropped
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _packetDropped;
+            }
+        }
+    }
+
+    /// <summary>Applies the packet budgets (caller holds <c>_gate</c>). Fixed windows of <see cref="PacketWindowMs"/>; a clock that went back starts a new window.</summary>
+    private bool AdmitPacketFinding(string subject, DateTimeOffset now)
+    {
+        long nowMs = now.ToUnixTimeMilliseconds();
+        long elapsed = nowMs - _packetWindowStartMs;
+        if (elapsed >= PacketWindowMs || elapsed < 0)
+        {
+            _packetWindowStartMs = nowMs;
+            _packetInWindow = 0;
+            _packetPerSubject.Clear();
+        }
+
+        if (_packetInWindow >= PacketPerWindow)
+        {
+            return false;
+        }
+
+        if (_packetPerSubject.TryGetValue(subject, out int used))
+        {
+            if (used >= PacketPerSubjectPerWindow)
+            {
+                return false;
+            }
+
+            _packetPerSubject[subject] = used + 1;
+        }
+        else
+        {
+            _packetPerSubject[subject] = 1;
+        }
+
+        _packetInWindow++;
+        return true;
     }
 
     /// <summary>The notices above <paramref name="since"/>, oldest first, at most <paramref name="max"/> (any thread).</summary>

@@ -123,7 +123,10 @@ public sealed class SpellScriptDispatcher : ISpellCastCheck, ISpellCastObserver
                 }
             },
             previous,
-            () => effect is not (SpellEffectName.Dummy or SpellEffectName.ScriptEffect) && !registry.ExecuteEffects.Contains(effect));
+            () => effect is not (SpellEffectName.Dummy or SpellEffectName.ScriptEffect) && !registry.ExecuteEffects.Contains(effect),
+            // Per spell: the wrapper adds nothing for a spell no current script claims, so one scripted spell does not make the effect
+            // unmodellable for every other spell (a quest teleport reward stayed preflightable before any script declared TELEPORT_UNITS).
+            spellId => effect is not (SpellEffectName.Dummy or SpellEffectName.ScriptEffect) && registry.FindForEffect(spellId, effect) is null);
     }
 
     private static int Stacks(SpellSystem system, Unit unit)

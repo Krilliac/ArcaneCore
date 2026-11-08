@@ -5,6 +5,8 @@ using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Cluster.Transfer;
 using ArcaneCore.World.Cluster.Gateway;
 using ArcaneCore.World.Persistence;
+using ArcaneCore.World.Social;
+using ArcaneCore.World.WorldState;
 
 namespace ArcaneCore.World.Cluster.Handoff;
 
@@ -13,7 +15,9 @@ namespace ArcaneCore.World.Cluster.Handoff;
 /// online player's save as at logout (the settlement path, which bypasses and then sets a save hold, so no later ordinary snapshot of that player is
 /// written by A), then keeps the simulation thread parked until the handoff resumes A (abort) or A is disposed. A retired A stays frozen: after the
 /// epoch takeover any write it still attempted would be refused by the characters fence anyway. A player with a quest settlement in flight is not
-/// quiescent, so the freeze refuses (the handoff aborts and A resumes). After the epoch takeover the source also gives up A's characters database
+/// quiescent, so the freeze refuses (the handoff aborts and A resumes). A flush that succeeds seals A's writes: from then on the takeover can land at any moment, so a fence refusal is
+/// expected until the handoff decides (a resume unseals, the retirement closes every write of this world). The flush seals only under the freeze it ran for: the gateway's timeout does not stop a
+/// running flush, so one can finish after the resume, and it must then fail without touching the seal. After the epoch takeover the source also gives up A's characters database
 /// writer lock (<paramref name="writerGuard"/>, A's own guard, required) so B's promotion can take it; see <see cref="ReleaseWriterLockAsync"/>.
 /// The handoff moves the ownership scope A holds: <c>world</c> for a Combined world, or A's <c>worker:&lt;shard&gt;</c> row in Cluster:Fencing:Scope=Worker (then the lock released is A's shard
 /// lock, and handoffs of two different shards are independent; design _wf/writer-lock-DESIGN.md step C7).
@@ -25,7 +29,10 @@ public sealed class LocalWorldHandoffSource(
     WorkerAdmission admission,
     WorldWriterGuard writerGuard,
     CharacterPersistenceBarrier? barrier = null,
-    CharacterRetirementRegistry? retirement = null) : IWorldHandoffSource, IDisposable
+    CharacterRetirementRegistry? retirement = null,
+    SocialGroupPersistenceFeature? groups = null,
+    WarEffortFeature? warEffort = null,
+    ScourgeInvasionFeature? scourgeInvasion = null) : IWorldHandoffSource, IDisposable
 {
     /// <summary>The admission closed reason while A drains.</summary>
     public const string DrainingReason = "draining";
@@ -33,8 +40,13 @@ public sealed class LocalWorldHandoffSource(
     /// <summary>The admission closed reason of a retired A.</summary>
     public const string RetiredReason = "retired";
 
+    /// <summary>Times the flush goes over the open characters of every queue before it gives up: nothing should open after the first pass, because the simulation is parked.</summary>
+    private const int OpenSavePasses = 3;
+
     private readonly Lock _gate = new();
-    private readonly ManualResetEventSlim _release = new(false);
+    // One release event per freeze, never reset: a Resume that sets it and a quick second freeze must not be able to un-set it under the old Park, which would strand the simulation thread in that
+    // Park and leave the new one queued behind it (a timed-out freeze). The old Park wakes on its own event whenever it gets to run; the new Park waits on a fresh one. Guarded by _gate.
+    private ManualResetEventSlim _release = new(false);
     private readonly List<int> _heldHere = [];
     private Task<bool>? _parked;
     private Task<IReadOnlyList<Task>>? _frozen;
@@ -72,10 +84,11 @@ public sealed class LocalWorldHandoffSource(
                 throw new InvalidOperationException("a retired world is not frozen again");
             if (_frozen is null)
             {
-                _release.Reset();
+                _release = new ManualResetEventSlim(false);
+                ManualResetEventSlim release = _release;
                 var captured = new TaskCompletionSource<IReadOnlyList<Task>>(TaskCreationOptions.RunContinuationsAsynchronously);
                 _frozen = captured.Task;
-                _parked = world.InvokeAsync(() => Park(captured), CancellationToken.None);
+                _parked = world.InvokeAsync(() => Park(captured, release), CancellationToken.None);
                 // A park that never ran (the world stopped) or failed before capturing fails the freeze too.
                 _ = _parked.ContinueWith(
                     parked => captured.TrySetException(parked.Exception?.InnerException ?? new InvalidOperationException("the simulation did not freeze")),
@@ -95,19 +108,83 @@ public sealed class LocalWorldHandoffSource(
             frozen = _frozen ?? throw new InvalidOperationException("the source world is not frozen; nothing to flush");
         IReadOnlyList<Task> saves = await frozen.WaitAsync(cancellationToken).ConfigureAwait(false);
         await Task.WhenAll(saves).WaitAsync(cancellationToken).ConfigureAwait(false);
-        if (barrier is null)
-            return;
+
+        // The groups were compared with what the feature last wrote when the simulation parked (Park), so a change of the last second before the freeze is queued by now. The barrier's shared flush
+        // drains that queue; without a barrier nothing else asks it, so it is asked here. A lease refusal (a non-holder of the Social lease) is not checked.
+        if (barrier is null && groups?.Writes is { } groupWrites)
+            await groupWrites.RetryRetainedAsync().WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        // The same for the war effort and Scourge invasion stores, which the barrier's shared flush covers when there is one.
+        if (barrier is null && warEffort is not null)
+            await warEffort.FlushStateWritesAsync().WaitAsync(cancellationToken).ConfigureAwait(false);
+        if (barrier is null && scourgeInvasion is not null)
+            await scourgeInvasion.FlushStateWritesAsync().WaitAsync(cancellationToken).ConfigureAwait(false);
 
         // Then every other per-character queue and settlement (explored zones, rest, quests, taxi, honor, ...): what B will read must be durable.
-        int[] characters;
-        lock (_gate)
-            characters = [.. _frozenCharacters];
-        foreach (int id in characters)
+        if (barrier is not null)
         {
-            CharacterPersistenceFlushResult flushed = await barrier.TryFlushCharacterAsync(id, cancellationToken: cancellationToken).ConfigureAwait(false);
-            if (!flushed.IsDurable)
-                throw new InvalidOperationException($"character {id} is not durable ({string.Join(", ", flushed.FailedQueues)}); the handoff cannot commit");
+            int[] characters;
+            lock (_gate)
+                characters = [.. _frozenCharacters];
+            foreach (int id in characters)
+                await FlushCharacterAsync(id, cancellationToken).ConfigureAwait(false);
         }
+
+        // Then what the save queue and the barrier's registered keyed queues still have open for characters the freeze did not capture: an offline character's retained, waiting or in-flight write, in the save queue or a keyed queue. A still
+        // owns them here and can write them; after the commit the fence would refuse them and B would read without them. One that cannot be written fails the flush, and the handoff aborts with
+        // nothing lost. A quarantined character has none open: its retained snapshot is superseded by design and never retried. The simulation is parked, so a pass adds nothing new; the repeat
+        // catches a late settlement's write. Then the same for the writes of no one character (instance rows, guilds, ...), which no id names.
+        for (int pass = 0; ; pass++)
+        {
+            int[] open = await OpenCharacterIdsAsync(cancellationToken).ConfigureAwait(false);
+            if (open.Length == 0)
+            {
+                if (barrier is not null)
+                    await barrier.FlushSharedWritesAsync(cancellationToken).ConfigureAwait(false);
+
+                // Clean: seal. A write that still turns up lands if the takeover has not, and is an expected refusal if it has, until the resume or the retirement decides. Under the gate, against
+                // a resume: this flush can outlive its freeze (a timed-out verb keeps running here, and the resume does not wait for it), and a seal nothing lifts would hide a real ownership loss.
+                lock (_gate)
+                {
+                    if (_retired || !ReferenceEquals(_frozen, frozen))
+                        throw new InvalidOperationException("the freeze this flush ran for is over (the world resumed or retired); nothing was sealed");
+                    retirement?.Seal();
+                    saveQueue.SealWrites();
+                }
+
+                return;
+            }
+
+            if (pass == OpenSavePasses)
+                throw new InvalidOperationException($"characters {string.Join(", ", open)} still have saves open after the flush; the handoff cannot commit");
+            foreach (int id in open)
+                await FlushCharacterAsync(id, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private async Task<int[]> OpenCharacterIdsAsync(CancellationToken cancellationToken)
+    {
+        int[] saves = saveQueue.UnsettledCharacterIds();
+        if (barrier is null)
+            return saves;
+        IReadOnlyList<int> others = await barrier.OpenCharacterIdsAsync(cancellationToken).ConfigureAwait(false);
+        return [.. saves.Union(others).Order()];
+    }
+
+    // Every queue of the character through the barrier; without one, the save queue alone, under the barrier's time limit: a locked database must fail the handoff, not hold it open.
+    private async Task FlushCharacterAsync(int id, CancellationToken cancellationToken)
+    {
+        if (barrier is null)
+        {
+            using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            budget.CancelAfter(CharacterPersistenceBarrier.DefaultTimeout);
+            await saveQueue.FlushCharacterAsync(id, budget.Token).ConfigureAwait(false);
+            return;
+        }
+
+        CharacterPersistenceFlushResult flushed = await barrier.TryFlushCharacterAsync(id, cancellationToken: cancellationToken).ConfigureAwait(false);
+        if (!flushed.IsDurable)
+            throw new InvalidOperationException($"character {id} is not durable ({string.Join(", ", flushed.FailedQueues)}); the handoff cannot commit");
     }
 
     public Task ResumeAsync(CancellationToken cancellationToken)
@@ -121,6 +198,8 @@ public sealed class LocalWorldHandoffSource(
             _heldHere.Clear();
             _frozenCharacters.Clear();
             _frozen = null;
+            retirement?.Unseal();
+            saveQueue.UnsealWrites();
             _release.Set();
             admission.Open();
         }
@@ -128,21 +207,26 @@ public sealed class LocalWorldHandoffSource(
         return Task.CompletedTask;
     }
 
-    public Task RetireAsync(CancellationToken cancellationToken)
+    public async Task RetireAsync(CancellationToken cancellationToken)
     {
-        int[] moved;
+        // The self-heal reaches this without the coordinator's earlier step, so it runs here too; repeating it changes nothing.
+        await RetireWritesAsync(cancellationToken).ConfigureAwait(false);
         lock (_gate)
-        {
-            _retired = true;
             admission.Close(RetiredReason);
-            moved = [.. _frozenCharacters];
-        }
+    }
 
-        // The characters this world froze now belong to the new owner: every write queue of this process drops their writes silently and counts them
-        // (the shared registry, consulted before a write is enqueued and again before it runs), and the save queue drops their waiting and retained snapshots and skips later ones
-        // (one informational line), instead of attempting writes the fence must refuse. Only the frozen characters are named; any other character keeps its writes.
-        retirement?.Retire(moved);
-        saveQueue.RetireCharacters(moved);
+    /// <summary>The write part of the retirement. Only after the commit: before it, these are writes A still owns. From here on A does not resume either.</summary>
+    public Task RetireWritesAsync(CancellationToken cancellationToken)
+    {
+        lock (_gate)
+            _retired = true;
+
+        // The takeover moved the one ownership scope every write of this process runs under, so it holds no character any more, frozen, offline or never heard of. Every character, instance
+        // and social write queue drops its writes silently and counts them, keys of no character included (the shared registry, consulted before a write is enqueued and again before it runs),
+        // and the save queue drops its waiting and retained snapshots and skips later ones (one informational line), instead of attempting writes the fence must refuse. The flush left nothing
+        // open there, so a drop here is a write that came after it. The pet saves and deletes follow the retirement through the summon service seams (retired: skipped and counted). Queues with no fence handling (groups, GM audit, accounts, respawns, and the state-save queues of Silithyst, Fishing Extravaganza, Elemental Invasion and Nightmare Dragons) keep what the fence refuses; the keyed and respawn queues name it at stop, the state-save queues only log it. The war effort and Scourge invasion stores have no fence handling either.
+        retirement?.RetireAll();
+        saveQueue.RetireEveryCharacter();
         return Task.CompletedTask;
     }
 
@@ -156,10 +240,11 @@ public sealed class LocalWorldHandoffSource(
     /// <summary>Releases a parked simulation thread (the process is stopping), retired or not.</summary>
     public void Dispose()
     {
-        _release.Set();
+        lock (_gate)
+            _release.Set();
     }
 
-    private bool Park(TaskCompletionSource<IReadOnlyList<Task>> captured)
+    private bool Park(TaskCompletionSource<IReadOnlyList<Task>> captured, ManualResetEventSlim release)
     {
         // On the simulation thread, between two ticks.
         var saves = new List<Task>();
@@ -186,6 +271,13 @@ public sealed class LocalWorldHandoffSource(
                         _heldHere.Add(state.Id);
                 }
             }
+
+            // Groups are written from a once-a-second comparison on this thread, so a change made since the last one is in no queue; queue it now, while the group table is quiet, for the flush to drain.
+            groups?.SyncNow();
+
+            // The war effort and Scourge invasion queue their writes in memory on this thread; copy them while it is quiet, for the flush (through the barrier's shared flush) to write.
+            warEffort?.CaptureForHandoff();
+            scourgeInvasion?.CaptureForHandoff();
         }
         catch (Exception ex)
         {
@@ -203,7 +295,7 @@ public sealed class LocalWorldHandoffSource(
         }
 
         captured.TrySetResult(saves);
-        _release.Wait();
+        release.Wait();
         return true;
     }
 }

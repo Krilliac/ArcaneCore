@@ -342,7 +342,13 @@ internal sealed class PlayerbotDefenseBoard
     /// attackers and responders (caller and attacker caps re-applied, no responder evicted), keeps the earlier open time and the later live time, and the
     /// absorbed id redirects to it. False when either call is missing, they are the same call, or they are on different map instances.
     /// </summary>
-    public bool Absorb(int absorbedId, int survivorId)
+    public bool Absorb(int absorbedId, int survivorId) => AbsorbAt(absorbedId, survivorId, _clock());
+
+    /// <summary>
+    /// <see cref="Absorb"/> at one clock reading the caller already holds: <see cref="Sweep"/> merges with the reading it closed and aged calls by, so the centre of a merged call
+    /// is judged on the same instant as the rest of that pass and a clock that moves between two reads cannot make one call both live and stale.
+    /// </summary>
+    private bool AbsorbAt(int absorbedId, int survivorId, long now)
     {
         var absorbed = Find(absorbedId);
         var survivor = Find(survivorId);
@@ -370,7 +376,7 @@ internal sealed class PlayerbotDefenseBoard
         survivor.Joiners.UnionWith(absorbed.Joiners);
         survivor.OpenedMs = Math.Min(survivor.OpenedMs, absorbed.OpenedMs);
         survivor.LastLiveMs = Math.Max(survivor.LastLiveMs, absorbed.LastLiveMs);
-        survivor.Centre = Centroid(survivor, _clock());
+        survivor.Centre = Centroid(survivor, now);
 
         int absorbedKey = absorbed.Id;
         _byMap[(absorbed.MapId, absorbed.InstanceId)].Remove(absorbed);
@@ -414,7 +420,7 @@ internal sealed class PlayerbotDefenseBoard
             foreach (var call in calls)
                 Stamp(call, options);
             calls.RemoveAll(c => !c.IsOpen(now));
-            MergeConverging(calls, options.MergeRadiusYards);
+            MergeConverging(calls, options.MergeRadiusYards, now);
             if (calls.Count == 0)
                 (emptied ??= []).Add(key);
         }
@@ -449,7 +455,7 @@ internal sealed class PlayerbotDefenseBoard
     /// Folds every call into the lowest-id call of its team whose centre is within <paramref name="radius"/> yards (ground plane). After a fold the scan of that survivor
     /// restarts, because the moved centre can bring a third call into range. <paramref name="calls"/> is in id order, so index <c>i</c> is always the lower id.
     /// </summary>
-    private void MergeConverging(List<DefenseCall> calls, int radius)
+    private void MergeConverging(List<DefenseCall> calls, int radius, long now)
     {
         if (radius <= 0)
             return;
@@ -460,7 +466,7 @@ internal sealed class PlayerbotDefenseBoard
             {
                 DefenseCall survivor = calls[i];
                 DefenseCall other = calls[j];
-                if (survivor.CallerTeam == other.CallerTeam && Within(survivor.Centre, other.Centre, radius) && Absorb(other.Id, survivor.Id))
+                if (survivor.CallerTeam == other.CallerTeam && Within(survivor.Centre, other.Centre, radius) && AbsorbAt(other.Id, survivor.Id, now))
                     j = i + 1; // Absorb removed calls[j] from the list
                 else
                     j++;

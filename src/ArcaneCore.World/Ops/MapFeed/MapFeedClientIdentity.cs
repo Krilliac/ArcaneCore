@@ -3,6 +3,7 @@ using System.IO.Pipes;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Security.Principal;
+using ArcaneCore.Kernel.Safety;
 using Microsoft.Win32.SafeHandles;
 
 namespace ArcaneCore.World.Ops.MapFeed;
@@ -15,6 +16,7 @@ namespace ArcaneCore.World.Ops.MapFeed;
 /// and SYSTEM, the user is always one of those: the identity names the process and the account, never a human operator. Any step that
 /// fails gives the user <c>unknown</c>. Pure reads of the OS; any thread.
 /// </summary>
+[AuditedUnsafe("UserOfToken sizes a native buffer with GetTokenInformation (bounded to 4096 bytes), allocates it with Marshal.AllocHGlobal, reads the SID pointer at its start with Marshal.ReadIntPtr only after a successful fill, and frees it in the finally; the SecurityIdentifier copies the SID before the buffer is freed. Windows only behind OperatingSystem.IsWindows; every step that fails gives the user 'unknown'")]
 internal static partial class MapFeedClientIdentity
 {
     /// <summary>The prefix of the local actor's invoker name.</summary>

@@ -244,8 +244,10 @@ internal static class LiveCommands
             throw Bad(call, $"argument 'limit' must be between 1 and {MaxFindLimit}.");
         }
 
+        // Connection state first: a false answer has already emptied the store, so entities are never paired with "disconnected".
+        bool connected = feed.IsConnected;
         LiveFindResult result = feed.Store.FindEntities(new LiveFindFilter(map, query, kind, inCombat, (int)limit));
-        return result.ToJson(feed.IsConnected);
+        return result.ToJson(connected);
     }
 
     private static JsonObject Hotspots(LiveFeed feed, CommandInvocation call)
@@ -264,10 +266,11 @@ internal static class LiveCommands
             throw Bad(call, $"argument 'limit' must be between 1 and {MaxHotspotsLimit}.");
         }
 
+        bool connected = feed.IsConnected;
         IReadOnlyList<LiveHotspot> hotspots = feed.Store.Hotspots(map, cellSize, (int)limit);
         return new JsonObject
         {
-            ["connected"] = feed.IsConnected,
+            ["connected"] = connected,
             ["map"] = map is { } m ? JsonValue.Create(m) : null,
             ["cellSize"] = Math.Round((double)cellSize, 3),
             ["count"] = hotspots.Count,

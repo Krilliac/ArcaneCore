@@ -8,6 +8,7 @@ using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Scripts;
 using ArcaneCore.Game.Tests.CreatureAi;
+using ArcaneCore.Game.Tests.Pets;
 using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Kernel.WorldData.Creatures;
@@ -35,12 +36,6 @@ public sealed class RaidHostTests
         Assert.Equal(EncounterState.Done, raid.GetData(1));
         Assert.Equal(GameObjectUseResult.Ok, objects.OpenLock(player, rune.Guid, LockType.Open));
         Assert.Equal(EncounterState.Special, raid.GetData(1)); Assert.Equal(GameObjectState.Active, rune.State);
-    }
-    /// <summary>The production resolver (ArcaneCore.World WorldSpellUnitResolver): any unit of the caster's map by GUID.</summary>
-    private sealed class MapObjectResolver : ISpellUnitResolver
-    {
-        public Unit? Find(Unit reference, ObjectGuid guid)
-            => guid.IsEmpty ? null : reference.Guid == guid ? reference : reference.Map?.FindObject(guid) as Unit;
     }
     private static SpellInfo Dummy(uint id) => SpellTestKit.Spell(id, SpellTestKit.Effect(SpellEffectName.Dummy, 0));
     private static SpellInfo Heal(uint id) => SpellTestKit.Spell(id, SpellTestKit.Effect(SpellEffectName.Heal, 10));

@@ -89,7 +89,7 @@ public interface ISupervisedLifecycleRequestHandler
 /// <summary>
 /// The line protocol between the cluster host supervisor and its children (docs/CLUSTERING_DESIGN.md, M15.4), opt-in by
 /// <see cref="EnvironmentVariable"/>=1 in the child's environment. Child to supervisor, on stdout: <c>heartbeat &lt;UTC&gt; pid=&lt;pid&gt;
-/// ready|alive|stopping</c>, <c>lifecycle stopping intent=&lt;restart|shutdown|failure&gt; code=&lt;n&gt;</c> and <c>lifecycle request token=&lt;t&gt;
+/// ready|alive|stopping token=&lt;t&gt;</c> (the per-run token on every state; the supervisor treats a heartbeat without it as ordinary output), <c>lifecycle stopping intent=&lt;restart|shutdown|failure&gt; code=&lt;n&gt;</c> and <c>lifecycle request token=&lt;t&gt;
 /// realm=&lt;id&gt; action=&lt;restart|shutdown&gt; delay=&lt;s&gt; code=&lt;c&gt; by=&lt;account&gt;</c>. Supervisor to child, on stdin: <c>drain</c>,
 /// <c>lifecycle &lt;restart|shutdown&gt; delay=&lt;s&gt; code=&lt;c&gt; by=&lt;account&gt;</c> and <c>lifecycle result realm=&lt;id&gt;
 /// status=&lt;forwarded|unknown-realm|rejected&gt; by=&lt;account&gt;</c>. A child can also address another child by name: <c>lifecycle restart-child
@@ -108,12 +108,49 @@ public static partial class SupervisorProtocol
     /// <summary>The realm id the supervisor's configuration gave this child (absent when none): what <c>.server restart 0 2 &lt;realm&gt;</c> compares against.</summary>
     public const string RealmIdEnvironmentVariable = "ARCANECORE_SUPERVISED_REALM_ID";
 
+    private static readonly object TokenGate = new();
+    private static string? _capturedToken;
+
+    /// <summary>
+    /// The supervisor's per-run token for this process, taken from <see cref="TokenEnvironmentVariable"/> once and then removed from the process
+    /// environment so processes this one starts (a <c>gh</c> child, a crash-dump tool) do not inherit it. Every reader in this process takes the token
+    /// from here (<see cref="ProcessEnvironment"/>); later calls return the captured value. Thread-safe. The host's configuration builder copies the
+    /// environment when it is created, so call this before it is (the daemon entry points do) to keep the token out of <c>IConfiguration</c> too.
+    /// </summary>
+    public static string? CaptureProcessToken()
+    {
+        lock (TokenGate)
+        {
+            string? live = Environment.GetEnvironmentVariable(TokenEnvironmentVariable);
+            if (!string.IsNullOrEmpty(live))
+            {
+                _capturedToken = live;
+                Environment.SetEnvironmentVariable(TokenEnvironmentVariable, null);
+            }
+
+            return _capturedToken;
+        }
+    }
+
+    /// <summary>The process environment, except that <see cref="TokenEnvironmentVariable"/> reads the value <see cref="CaptureProcessToken"/> holds.</summary>
+    public static string? ProcessEnvironment(string name)
+        => string.Equals(name, TokenEnvironmentVariable, StringComparison.Ordinal) ? CaptureProcessToken() : Environment.GetEnvironmentVariable(name);
+
+    /// <summary>Forgets the captured token (tests that give the process a token of their own).</summary>
+    internal static void ResetCapturedToken()
+    {
+        lock (TokenGate)
+        {
+            _capturedToken = null;
+        }
+    }
+
     /// <summary>The longest issuer name kept on a line.</summary>
     public const int MaxNameLength = 32;
 
     private const string Lifecycle = "lifecycle";
 
-    [GeneratedRegex(@"^heartbeat \S+ pid=\d+ (ready|alive|stopping)\z", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"^heartbeat \S+ pid=\d+ (ready|alive|stopping)(?: token=(\S+))?\z", RegexOptions.CultureInvariant)]
     private static partial Regex HeartbeatPattern();
 
     [GeneratedRegex(@"^heartbeat \S+ pid=\d+ dumping max=(\d{1,9}) token=(\S+)\z", RegexOptions.CultureInvariant)]
@@ -130,27 +167,44 @@ public static partial class SupervisorProtocol
     public static bool IsEnabled() => IsEnabled(Environment.GetEnvironmentVariable);
 
     /// <summary>
-    /// Parses <c>heartbeat &lt;UTC&gt; pid=&lt;pid&gt; ready|alive|stopping</c> (no leading or trailing text; any control character rejects the line).
-    /// <para>
-    /// Known limit: a heartbeat carries no per-run token, unlike the <c>lifecycle</c> lines. Child output also holds logged text a player or GM can
-    /// influence, so a logged text that ends up on a line of its own and matches this shape (a bare LF in the text starts a new line) is accepted. The
-    /// effect is bounded: it can only make a hung child look alive and so delay hang detection. It cannot drain, stop or restart anything, because
-    /// those paths need the token. The control-character check keeps a forged line from carrying a second one (CR, LF, escapes) inside it.
-    /// </para>
+    /// Parses <c>heartbeat &lt;UTC&gt; pid=&lt;pid&gt; ready|alive|stopping</c> with or without the trailing <c>token=&lt;token&gt;</c> (no leading or trailing
+    /// text; any control character rejects the line). This overload does not authenticate: a supervisor must use
+    /// <see cref="TryParseHeartbeat(string, out SupervisorHeartbeatState, out string)"/> and compare the token.
     /// </summary>
-    public static bool TryParseHeartbeat(string line, out SupervisorHeartbeatState state)
+    public static bool TryParseHeartbeat(string line, out SupervisorHeartbeatState state) => TryParseHeartbeat(line, out state, out _);
+
+    /// <summary>
+    /// Parses a heartbeat line and returns its token (empty when the line has none); the caller must still compare <paramref name="token"/> with the
+    /// supervisor's. Child output also holds logged text a player or GM can influence, so a logged text that ends up on a line of its own (a bare LF
+    /// in the text starts a new line) and matches the shape is parsed too: a heartbeat without the per-run token, like a <c>lifecycle</c> line without it,
+    /// must be treated as ordinary output, or it could make a hung child look alive and delay hang detection. The control-character check keeps a forged
+    /// line from carrying a second one (CR, LF, escapes) inside it.
+    /// </summary>
+    public static bool TryParseHeartbeat(string line, out SupervisorHeartbeatState state, out string token)
     {
         state = default;
-        if (line is null || HasControl(line) || !HeartbeatPattern().IsMatch(line))
+        token = string.Empty;
+        if (line is null || HasControl(line) || HeartbeatPattern().Match(line) is not { Success: true } match)
         {
             return false;
         }
 
-        state = line.EndsWith(" ready", StringComparison.Ordinal) ? SupervisorHeartbeatState.Ready
-            : line.EndsWith(" alive", StringComparison.Ordinal) ? SupervisorHeartbeatState.Alive
-            : SupervisorHeartbeatState.Stopping;
+        state = match.Groups[1].Value switch
+        {
+            "ready" => SupervisorHeartbeatState.Ready,
+            "alive" => SupervisorHeartbeatState.Alive,
+            _ => SupervisorHeartbeatState.Stopping,
+        };
+        token = match.Groups[2].Success ? match.Groups[2].Value : string.Empty;
         return true;
     }
+
+    /// <summary>
+    /// Appends the supervisor's per-run token to a plain heartbeat state (<c>ready</c>, <c>alive</c>, <c>stopping</c>): <c>alive token=&lt;token&gt;</c>.
+    /// A null or empty token leaves the state as it is (no supervisor to authenticate to).
+    /// </summary>
+    public static string FormatAuthenticatedState(string state, string? token)
+        => string.IsNullOrEmpty(token) ? state : state + " token=" + Sanitize(token);
 
     /// <summary>
     /// The state text of the heartbeat line a process writes just before its in-process crash dump: <c>dumping max=&lt;seconds&gt; token=&lt;token&gt;</c>

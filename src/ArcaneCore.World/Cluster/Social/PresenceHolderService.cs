@@ -46,7 +46,10 @@ public interface IPresenceAuthority
 /// <para>Thread-safety: one lock guards the generation, version and kick state; the directory and router have their own locks and are always taken after it (never the reverse).
 /// Memory: one long per account ever registered, one version floor, at most <see cref="MaxQueuedKicksPerWorker"/> kicks per worker (oldest dropped).</para>
 /// </summary>
-public sealed class PresenceHolderService(IRealmPresenceDirectory directory, IClusterSocialRouter router) : IPresenceAuthority, IGroupAuthorityTransport, IGuildHolderTransport
+/// <param name="directory">The authoritative presence directory.</param>
+/// <param name="router">The authoritative social router.</param>
+/// <param name="holdsSocial">Whether this node holds the Social lease now; null means it always does (Combined mode, tests). Read on every group request from a peer: any thread, must not block.</param>
+public sealed class PresenceHolderService(IRealmPresenceDirectory directory, IClusterSocialRouter router, Func<bool>? holdsSocial = null) : IPresenceAuthority, IGroupAuthorityTransport, IGuildHolderTransport, IBattlegroundHubTransport
 {
     /// <summary>Most undelivered kicks kept per worker; a worker that never drains loses its oldest.</summary>
     public const int MaxQueuedKicksPerWorker = 1024;
@@ -65,7 +68,26 @@ public sealed class PresenceHolderService(IRealmPresenceDirectory directory, ICl
     /// <summary>The authoritative group table (S3a): every worker's group commands run here, on whichever node holds the Social lease.</summary>
     public GroupAuthority Groups { get; } = new(directory ?? throw new ArgumentNullException(nameof(directory)));
 
-    public void ExecuteGroupCommand(string workerId, GroupCommand command) => Groups.Execute(workerId, command);
+    /// <summary>
+    /// Whether group requests from peers are served here. A node can run the peer listener without the Social lease (it holds Economy, or the lease went), and a command acked here would sit in a table that may never be loaded,
+    /// so <see cref="PresenceWireCodec"/> answers such a request "not the holder" and the sender keeps the command. In production this is <see cref="RealmAuthorityLeaseKeeper.Holds"/>, so it turns false as soon as the keeper knows of a loss and when the lease's local expiry has passed; the store grants the lease to another node
+    /// only after that expiry, so a deposed node still takes commands (until its next renewal tick, 10 s by default) only when its clock runs behind the store's.
+    /// </summary>
+    public bool HoldsSocial => holdsSocial is null || holdsSocial();
+
+    /// <inheritdoc cref="IGroupAuthorityTransport.ExecuteGroupCommand"/>
+    public void ExecuteGroupCommand(string workerId, GroupCommand command, long commandId)
+    {
+        try
+        {
+            Groups.Execute(workerId, command);
+        }
+        catch (InvalidOperationException ex) when (ex is not PresenceRefusedException)
+        {
+            // As over the peer link, where the wire turns it into a refusal: the table's own code failed on this command, which says nothing about the link, so the sender drops it instead of retrying it as a transport failure (for a Login or Logout, forever).
+            throw new PresenceRefusedException(ex.Message);
+        }
+    }
 
     public IReadOnlyList<GroupEvent> DrainGroupEvents(string workerId) => Groups.Drain(workerId);
 
@@ -75,6 +97,19 @@ public sealed class PresenceHolderService(IRealmPresenceDirectory directory, ICl
     public void ForwardGuildRequest(string workerId, long requestId, GuildRequest request) => Guilds.Submit(workerId, requestId, request);
 
     public IReadOnlyList<GuildLinkEvent> DrainGuildEvents(string workerId) => Guilds.Drain(workerId);
+
+    /// <summary>The battleground queue mailbox: workers' queue commands wait here for the battleground holder (the node that owns the battleground maps) and its notices wait for the workers.</summary>
+    public BattlegroundHub Battlegrounds { get; } = new();
+
+    public bool SubmitBattlegroundCommands(string workerId, IReadOnlyList<ArcaneCore.World.Battlegrounds.BattlegroundCommand> commands) => Battlegrounds.Submit(workerId, commands);
+
+    public BattlegroundTakeResult TakeBattlegroundCommands(string nodeId) => Battlegrounds.Take(nodeId);
+
+    public BattlegroundTakeResult TakeBattlegroundCommands(string nodeId, bool preferred) => Battlegrounds.Take(nodeId, preferred);
+
+    public bool PostBattlegroundNotices(string nodeId, IReadOnlyList<BattlegroundQueuedNotice> notices) => Battlegrounds.Post(nodeId, notices);
+
+    public IReadOnlyList<ArcaneCore.World.Battlegrounds.BattlegroundNotice> DrainBattlegroundNotices(string workerId) => Battlegrounds.Drain(workerId);
 
     /// <summary>The authoritative router this service answers for.</summary>
     public IClusterSocialRouter Router { get; } = router ?? throw new ArgumentNullException(nameof(router));
@@ -196,6 +231,9 @@ public sealed class PresenceHolderService(IRealmPresenceDirectory directory, ICl
             queue.RemoveRange(0, queue.Count - MaxQueuedKicksPerWorker);
         }
     }
+
+    /// <summary>For <see cref="Peer.PeerLinkHost.RememberAnswer"/>: only a group command that was taken is worth remembering, see <see cref="PresenceWireCodec.IsRetriableAndTaken"/>.</summary>
+    public static bool RememberAnswer(ReadOnlyMemory<byte> request, byte[] answer) => PresenceWireCodec.IsRetriableAndTaken(request, answer);
 
     /// <summary>
     /// Answers one peer-link request (see <see cref="PresenceWireCodec"/>) with the encoded reply. Never throws for a malformed or oversized request: the reply is then an

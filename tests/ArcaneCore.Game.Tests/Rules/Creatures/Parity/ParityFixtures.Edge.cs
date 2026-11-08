@@ -103,5 +103,18 @@ internal static partial class ParityFixtures
             Unconvertible = [250, 251, 252, 253, 255, 256],
             Steps = [Step("respawn", c => c.Stimulus("respawn", ai => ai.OnRespawn())), Pull(), Wait(1000)],
         };
+
+        // cmangos delivers an AI event synchronously, to the sender too, and blocks only the row that is running (inProgress,
+        // CreatureEventAI.cpp:257): row 300 throws event 6 to itself and the second row of the same event type (301) runs inside it.
+        yield return new ParityScenario
+        {
+            Name = "ai-event-thrown-to-self",
+            Rows =
+            [
+                Row(300, 30, 5, 0, 1000, 1000, flags: Repeatable, a1: Act(45, 6, 10, Invoker)),
+                Row(301, 30, 6, 0, 1000, 1000, flags: Repeatable, a1: Mark(301)),
+            ],
+            Steps = [Step("ai event", c => c.Stimulus("ai event", ai => ai.OnReceiveAiEvent(5, c.Wolf, c.Player, 0))), Wait(500)],
+        };
     }
 }

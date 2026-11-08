@@ -25,7 +25,8 @@ namespace ArcaneCore.World.Tests.Playerbots.Elevator;
 /// A world with the Great Lift (<see cref="ElevatorTestData"/>: its two cars, spawns 16874 and 16876, and their real paths), the manual
 /// clock, straight-line paths that stop at the cliff (<see cref="CliffPathfinder"/>) and a fixture cliff: east of <see cref="Cliff"/> the plateau of The Barrens at <see cref="TopFloor"/>, west of
 /// it the floor of Thousand Needles at <see cref="BottomFloor"/>; the zones follow the cliff (<see cref="PlayerbotElevator.UseSurvey"/>). One
-/// managed bot. Time moves only through <see cref="AdvanceAsync"/>.
+/// managed bot. Time moves only through <see cref="AdvanceAsync"/>, for the bot's packets too (<see cref="WorldSession.ManagedReceiveClock"/>): the anticheat
+/// judges them on the clock the bot walks by.
 /// </summary>
 internal sealed class ElevatorTestWorld : IAsyncDisposable
 {
@@ -47,6 +48,7 @@ internal sealed class ElevatorTestWorld : IAsyncDisposable
     {
         Host = host;
         Session = session;
+        session.ManagedReceiveClock = () => host.World.NowMs;
     }
 
     public WorldTestHost Host { get; }
@@ -224,6 +226,26 @@ internal sealed class ElevatorTestWorld : IAsyncDisposable
             float t = (edgeX - start.X) / (end.X - start.X);
             Vector3 edge = Vector3.Lerp(start, end, Math.Clamp(t, 0f, 1f)) with { Z = startTop ? TopFloor : BottomFloor };
             return Vector3.Distance(start, edge) < 0.5f ? PathResult.None(start) : new PathResult(PathType.Incomplete, [start, edge]);
+        }
+    }
+
+    /// <summary>The fixture's mesh with a point every yard on one side of the cliff, as a real mesh has: a route holds as many points as yards, and a query past <see cref="PathOptions.MaxPoints"/> answers the first of them (an incomplete path).</summary>
+    internal sealed class DensePathfinder : IPathfinder
+    {
+        private readonly ElevatorTestWorld.CliffPathfinder _cliff = new();
+
+        public bool Enabled => true;
+
+        public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+        {
+            PathResult sparse = _cliff.FindPath(mapId, start, end, options);
+            if (sparse.Type != PathType.Normal || sparse.Points.Count < 2) return sparse;
+            Vector3 from = sparse.Points[0], to = sparse.Points[^1];
+            int count = Math.Max(2, (int)MathF.Ceiling(Vector3.Distance(from, to)) + 1);
+            int kept = Math.Min(count, Math.Max(2, options?.MaxPoints ?? PathOptions.DefaultMaxPoints));
+            var points = new Vector3[kept];
+            for (int i = 0; i < kept; i++) points[i] = Vector3.Lerp(from, to, i / (float)(count - 1));
+            return new PathResult(kept < count ? PathType.Incomplete : PathType.Normal, points);
         }
     }
 

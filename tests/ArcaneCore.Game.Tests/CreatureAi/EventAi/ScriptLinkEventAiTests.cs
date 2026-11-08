@@ -702,6 +702,34 @@ public sealed class ScriptLinkEventAiTests
     }
 
     [Fact]
+    public void ZoneCombatPulse_InADungeon_RefusesAPlayer_WhenTheCreatureIsImmuneToPlayer()
+    {
+        // Default checkAttackability (cmangos Creature.cpp: checkAttackability && !CanAttack(pPlayer) skips the player): a creature
+        // still carrying UNIT_FLAG_IMMUNE_TO_PLAYER must not be engaged with by the zone pulse.
+        using Scene s = Start([], playerX: 70, mapType: MapType.Instance);
+        s.Me.UnitFlags |= UnitFlags.ImmuneToPlayer;
+
+        new ZoneCombatPulseAction().Execute(s.Ai.Engine.Context, Act(38), default);
+
+        Assert.False(s.Me.Combat.IsInCombat); // would be True if the attackability check were skipped
+        Assert.False(s.Me.Combat.Threat.Contains(s.Player));
+    }
+
+    [Fact]
+    public void SetInCombatWithZone_CheckAttackabilityFalse_EngagesAPlayer_EvenWhenTheCreatureIsImmuneToPlayer()
+    {
+        // boss_thaddius.cpp's SetInCombatWithZone(false): no CanAttack test at all, so the immunity flag does not stop the pull.
+        using Scene s = Start([], playerX: 70, mapType: MapType.Instance);
+        s.Me.UnitFlags |= UnitFlags.ImmuneToPlayer;
+
+        int engaged = s.System.SetInCombatWithZone(s.Me, checkAttackability: false);
+
+        Assert.Equal(1, engaged);
+        Assert.True(s.Me.Combat.IsInCombat);
+        Assert.True(s.Me.Combat.Threat.Contains(s.Player));
+    }
+
+    [Fact]
     public void ZoneCombatPulse_OnABattlegroundInstance_DoesNothing()
     {
         // Creature::SetInCombatWithZone: !pMap->IsDungeon() returns; MapEntry::IsDungeon is instance or raid, so a battleground is out.

@@ -281,6 +281,13 @@ public sealed partial class PetController
                     break;
                 }
 
+                // mangos-classic HandlePetAction COMMAND_DISMISS (PetHandler.cpp:259-263): a real pet plays its dismiss sound first, a hunter pet
+                // included, then the command leaves the hunter pet alone.
+                if (links.Kind == SummonKind.Pet)
+                {
+                    SendDismissSound(pet, owner);
+                }
+
                 // GetPetType() == HUNTER_PET is the pet's own kind: its owner's class, not that of whoever controls it now (a priest's
                 // Mind Control on a hunter's pet).
                 if (links.Kind == SummonKind.Pet && pet.GetOwner() is Player { Class: Class.Hunter })
@@ -288,9 +295,31 @@ public sealed partial class PetController
                     break;
                 }
 
+                _summons.AbandonSavedDemon(owner, pet); // a warlock's dismissed demon is saved under its entry and leaves the current slot, so it does not come back at the next login
                 _summons.Unsummon(pet, PetUnsummonReason.Dismissed);
                 break;
         }
+    }
+
+    /// <summary>
+    /// SMSG_PET_DISMISS_SOUND to the owner and every player that sees the pet (mangos-classic Pet::PlayDismissSound, Pet.cpp:1401-1422, then
+    /// Unit::SendPetDismiss, Unit.cpp:9898-9903, SendMessageToSet with self): the sound of the summoning spell (Imp 688: 11 or 371 at random,
+    /// Voidwalker 697: 162, Succubus 712: 37, Doomguard 22865: 68; every other pet 0) and the pet's position. World thread.
+    /// </summary>
+    private void SendDismissSound(Creature pet, Unit owner)
+    {
+        uint sound = pet.GetUInt32(UpdateFields.UnitCreatedBySpell) switch
+        {
+            688 => _random.Next(2) == 0 ? 371u : 11u,
+            697 => 162u,
+            712 => 37u,
+            22865 => 68u,
+            _ => 0u,
+        };
+        byte[] payload = PetPackets.BuildDismissSound(sound, pet.X, pet.Y, pet.Z);
+        Player? ownerPlayer = owner as Player;
+        ownerPlayer?.Session.Send(WorldOpcode.SmsgPetDismissSound, payload);
+        pet.Map?.BroadcastToObservers(pet, WorldOpcode.SmsgPetDismissSound, payload, ownerPlayer);
     }
 
     private void CommandAttack(Creature pet, CharmInfo charm, Unit owner, Unit? target)
@@ -653,6 +682,10 @@ public sealed partial class PetController
         {
             _summons.QueueDeletePet(player);
             _summons.ForgetPetForSpiritHealer(player); // PET_SAVE_AS_DELETED: "do not rez the pet in BG"
+        }
+        else if (player.PetGuid == pet.Guid)
+        {
+            _summons.AbandonSavedDemon(player, pet); // a warlock's dismissed demon is saved under its entry and leaves the current slot, so it does not come back at the next login
         }
 
         _summons.Unsummon(pet, PetUnsummonReason.Dismissed);

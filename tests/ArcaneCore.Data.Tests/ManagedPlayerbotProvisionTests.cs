@@ -106,6 +106,256 @@ public sealed class ManagedPlayerbotProvisionTests
         Assert.Empty(await store.LoadPendingAsync());
     }
 
+    /// <summary>Two workers' stores: two contexts (a context is one worker's) over one SQLite file, as the split cluster shares one auth database.</summary>
+    private sealed class TwoWorkers : IAsyncDisposable
+    {
+        private readonly string _path;
+
+        private TwoWorkers(AuthDbContext a, AuthDbContext b, string path)
+        {
+            _path = path;
+            DbA = a;
+            DbB = b;
+            A = new EfManagedPlayerbotProvisionStore(a);
+            B = new EfManagedPlayerbotProvisionStore(b);
+        }
+
+        public AuthDbContext DbA { get; }
+
+        public AuthDbContext DbB { get; }
+
+        public EfManagedPlayerbotProvisionStore A { get; }
+
+        public EfManagedPlayerbotProvisionStore B { get; }
+
+        public static async Task<TwoWorkers> StartAsync()
+        {
+            string path = Path.Combine(Path.GetTempPath(), $"arcanecore-provision-{Guid.NewGuid():N}.db");
+            DbContextOptions<AuthDbContext> options = new DbContextOptionsBuilder<AuthDbContext>().UseSqlite($"Data Source={path};Pooling=False").Options;
+            var a = new AuthDbContext(options);
+            await SchemaBootstrapper.EnsureAsync(a, AuthDbContext.Schema);
+            return new TwoWorkers(a, new AuthDbContext(options), path);
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            await DbA.DisposeAsync();
+            await DbB.DisposeAsync();
+            try { File.Delete(_path); }
+            catch (IOException) { /* a temp file the OS still holds is removed with the temp folder */ }
+        }
+    }
+
+    [Fact]
+    public async Task Sqlite_TwoWorkers_SeeEachOthersPendingRows_AndOnlyOneCompletesARow()
+    {
+        await using TwoWorkers workers = await TwoWorkers.StartAsync();
+        Guid botId = Guid.NewGuid();
+        Account stored = await workers.B.CreateAsync(botId, NewAccount("PBTWOW001"));
+
+        ManagedPlayerbotProvision seen = Assert.Single(await workers.A.LoadPendingAsync()); // worker A reads worker B's pending row
+        Assert.Equal((botId, stored.Id, "PBTWOW001"), (seen.BotId, seen.AccountId, seen.AccountName));
+        Assert.True(await workers.A.CompleteAsync(botId, stored.Id)); // what a sweep that took a young row would do ...
+        Assert.False(await workers.B.CompleteAsync(botId, stored.Id)); // ... makes the creator's own completion refused: the reason the split sweep takes only old rows
+        Assert.Empty(await workers.B.LoadPendingAsync());
+    }
+
+    [Fact]
+    public async Task Sqlite_TwoWorkers_RollBackTheSameRowOnce_AndTheSecondIsRefusedWithoutAThrow()
+    {
+        await using TwoWorkers workers = await TwoWorkers.StartAsync();
+        Guid botId = Guid.NewGuid();
+        Account stored = await workers.B.CreateAsync(botId, NewAccount("PBTWOW002"));
+
+        Assert.True(await workers.A.RollbackEmptyOwnerAsync(botId, stored.Id));
+        Assert.False(await workers.B.RollbackEmptyOwnerAsync(botId, stored.Id));
+        Assert.False(await workers.B.CompleteAsync(botId, stored.Id)); // the creator that lost the race learns it from the refusal
+
+        Assert.Null(await workers.DbA.Accounts.AsNoTracking().SingleOrDefaultAsync(a => a.Id == stored.Id));
+        Assert.Null(await workers.DbB.Accounts.AsNoTracking().SingleOrDefaultAsync(a => a.Id == stored.Id));
+        Assert.Empty(await workers.A.LoadPendingAsync());
+    }
+
+    [Fact]
+    public async Task Sqlite_TwoWorkers_CreatingTheSameAccountName_RefuseTheSecond_AndLeaveOneRow()
+    {
+        await using TwoWorkers workers = await TwoWorkers.StartAsync();
+        Account first = await workers.A.CreateAsync(Guid.NewGuid(), NewAccount("PBTWOW003"));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => workers.B.CreateAsync(Guid.NewGuid(), NewAccount("PBTWOW003")));
+
+        ManagedPlayerbotProvision only = Assert.Single(await workers.B.LoadPendingAsync());
+        Assert.Equal(first.Id, only.AccountId);
+        Assert.Equal(1, await workers.DbB.Accounts.AsNoTracking().CountAsync());
+    }
+
+    [Fact]
+    public async Task Sqlite_TwoWorkers_CreatingTheSameAccountNameAtTheSameTime_ExactlyOneWins()
+    {
+        // Both creators run on their own thread and context against one file. This proves one winner and that the loser leaves nothing behind. It does not prove which refusal fired: the store opens
+        // its transaction before the pre-check, so on SQLite the writers may serialise there and the unique index may never be reached.
+        for (int round = 0; round < 8; round++)
+        {
+            await using TwoWorkers workers = await TwoWorkers.StartAsync();
+            string name = $"PBRACE{round:D3}";
+            using var gate = new ManualResetEventSlim(false);
+            Task<Account> Create(EfManagedPlayerbotProvisionStore store) => Task.Run(() =>
+            {
+                gate.Wait();
+                return store.CreateAsync(Guid.NewGuid(), NewAccount(name));
+            });
+            Task<Account> first = Create(workers.A);
+            Task<Account> second = Create(workers.B);
+            gate.Set();
+
+            try { await Task.WhenAll(first, second); }
+            catch (Exception) when (first.IsFaulted || second.IsFaulted) { /* the loser's refusal */ }
+            Assert.Equal(1, new[] { first, second }.Count(t => t.IsCompletedSuccessfully));
+            Assert.Equal(1, new[] { first, second }.Count(t => t.IsFaulted));
+            Account winner = await (first.IsCompletedSuccessfully ? first : second);
+            ManagedPlayerbotProvision only = Assert.Single(await workers.A.LoadPendingAsync());
+            Assert.Equal(winner.Id, only.AccountId);
+            Assert.Equal(1, await workers.DbB.Accounts.AsNoTracking().CountAsync(a => a.Username == name));
+        }
+    }
+
+    [Fact]
+    public async Task Sqlite_TwoWorkers_RollingBackTheSameRowAtTheSameTime_RollBackExactlyOnce()
+    {
+        // The store calls two sweeps taking the same stale row would make (no sweep runs here): only one removes the empty account and its journal row, the other is refused or loses the database
+        // lock, and no half state is left. As above, the test does not tell those two apart.
+        for (int round = 0; round < 8; round++)
+        {
+            await using TwoWorkers workers = await TwoWorkers.StartAsync();
+            Guid botId = Guid.NewGuid();
+            Account stored = await workers.A.CreateAsync(botId, NewAccount($"PBRBACK{round:D3}"));
+            using var gate = new ManualResetEventSlim(false);
+            Task<bool> Rollback(EfManagedPlayerbotProvisionStore store) => Task.Run(() =>
+            {
+                gate.Wait();
+                return store.RollbackEmptyOwnerAsync(botId, stored.Id);
+            });
+            Task<bool> first = Rollback(workers.A);
+            Task<bool> second = Rollback(workers.B);
+            gate.Set();
+
+            try { await Task.WhenAll(first, second); }
+            catch (Exception) when (first.IsFaulted || second.IsFaulted) { /* a worker that lost the database lock: it did not roll back */ }
+            Assert.Equal(1, new[] { first, second }.Count(t => t.IsCompletedSuccessfully && t.Result));
+            Assert.Null(await workers.DbA.Accounts.AsNoTracking().SingleOrDefaultAsync(a => a.Id == stored.Id));
+            Assert.Empty(await workers.B.LoadPendingAsync());
+        }
+    }
+
+    public static IEnumerable<object[]> Providers() => TestDatabases.AvailableProviders();
+
+    /// <summary>Two workers' contexts over one real database of the provider (SQLite always; MariaDB and PostgreSQL when their server variable is set, see TestDatabases).</summary>
+    private static async Task<(AuthDbContext A, AuthDbContext B)> ProviderWorkersAsync(TestDatabases databases, DatabaseProvider provider)
+    {
+        DatabaseConnectionOptions connection = await databases.CreateAsync(provider);
+        AuthDbContext a = TestContexts.Create<AuthDbContext>(connection);
+        await SchemaBootstrapper.EnsureAsync(a, AuthDbContext.Schema);
+        return (a, TestContexts.Create<AuthDbContext>(connection));
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task Provider_TwoWorkers_CompleteTheSameRowAtTheSameTime_ExactlyOneCompletes(DatabaseProvider provider)
+    {
+        // The two store calls a sweep and a creator race on (a sweep completing a row whose creator completes it too), on the real provider's locking.
+        for (int round = 0; round < 4; round++)
+        {
+            await using var databases = new TestDatabases();
+            (AuthDbContext dbA, AuthDbContext dbB) = await ProviderWorkersAsync(databases, provider);
+            await using AuthDbContext a = dbA;
+            await using AuthDbContext b = dbB;
+            var storeA = new EfManagedPlayerbotProvisionStore(a);
+            var storeB = new EfManagedPlayerbotProvisionStore(b);
+            Guid botId = Guid.NewGuid();
+            Account stored = await storeA.CreateAsync(botId, NewAccount($"PBPCOMP{round:D3}"));
+            using var gate = new ManualResetEventSlim(false);
+            Task<bool> Complete(EfManagedPlayerbotProvisionStore store) => Task.Run(() =>
+            {
+                gate.Wait();
+                return store.CompleteAsync(botId, stored.Id);
+            });
+            Task<bool> first = Complete(storeA);
+            Task<bool> second = Complete(storeB);
+            gate.Set();
+
+            try { await Task.WhenAll(first, second); }
+            catch (Exception) when (first.IsFaulted || second.IsFaulted) { /* a worker that lost a lock: it did not complete */ }
+            Assert.Equal(1, new[] { first, second }.Count(t => t.IsCompletedSuccessfully && t.Result));
+            Assert.Empty(await storeB.LoadPendingAsync());
+            Assert.NotNull(await b.Accounts.AsNoTracking().SingleOrDefaultAsync(x => x.Id == stored.Id));
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task Provider_TwoWorkers_RollBackTheSameRowAtTheSameTime_RollBackExactlyOnce(DatabaseProvider provider)
+    {
+        for (int round = 0; round < 4; round++)
+        {
+            await using var databases = new TestDatabases();
+            (AuthDbContext dbA, AuthDbContext dbB) = await ProviderWorkersAsync(databases, provider);
+            await using AuthDbContext a = dbA;
+            await using AuthDbContext b = dbB;
+            var storeA = new EfManagedPlayerbotProvisionStore(a);
+            var storeB = new EfManagedPlayerbotProvisionStore(b);
+            Guid botId = Guid.NewGuid();
+            Account stored = await storeA.CreateAsync(botId, NewAccount($"PBPROLL{round:D3}"));
+            using var gate = new ManualResetEventSlim(false);
+            Task<bool> Rollback(EfManagedPlayerbotProvisionStore store) => Task.Run(() =>
+            {
+                gate.Wait();
+                return store.RollbackEmptyOwnerAsync(botId, stored.Id);
+            });
+            Task<bool> first = Rollback(storeA);
+            Task<bool> second = Rollback(storeB);
+            gate.Set();
+
+            try { await Task.WhenAll(first, second); }
+            catch (Exception) when (first.IsFaulted || second.IsFaulted) { /* a worker that lost a lock: it did not roll back */ }
+            Assert.Equal(1, new[] { first, second }.Count(t => t.IsCompletedSuccessfully && t.Result));
+            Assert.Null(await b.Accounts.AsNoTracking().SingleOrDefaultAsync(x => x.Id == stored.Id));
+            Assert.Empty(await storeB.LoadPendingAsync());
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task Provider_TwoWorkers_CreatingTheSameAccountNameAtTheSameTime_ExactlyOneWins(DatabaseProvider provider)
+    {
+        for (int round = 0; round < 4; round++)
+        {
+            await using var databases = new TestDatabases();
+            (AuthDbContext dbA, AuthDbContext dbB) = await ProviderWorkersAsync(databases, provider);
+            await using AuthDbContext a = dbA;
+            await using AuthDbContext b = dbB;
+            var storeA = new EfManagedPlayerbotProvisionStore(a);
+            var storeB = new EfManagedPlayerbotProvisionStore(b);
+            string name = $"PBPRACE{round:D3}";
+            using var gate = new ManualResetEventSlim(false);
+            Task<Account> Create(EfManagedPlayerbotProvisionStore store) => Task.Run(() =>
+            {
+                gate.Wait();
+                return store.CreateAsync(Guid.NewGuid(), NewAccount(name));
+            });
+            Task<Account> first = Create(storeA);
+            Task<Account> second = Create(storeB);
+            gate.Set();
+
+            try { await Task.WhenAll(first, second); }
+            catch (Exception) when (first.IsFaulted || second.IsFaulted) { /* the loser's refusal */ }
+            Assert.Equal(1, new[] { first, second }.Count(t => t.IsCompletedSuccessfully));
+            Account winner = await (first.IsCompletedSuccessfully ? first : second);
+            ManagedPlayerbotProvision only = Assert.Single(await storeA.LoadPendingAsync());
+            Assert.Equal(winner.Id, only.AccountId);
+            Assert.Equal(1, await b.Accounts.AsNoTracking().CountAsync(x => x.Username == name));
+        }
+    }
+
     private static Account NewAccount(string username, AccountSecurity security = AccountSecurity.Player, byte[]? sessionKey = null)
         => new() { Username = username, Salt = new byte[32], Verifier = new byte[32], Security = security, SessionKey = sessionKey };
 }

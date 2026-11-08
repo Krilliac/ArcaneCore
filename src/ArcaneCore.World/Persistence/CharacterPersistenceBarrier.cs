@@ -29,6 +29,12 @@ public interface ICharacterPersistenceParticipant
 
     /// <summary>Drain and retry any pending or retained writes for <paramref name="characterId"/>; fault if not durable.</summary>
     Task FlushCharacterAsync(int characterId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The characters this participant still has a pending or retained write for, so a cluster handoff flushes an offline character too (<see cref="CharacterPersistenceBarrier.OpenCharacterIdsAsync"/>).
+    /// The default reports none: a participant that cannot enumerate is only flushed for characters another queue or the freeze names. Any thread.
+    /// </summary>
+    IReadOnlyCollection<int> OpenCharacterIds => [];
 }
 
 /// <summary>A single queue or settlement failure observed during <see cref="CharacterPersistenceBarrier"/>.</summary>
@@ -290,6 +296,125 @@ public sealed class CharacterPersistenceBarrier
         }
 
         return new CharacterPersistenceFlushResult(characterId, failures);
+    }
+
+    /// <summary>
+    /// The characters the keyed feature queues that this barrier knows still have a write open for, whoever they are (a queue not registered with the barrier is not asked): a handoff flushes these too, or an offline character's retained write would never be named and would
+    /// miss the commit. Each queue first runs its ordered barrier (which never retries), so a write still queued has landed or is retained by the time it is read; a queue with no such barrier
+    /// reports what it has waiting as well. The save queue is not included (<see cref="CharacterSaveQueue.UnsettledCharacterIds"/>). Faults, under <see cref="DefaultTimeout"/>, when a queue does not
+    /// answer. Ascending.
+    /// </summary>
+    public async Task<IReadOnlyList<int>> OpenCharacterIdsAsync(CancellationToken cancellationToken = default)
+    {
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        budget.CancelAfter(DefaultTimeout);
+        var open = new SortedSet<int>();
+
+        // Settlement barriers and participants name what they hold themselves (an operation in flight, a pending or retained write). A member that throws fails the query like a queue that does not answer.
+        foreach (ICharacterSettlementBarrier barrier in _services.GetServices<ICharacterSettlementBarrier>())
+            open.UnionWith(barrier.SettlingCharacters);
+        foreach (ICharacterPersistenceParticipant participant in _services.GetServices<ICharacterPersistenceParticipant>())
+            open.UnionWith(participant.OpenCharacterIds);
+        // A quest settlement outlives its session, so a disconnected character's is named here (the freeze only refuses for online players).
+        if (_services.GetService<QuestNpcFeature>() is { } questFeature)
+            open.UnionWith(questFeature.SettlingCharacters);
+
+        async Task AddAsync(Func<Task> drain, Func<IEnumerable<int>> retained)
+        {
+            await drain().WaitAsync(budget.Token).ConfigureAwait(false);
+            open.UnionWith(retained());
+        }
+
+        if ((_services.GetService<QuestNpcPersistence>() ?? _services.GetService<QuestNpcFeature>()?.Persistence) is { } questPersistence)
+            open.UnionWith(questPersistence.OpenCharacters);
+        if ((_services.GetService<TaxiFlightWriteQueue>() ?? _services.GetService<NpcServicesFeature>()?.RouteWrites) is { } taxiWrites)
+            await AddAsync(taxiWrites.FlushAsync, () => taxiWrites.RetainedCharacters).ConfigureAwait(false);
+        if ((_services.GetService<SpellbookCache>() ?? _services.GetService<SpellFeature>()?.Spellbook) is { } spellbook)
+            await AddAsync(spellbook.FlushAsync, () => spellbook.FailedCharacters).ConfigureAwait(false);
+        if ((_services.GetService<SpellStatePersistence>() ?? _services.GetService<SpellFeature>()?.State) is { } spellState)
+            await AddAsync(spellState.FlushAsync, () => spellState.RetainedCharacters).ConfigureAwait(false);
+        if ((_services.GetService<TalentPersistence>() ?? _services.GetService<TalentFeature>()?.Persistence) is { } talentPersistence)
+            await AddAsync(talentPersistence.FlushAsync, () => talentPersistence.FailedCharacters).ConfigureAwait(false);
+        if ((_services.GetService<SkillSaveCoordinator>() ?? _services.GetService<SkillsFeature>()?.Saves) is { } skillSaves)
+            open.UnionWith(skillSaves.PendingCharacters);
+        if ((_services.GetService<ReputationWriteQueue>() ?? _services.GetService<ReputationFeature>()?.Writes) is { } reputationWrites)
+            await AddAsync(reputationWrites.FlushAsync, () => reputationWrites.RetainedCharacters).ConfigureAwait(false);
+        if ((_services.GetService<SocialWriteQueue>() ?? _services.GetService<SocialFeature>()?.Writes) is { } socialWrites)
+            await AddAsync(socialWrites.FlushAsync, () => socialWrites.RetainedCharacters).ConfigureAwait(false);
+        if ((_services.GetService<HonorWriteQueue>() ?? _services.GetService<HonorFeature>()?.Writes) is { } honorWrites)
+            await AddAsync(honorWrites.FlushAsync, () => honorWrites.RetainedCharacters).ConfigureAwait(false);
+        if ((_services.GetService<RestWriteQueue>() ?? _services.GetService<RestFeature>()?.Writes) is { } restWrites)
+            await AddAsync(restWrites.FlushAsync, () => restWrites.RetainedCharacters).ConfigureAwait(false);
+        if ((_services.GetService<ExploredZonesWriteQueue>() ?? _services.GetService<ExploredZonesPersistence>()?.Writes) is { } exploredWrites)
+            await AddAsync(exploredWrites.FlushAsync, () => exploredWrites.RetainedCharacters).ConfigureAwait(false);
+        if ((_services.GetService<InstanceWriteQueue>() ?? _services.GetService<InstanceFeature>()?.Writes) is { } instanceWrites)
+            await AddAsync(instanceWrites.FlushAsync, () => instanceWrites.RetainedCharacters).ConfigureAwait(false);
+        if ((_services.GetService<SummonService>() ?? _services.GetService<PetsFeature>()?.Service) is { } petService)
+            open.UnionWith(petService.OpenPersistenceCharacters);
+        return [.. open];
+    }
+
+    /// <summary>
+    /// The writes a handoff must have durable that belong to no one character, so <see cref="OpenCharacterIdsAsync"/> cannot name them: instance rows, script data, deletions and raid reset times,
+    /// guilds, petitions and character purges, then the group, GM audit, account data and account address queues, both respawn queues and the world-state save queues (Silithyst, Fishing
+    /// Extravaganza, Elemental Invasion, Nightmare Dragons). Each queue retries what it retains and faults while one is still not durable. Every queue is attempted even when an earlier one
+    /// faults, so a refused handoff has written all it could: one failure is thrown as it is, several as one <see cref="InvalidOperationException"/> whose inner exception is the
+    /// <see cref="AggregateException"/> of them. All under one <see cref="DefaultTimeout"/> (a timeout or a cancellation stops the rest). The last time this process can write them: B reads the
+    /// characters database, and the fence refuses A after the takeover. A lease refusal (<see cref="ArcaneCore.Data.Characters.Cluster.RealmLeaseNotHeldException"/>) of a keyed queue's write is not checked here: for a group the holder has the data, but a GM ticket taken on a non-holder is not durable, is not on B, and is only named at stop. Pet saves are flushed per character (<see cref="FlushCharacterAsync(int, TimeSpan?, CancellationToken)"/>), not here. The war effort (phase start, Colossus deaths) and Scourge invasion (start/stop, city defeats, Necropolis deaths) writers are covered through their <c>FlushStateWritesAsync</c>: the freeze's Park copies their in-memory queues on the world thread, and the flush waits for the store job in flight and writes the copy the way their StopAsync does, with no world thread (only a job's apply step needs it). A write that fails fails the flush, including a Scourge write the job in flight refused or never reached (the freeze keeps that job's ops and the flush writes them again; one that failed in a job applied before the freeze was logged then and is not owed). Not covered: the running game-event set, which a separate sink writes to the characters database. A state-save queue drops a value a store refused for the realm lease, and a failed value that a newer one of its key replaces, so the flush does not check those.
+    /// </summary>
+    public async Task FlushSharedWritesAsync(CancellationToken cancellationToken = default)
+    {
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        budget.CancelAfter(DefaultTimeout);
+        var failures = new List<Exception>();
+
+        async Task RunAsync(Task flush)
+        {
+            try
+            {
+                await flush.WaitAsync(budget.Token).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("persist.barrier", ex);
+                _logger?.LogWarning(ex, "Handoff shared write flush failed");
+                failures.Add(ex);
+            }
+        }
+
+        if ((_services.GetService<InstanceWriteQueue>() ?? _services.GetService<InstanceFeature>()?.Writes) is { } instanceWrites)
+            await RunAsync(instanceWrites.FlushSharedAsync()).ConfigureAwait(false);
+        if ((_services.GetService<SocialWriteQueue>() ?? _services.GetService<SocialFeature>()?.Writes) is { } socialWrites)
+            await RunAsync(socialWrites.FlushSharedAsync()).ConfigureAwait(false);
+        if (_services.GetService<SocialGroupPersistenceFeature>()?.Writes is { } groupWrites)
+            await RunAsync(groupWrites.RetryRetainedAsync()).ConfigureAwait(false);
+        if (_services.GetService<Gm.Audit.GmAuditFeature>()?.Writes is { } auditWrites)
+            await RunAsync(auditWrites.RetryRetainedAsync()).ConfigureAwait(false);
+        if (_services.GetService<Handlers.AccountDataFeature>()?.Writes is { } accountDataWrites)
+            await RunAsync(accountDataWrites.RetryRetainedAsync()).ConfigureAwait(false);
+        if (_services.GetService<Bans.AccountAddressFeature>()?.Writes is { } accountAddressWrites)
+            await RunAsync(accountAddressWrites.RetryRetainedAsync()).ConfigureAwait(false);
+        if (_services.GetService<Creatures.CreatureRespawnFeature>()?.Persistence is Creatures.CreatureRespawnQueue creatureRespawns)
+            await RunAsync(creatureRespawns.RetryRetainedAsync()).ConfigureAwait(false);
+        if (_services.GetService<GameObjects.GameObjectRespawnFeature>()?.Persistence is GameObjects.GameObjectRespawnQueue objectRespawns)
+            await RunAsync(objectRespawns.RetryRetainedAsync()).ConfigureAwait(false);
+        if (_services.GetService<OutdoorPvP.OutdoorPvPFeature>() is { } outdoorPvP)
+            await RunAsync(outdoorPvP.FlushStateWritesAsync()).ConfigureAwait(false);
+        if (_services.GetService<FishingExtravaganzaFeature>() is { } fishing)
+            await RunAsync(fishing.FlushStateWritesAsync()).ConfigureAwait(false);
+        if (_services.GetService<HolidayObjectsFeature>() is { } holiday)
+            await RunAsync(holiday.FlushStateWritesAsync()).ConfigureAwait(false);
+        if (_services.GetService<NightmareDragonsFeature>() is { } dragons)
+            await RunAsync(dragons.FlushStateWritesAsync()).ConfigureAwait(false);
+        if (_services.GetService<WarEffortFeature>() is { } warEffort)
+            await RunAsync(warEffort.FlushStateWritesAsync()).ConfigureAwait(false);
+        if (_services.GetService<ScourgeInvasionFeature>() is { } scourge)
+            await RunAsync(scourge.FlushStateWritesAsync()).ConfigureAwait(false);
+
+        if (failures.Count == 1)
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failures[0]).Throw();
+        if (failures.Count > 1)
+            throw new InvalidOperationException($"{failures.Count} shared write queues are not durable", new AggregateException(failures));
     }
 
     /// <summary>

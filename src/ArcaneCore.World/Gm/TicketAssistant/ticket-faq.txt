@@ -1,0 +1,31 @@
+Starter FAQ for the GM ticket assistant. One topic per paragraph. The assistant answers only from this text; edit it, or point
+World:GmTicketAssistant:FaqPath at your own file. Keep every answer short and true for this server.
+
+Rules: Be respectful. No harassment, hate speech or threats. No cheating, exploits, botting for profit, or selling accounts. No
+advertising other servers. Staff decisions are final in game; if you disagree, file a ticket and a GM will read it.
+
+Staff: Game masters answer tickets in the order they arrive. An assistant answers simple questions and fixes a few clear problems
+(stuck, cannot resurrect) when the server can verify them. Anything else is left for a person. The assistant never gives items,
+gold, experience or levels, and never bans, mutes or kicks anyone.
+
+Bots: Some characters on this server are server-controlled bots. They fill groups and the world, can be asked to join a party, and
+answer short questions in chat. A bot may be told to stop talking to you by whispering it "ai off". Bots follow the same rules as
+players and cannot be traded for real money.
+
+Stuck: If your character is stuck, type .unstuck. A living character gets a buff and dies when it ends; a ghost is sent to the nearest
+graveyard. It needs level 10, cannot be used in combat, on a battleground, or while on a flight path, and has a cooldown. If that does
+not help, file a ticket from the help window and say where you are.
+
+Dead: If you cannot resurrect, release your spirit and run to your corpse, or talk to a spirit healer at a graveyard. Resurrecting at
+a spirit healer gives resurrection sickness for a while and damages your gear. If you are a ghost and cannot reach your corpse, file a
+ticket and say so.
+
+Tickets: Open the help window (the question mark button) to file a ticket. One open ticket per character. You can edit or withdraw it
+there. Answers are shown to you in the chat window when you are online.
+
+Quests: If a quest does not progress or cannot be handed in, abandon it and take it again from the quest giver once. If it is still
+broken, file a ticket with the quest name. A GM will look at it.
+
+Lost items: Check your bags, bank and mailbox first. Items are not restored by the assistant; a GM reviews each report.
+
+Commands: .unstuck frees a stuck character (see Stuck). Chat commands begin with a dot; commands for staff are not available to players.

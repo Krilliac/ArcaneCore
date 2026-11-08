@@ -52,6 +52,37 @@ public sealed class PlayerbotVolunteerReadyWhisperWorldTests : PlayerbotVoluntee
         Assert.False(PlayerInvited(world));
     }
 
+    /// <summary>The bot's whisper to a player above the level range of its group names the highest level the group takes (the answer to <see cref="PlayerbotVolunteerOutcome.LevelHigh"/>), and nobody is invited.</summary>
+    [Fact]
+    public async Task TheBotTellsAPlayerAboveTheLevelRange_TheHighestLevelItsGroupTakes_AndInvitesNobody()
+    {
+        const int range = 5;
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([DuoQuest], options =>
+        {
+            Quiet(options);
+            options.Chat.Enabled = true;
+            options.Chat.PerPlayerCooldownSeconds = 0;
+            options.Chat.Voice.LookingForGroup = false;
+            options.Groups.LevelRange = range;
+        });
+        await world.World.PrepareCharacterAsync("VOLHIVOICE", "Volhivoice", AccountSecurity.Player);
+        var bot = await WaitingBotAsync(world, "Volhivbot", Warrior, 1, []);
+        await using WorldTestClient player = await world.World.EnterWorldAsync("VOLHIVOICE", "Volhivoice", AccountSecurity.Player);
+        await world.OnWorldAsync(() =>
+        {
+            Online(world, "Volhivoice").Level = (byte)(1 + range + 1);
+            return true;
+        });
+
+        (string? said, _) = await AskForInviteAsync(world, player, bot, expectInvite: false);
+
+        Assert.NotNull(said);
+        string[] expected = [.. PlayerbotVoiceTemplates.Lines["voice.reply.lfg.levelhigh"].Select(line => line.Replace("{maxlevel}", (1 + range).ToString(System.Globalization.CultureInfo.InvariantCulture)))];
+        Assert.Contains(said, expected);
+        Assert.DoesNotContain(said, ReadyLines);
+        Assert.False(PlayerInvited(world));
+    }
+
     // --- the roles, the cap on the Match path, expiry ---------------------------------------------------------------------------------
 
     /// <summary>With the default tank quota a higher-level warrior volunteer would win the tank slot and lead: a bot tanks and leads instead.</summary>

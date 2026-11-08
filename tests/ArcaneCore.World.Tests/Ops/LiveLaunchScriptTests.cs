@@ -187,6 +187,29 @@ public sealed class LiveLaunchScriptTests : IDisposable
 
     // ---- start-cluster --------------------------------------------------------------------------------------------------------------
 
+    /// <summary>
+    /// A plan of a fresh home (no image deployed yet) prints, with a warning per missing image, instead of refusing; a real start with the same
+    /// home still refuses before it starts anything.
+    /// </summary>
+    [PwshFact]
+    public void StartCluster_MissingImage_PlanWarnsAndPrints_RealStartRefuses()
+    {
+        File.Delete(Path.Combine(_home, "bin", "ArcaneCore.Realm.exe"));
+        (int planCode, string plan, bool planStarted) = RunLauncher("start-cluster.ps1", ["-Plan"]);
+
+        Assert.Equal(0, planCode);
+        Assert.False(planStarted, "the plan started a process");
+        Assert.StartsWith("PLAN start-cluster (nothing was started)", plan, StringComparison.Ordinal);
+        Assert.Contains("ArcaneCore.Realm.exe not found: deploy a build to the live home first", plan, StringComparison.Ordinal);
+        Assert.Contains("A real start would refuse.", plan, StringComparison.Ordinal);
+
+        (int startCode, string start, bool started) = RunLauncher("start-cluster.ps1", []);
+        Assert.Equal(1, startCode);
+        Assert.False(started, "a refused start started a process");
+        Assert.Contains("ERROR: ", start, StringComparison.Ordinal);
+        Assert.Contains("ArcaneCore.Realm.exe not found: deploy a build to the live home first", start, StringComparison.Ordinal);
+    }
+
     [PwshFact]
     public void StartCluster_Plan_Default_IsRealmPlusCombinedWorld_WithEnvironmentBuiltFromParameters()
     {
@@ -528,6 +551,18 @@ public sealed class LiveLaunchScriptTests : IDisposable
         }
 
         Assert.Equal(3, checkedWorkers);
+
+        // The launcher's instances world is the node the battleground queue holder election needs: it lists Alterac Valley, Warsong Gulch and Arathi Basin, the continent worlds do not.
+        string instancesArguments = worlds.Values.Single(a => ArgumentValue(a, "Cluster:Worker:NodeId") == "worker:instances");
+        Assert.True(MapOwnership.TryParse(ArgumentValue(instancesArguments, "Cluster:Worker:OwnedMaps"), true, out MapOwnership instancesOwnership, out string? instancesError), instancesError);
+        Assert.True(ArcaneCore.World.Battlegrounds.BattlegroundFeature.CanHoldQueues(instancesOwnership));
+        foreach (string continent in new[] { "worker:EK", "worker:Kalimdor" })
+        {
+            string continentArguments = worlds.Values.Single(a => ArgumentValue(a, "Cluster:Worker:NodeId") == continent);
+            Assert.True(MapOwnership.TryParse(ArgumentValue(continentArguments, "Cluster:Worker:OwnedMaps"), true, out MapOwnership continentOwnership, out string? continentError), continentError);
+            Assert.False(ArcaneCore.World.Battlegrounds.BattlegroundFeature.CanHoldQueues(continentOwnership));
+        }
+
         Assert.Contains("--Gateway:LoginWorker=worker:Kalimdor", output, StringComparison.Ordinal);
         Assert.Contains("MapWorker on worker:Kalimdor", output, StringComparison.Ordinal);
 
@@ -1021,6 +1056,83 @@ public sealed class LiveLaunchScriptTests : IDisposable
         Assert.Contains("threw: child w is not up and the process that launches it", output, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A supervisor that refuses a child (host memory under its reserve) exits with only that reason in its log: the wait's error quotes the
+    /// last refusal line of -LogPath, and says nothing extra when the log has no such line or does not exist.
+    /// </summary>
+    [PwshFact]
+    public void WaitLiveDaemonUp_SupervisorGone_QuotesTheRefusalFromTheSupervisorLog()
+    {
+        string log = Path.Combine(_root, "supervisor.debug.jsonl");
+        File.WriteAllText(log, "{\"level\":\"Info\",\"msg\":\"supervisor started\"}\n{\"level\":\"Error\",\"msg\":\"admission refused gateway: 495 MiB free is under the 1024 MiB reserve\"}\n");
+        string quiet = Path.Combine(_root, "quiet.debug.jsonl");
+        File.WriteAllText(quiet, "{\"level\":\"Info\",\"msg\":\"supervisor started\"}\n");
+        string output = RunPwsh($$"""
+            $hide = if ($IsWindows) { @{ WindowStyle = 'Hidden' } } else { @{} }
+            $gone = Start-Process pwsh -ArgumentList '-NoProfile','-Command','exit 0' -PassThru @hide
+            $gone.WaitForExit()
+            function Find-LiveChildProcess { param($ParentPid, $ImageName) return $null }
+            foreach ($path in '{{Q(log)}}', '{{Q(quiet)}}', '{{Q(Path.Combine(_root, "missing.jsonl"))}}') {
+                try { Wait-LiveDaemonUp -Label 'child w' -ParentPid $PID -ImageName 'x.exe' -Port 4242 -TimeoutSec 30 -SettleSeconds 0 -WatchPid $gone.Id -FollowRelaunch -LogPath $path; 'returned' }
+                catch { "threw[$([IO.Path]::GetFileName($path))]: $($_.Exception.Message)" }
+            }
+            """);
+        Assert.Contains("threw[supervisor.debug.jsonl]: child w is not up and the process that launches it", output, StringComparison.Ordinal);
+        Assert.Contains("admission refused gateway: 495 MiB free is under the 1024 MiB reserve", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("supervisor started", output, StringComparison.Ordinal);
+        string quietLine = output.Split('\n').Single(l => l.StartsWith("threw[quiet.debug.jsonl]", StringComparison.Ordinal));
+        Assert.DoesNotContain("Last relevant log lines", quietLine, StringComparison.Ordinal);
+        string missingLine = output.Split('\n').Single(l => l.StartsWith("threw[missing.jsonl]", StringComparison.Ordinal));
+        Assert.DoesNotContain("Last relevant log lines", missingLine, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// start-cluster waits for the supervisor with -Port 0 and no -WatchPid, so the realistic ways a refusing supervisor goes away are not the
+    /// WatchPid throw: it lives past one poll and exits inside the settle sleep, or it is seen and then gone on the next poll, or its console
+    /// window ends before the process is ever found. Each of those errors must quote the refusal from -LogPath too.
+    /// </summary>
+    [PwshFact]
+    public void WaitLiveDaemonUp_SupervisorExitsDuringSettleOrIsGone_QuotesTheRefusalFromTheSupervisorLog()
+    {
+        string log = Path.Combine(_root, "settle.debug.jsonl");
+        File.WriteAllText(log, "{\"level\":\"Info\",\"msg\":\"supervisor started\"}\n{\"level\":\"Error\",\"msg\":\"admission refused world: 311 MiB free is under the 1024 MiB reserve\"}\n");
+        string output = RunPwsh($$"""
+            $hide = if ($IsWindows) { @{ WindowStyle = 'Hidden' } } else { @{} }
+            $log = '{{Q(log)}}'
+            function Get-LivePortOwner { param($Port) return $null }
+
+            # 1. Found at the first poll, port 0 enters the settle sleep, and the process exits inside it.
+            $script:child = Start-Process pwsh -ArgumentList '-NoProfile','-Command','Start-Sleep -Milliseconds 800; exit 3' -PassThru @hide
+            function Find-LiveChildProcess { param($ParentPid, $ImageName) return $script:child }
+            try { Wait-LiveDaemonUp -Label 'sup' -ParentPid $PID -ImageName 'x.exe' -TimeoutSec 30 -SettleSeconds 4 -LogPath $log; 'returned' }
+            catch { "threw[settle]: $($_.Exception.Message)" }
+
+            # 2. Seen with a port that never listens, then gone at the next poll (no relaunch to follow).
+            $script:child = Start-Process pwsh -ArgumentList '-NoProfile','-Command','Start-Sleep -Milliseconds 500; exit 4' -PassThru @hide
+            $script:polls = 0
+            function Find-LiveChildProcess { param($ParentPid, $ImageName) $script:polls++; if ($script:polls -eq 1) { return $script:child }; $script:child.WaitForExit(); return $null }
+            try { Wait-LiveDaemonUp -Label 'sup' -ParentPid $PID -ImageName 'x.exe' -Port 4242 -TimeoutSec 30 -LogPath $log; 'returned' }
+            catch { "threw[seen]: $($_.Exception.Message)" }
+
+            # 3. The console window (parent) ends before any child is found.
+            $script:parentProc = Start-Process pwsh -ArgumentList '-NoProfile','-Command','Start-Sleep -Milliseconds 1500; exit 5' -PassThru @hide
+            function Find-LiveChildProcess { param($ParentPid, $ImageName) return $null }
+            try { Wait-LiveDaemonUp -Label 'sup' -ParentPid $script:parentProc.Id -ImageName 'x.exe' -TimeoutSec 30 -LogPath $log; 'returned' }
+            catch { "threw[console]: $($_.Exception.Message)" }
+            """);
+        foreach (string path in new[] { "settle", "seen", "console" })
+        {
+            string line = output.Split('\n').Single(l => l.StartsWith($"threw[{path}]", StringComparison.Ordinal));
+            Assert.Contains("admission refused world: 311 MiB free is under the 1024 MiB reserve", line, StringComparison.Ordinal);
+            Assert.DoesNotContain("supervisor started", line, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("threw[settle]: sup (pid ", output, StringComparison.Ordinal);
+        Assert.Contains("exited within 4 s of coming up (exit code 3)", output, StringComparison.Ordinal);
+        Assert.Contains("exited before it was up (exit code 4)", output, StringComparison.Ordinal);
+        Assert.Contains("never started: its console window", output, StringComparison.Ordinal);
+    }
+
     // ---- the debugger script ------------------------------------------------------------------------------------------------------------
 
     [PwshFact]
@@ -1056,6 +1168,23 @@ public sealed class LiveLaunchScriptTests : IDisposable
         string otherText = File.ReadAllText(other);
         Assert.Contains("Successfully attached", otherText, StringComparison.Ordinal);
         Assert.Contains("EXIT_PROCESS_DEBUG_EVENT", otherText, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// -SupervisorPid together with -RealmPid/-WorldPid attaches each pid once: the pids attached up front seed the watch loop's attached map, so
+    /// the supervisor's child of the same pid is "known and alive" and skipped (it used to be attached a second time, giving three failure lines).
+    /// </summary>
+    [Fact]
+    public void AttachDebugger_WatchMode_StartsFromThePidsAttachedUpFront()
+    {
+        string source = File.ReadAllText(Path.Combine(RepositorySource.RequireRoot(), "tools", "ops", "diag", "attach-debugger.ps1")).Replace("\r\n", "\n", StringComparison.Ordinal);
+        int realm = source.IndexOf("$preAttached[[int]$RealmPid] = $realmThread", StringComparison.Ordinal);
+        int world = source.IndexOf("$preAttached[[int]$WorldPid] = $worldThread", StringComparison.Ordinal);
+        int watch = source.IndexOf("if ($SupervisorPid) {\n        # Watch mode", StringComparison.Ordinal);
+        int seed = source.IndexOf("$attached = $preAttached", StringComparison.Ordinal);
+        Assert.True(realm >= 0 && world > realm, "the up-front attaches must record their threads by pid");
+        Assert.True(watch > world && seed > watch, "watch mode must start from the up-front threads, not an empty map");
+        Assert.DoesNotContain("$attached = @{}", source, StringComparison.Ordinal);
     }
 
     [PwshFact]
@@ -1285,14 +1414,24 @@ public sealed class LiveLaunchScriptTests : IDisposable
         Assert.Contains("CrashHandler.Install(options, StandardErrorCrashSink.Instance);", hosting, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A real -Gateway start refuses before it starts anything when the gateway image is missing; the plan of the same home warns instead
+    /// (the fresh-home rule of <see cref="StartCluster_MissingImage_PlanWarnsAndPrints_RealStartRefuses"/>), and names the image either way.
+    /// </summary>
     [PwshFact]
     public void StartCluster_RefusesAMissingGatewayExecutable()
     {
         File.Delete(Path.Combine(_home, "bin", "ArcaneCore.Gateway.exe"));
-        (int code, string output, bool started) = RunLauncher("start-cluster.ps1", ["-Plan", "-Gateway"], Secret);
+        (int code, string output, bool started) = RunLauncher("start-cluster.ps1", ["-Gateway"], Secret);
         Assert.NotEqual(0, code);
         Assert.Contains("ArcaneCore.Gateway.exe", output, StringComparison.Ordinal);
         Assert.False(started);
+
+        (int planCode, string plan, bool planStarted) = RunLauncher("start-cluster.ps1", ["-Plan", "-Gateway"], Secret);
+        Assert.Equal(0, planCode);
+        Assert.False(planStarted, "the plan started a process");
+        Assert.Contains("ArcaneCore.Gateway.exe", plan, StringComparison.Ordinal);
+        Assert.Contains("A real start would refuse.", plan, StringComparison.Ordinal);
     }
 
     [Fact]

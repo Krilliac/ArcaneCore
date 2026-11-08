@@ -59,7 +59,10 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
     private readonly HashSet<int> _exhaustedReported = []; // under _gate: characters whose retry-exhausted episode was already reported; cleared when the snapshot is written or discarded
     private readonly HashSet<int> _held = [];
     private readonly HashSet<int> _quarantined = [];
+    private readonly HashSet<int> _retired = []; // characters RetireCharacters gave to another world (guarded by _gate); a fence refusal of one of them is expected, never a terminal failure
     private readonly HashSet<int> _quarantineAnnounced = []; // quarantined characters whose first refused snapshot was announced (guarded by _gate)
+    private bool _allRetired; // under _gate: RetireEveryCharacter ran; no character is written any more, named or not
+    private bool _sealed; // under _gate: between a handoff's flush and its decision; see SealWrites
     private readonly Dictionary<int, Slot> _slots = [];
     private readonly Queue<int> _priorityHints = new();
     private readonly Queue<int> _normalHints = new();
@@ -167,24 +170,38 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
         }
     }
 
-    public void Enqueue(CharacterState state)
+    public void Enqueue(CharacterState state) => EnqueueCore(state, null);
+
+    /// <inheritdoc cref="ICharacterSaveQueue.Enqueue(CharacterState, Action)"/>
+    public void Enqueue(CharacterState state, Action onSettled)
+    {
+        ArgumentNullException.ThrowIfNull(onSettled);
+        EnqueueCore(state, onSettled);
+    }
+
+    private void EnqueueCore(CharacterState state, Action? onSettled)
     {
         ArgumentNullException.ThrowIfNull(state);
         CharacterState copy = Copy(state);
         bool quarantined = false;
         bool closed = false;
         bool announceQuarantine = false;
+        bool skipped = false;
         lock (_gate)
         {
             ThrowIfTerminalLocked();
-            if (_quarantined.Contains(state.Id))
+            if (_allRetired)
+            {
+                skipped = true; // the whole world moved: skipped, as a retired character's snapshot is
+            }
+            else if (_quarantined.Contains(state.Id))
             {
                 quarantined = true;
                 announceQuarantine = _quarantineAnnounced.Add(state.Id); // the periodic save re-enqueues every few seconds: tell the staff once per quarantine
             }
             else if (_held.Contains(state.Id))
             {
-                return;
+                skipped = true;
             }
             else if (_stopped)
             {
@@ -195,12 +212,20 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
             {
                 Slot slot = GetSlot(state.Id);
                 PutState(slot, copy);
+                if (onSettled is not null) (slot.Settled ??= []).Add(onSettled);
                 AddHint(slot, priority: false);
             }
         }
 
+        if (skipped)
+        {
+            onSettled?.Invoke(); // nothing will be written; the callback only releases a handle and never throws
+            return;
+        }
+
         if (quarantined || closed)
         {
+            onSettled?.Invoke();
             if (quarantined)
             {
                 if (announceQuarantine)
@@ -250,7 +275,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
         {
             ThrowIfTerminalLocked();
             ObjectDisposedException.ThrowIf(_stopped, this);
-            if (_quarantined.Contains(state.Id))
+            if (IsClosedLocked(state.Id))
             {
                 throw new InvalidOperationException($"character {state.Id} is quarantined");
             }
@@ -331,7 +356,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
     /// queue could still attempt for them would be refused by the characters fence, so their waiting and retained snapshots are dropped and later ones are
     /// skipped silently (the same suppression as <see cref="QuarantineCharacter"/>, without the staff announcement), and the queue shuts down cleanly instead
     /// of entering terminal failure. Characters not named here are untouched: a character this world still owns keeps every write. One informational line
-    /// says how many characters and snapshots were dropped. Idempotent per character; there is no way back (do not <see cref="ResumeCharacter"/> them).
+    /// says how many characters and snapshots were dropped; when a retained snapshot (a save that failed and was never written) is among them, a warning names those characters, because their last save is lost. Idempotent per character; there is no way back (do not <see cref="ResumeCharacter"/> them).
     /// Returns the number of waiting or retained snapshots dropped. Any thread.
     /// </summary>
     public int RetireCharacters(IReadOnlyCollection<int> characterIds)
@@ -339,25 +364,50 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
         ArgumentNullException.ThrowIfNull(characterIds);
         int characters = 0;
         int dropped = 0;
+        var lostRetained = new List<int>();
         lock (_gate)
         {
             foreach (int id in characterIds)
             {
+                _retired.Add(id); // before the early continue: a character already quarantined still has its in-flight fence refusal expected
                 if (!_quarantined.Add(id))
                 {
+                    // Already quarantined (a settlement failure): its retained snapshot is still dropped, or the stop would report it as undrained.
+                    if (_failed.Remove(id, out FailedSave? parked))
+                    {
+                        if (parked.Failure is not CharacterOwnershipRejectedException)
+                        {
+                            lostRetained.Add(id);
+                        }
+
+                        dropped++;
+                    }
+
+                    _exhaustedReported.Remove(id);
                     continue;
                 }
 
                 characters++;
                 _quarantineAnnounced.Add(id); // the refused snapshots of a retired character are expected: nothing to tell the staff
                 bool waiting = _slots.TryGetValue(id, out Slot? slot) && slot.State is not null; // dropped by the consumer when it reaches the slot
-                bool retained = _failed.Remove(id);
+                bool retained = _failed.Remove(id, out FailedSave? retainedSave);
+                if (retained && retainedSave!.Failure is not CharacterOwnershipRejectedException)
+                {
+                    lostRetained.Add(id); // a refusal kept while sealed was refused by the takeover itself: nothing was lost that a write could have saved
+                }
+
                 _exhaustedReported.Remove(id);
                 if (waiting || retained)
                 {
                     dropped++;
                 }
             }
+        }
+
+        if (lostRetained.Count > 0)
+        {
+            // A retained snapshot is a save that failed and was never written. The handoff's flush wrote every one it could see, so this one came after it and is lost for good.
+            _logger.LogWarning("Retained snapshot(s) of character(s) {Characters} were dropped by the handoff retirement and will not be written; their last save is lost", string.Join(", ", lostRetained));
         }
 
         if (characters > 0)
@@ -371,6 +421,45 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
     }
 
     /// <summary>
+    /// A handoff's retirement: the takeover moved the one ownership scope every write of this world runs under, so every character is gone, whichever is known here now or turns up
+    /// later. <see cref="RetireCharacters"/> for all of them; a snapshot of a character nobody named is skipped too. No way back. Idempotent. Any thread.
+    /// </summary>
+    public int RetireEveryCharacter()
+    {
+        int[] known;
+        lock (_gate)
+        {
+            _allRetired = true;
+            known = [.. _slots.Keys.Union(_failed.Keys).Union(_held)];
+        }
+
+        return RetireCharacters(known);
+    }
+
+    /// <summary>
+    /// A handoff's flush succeeded: the takeover may land at any moment from here on, and only <see cref="UnsealWrites"/> (the handoff aborted) or <see cref="RetireEveryCharacter"/> decides how
+    /// it ended. Until then writes are still attempted (before the takeover they land), but a fence refusal of any character is not terminal, and neither is an ownership loss reported
+    /// through <see cref="FailTerminal"/>. A snapshot refused in the window is retained (not deferred, so no timer retries it into the fence): an aborted handoff resumes this world and the next barrier
+    /// or newer snapshot writes it, and the retirement drops it without the lost-save warning. If A lost the ownership some other way and resumes, its next write is refused and goes terminal as ever. Idempotent. Any thread.
+    /// </summary>
+    public void SealWrites()
+    {
+        lock (_gate)
+        {
+            _sealed = true;
+        }
+    }
+
+    /// <summary>The handoff aborted and the source resumed: a fence refusal means a lost ownership again. Idempotent. Any thread.</summary>
+    public void UnsealWrites()
+    {
+        lock (_gate)
+        {
+            _sealed = false;
+        }
+    }
+
+    /// <summary>
     /// The character was deleted: forget its holds, quarantine and retained failed snapshot, so a
     /// later character that reuses the id never inherits them. Call after its writes drained.
     /// </summary>
@@ -380,9 +469,41 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
         {
             _held.Remove(characterId);
             _quarantined.Remove(characterId);
+            _retired.Remove(characterId);
             _quarantineAnnounced.Remove(characterId);
             _failed.Remove(characterId);
             _exhaustedReported.Remove(characterId);
+        }
+    }
+
+    /// <summary>The characters that have a retained (failed, not yet written) snapshot. Any thread.</summary>
+    public int[] RetainedCharacterIds()
+    {
+        lock (_gate)
+        {
+            return [.. _failed.Keys];
+        }
+    }
+
+    /// <summary>
+    /// The characters with a save still to settle: a snapshot waiting, a write in flight or a retained failure. A quarantined character is left out: its snapshots are never written, so it
+    /// has nothing a flush could settle and no retry that could reach the fence. A handoff's flush drains these while the source still owns them. Ascending. Any thread.
+    /// </summary>
+    public int[] UnsettledCharacterIds()
+    {
+        lock (_gate)
+        {
+            var open = new SortedSet<int>(_failed.Keys);
+            foreach (Slot slot in _slots.Values)
+            {
+                if (slot.State is not null || slot.InFlight)
+                {
+                    open.Add(slot.Id);
+                }
+            }
+
+            open.ExceptWith(_quarantined);
+            return [.. open];
         }
     }
 
@@ -391,6 +512,28 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
         lock (_gate)
         {
             return _held.Contains(characterId);
+        }
+    }
+
+    /// <summary>Under <c>_gate</c>: a retired character's snapshot can never be written (the fence refuses it), so a failure path that just retained it discards it again.</summary>
+    private void DropRetainedIfRetiredLocked(int characterId)
+    {
+        if (_allRetired || _retired.Contains(characterId))
+        {
+            _failed.Remove(characterId);
+            _exhaustedReported.Remove(characterId);
+        }
+    }
+
+    /// <summary>Under <c>_gate</c>: nothing of this character is written, for a quarantine or because the world moved.</summary>
+    private bool IsClosedLocked(int characterId) => _allRetired || _quarantined.Contains(characterId);
+
+    /// <summary>True when a fence refusal of this character is an expected end and not a lost ownership: it was retired, or the handoff is past its flush and undecided.</summary>
+    private bool RefusalIsExpected(int characterId)
+    {
+        lock (_gate)
+        {
+            return _sealed || _allRetired || _retired.Contains(characterId);
         }
     }
 
@@ -462,7 +605,13 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
             lock (_gate)
             {
                 long now = Stopwatch.GetTimestamp();
-                if (!_stopped && _busyUntil > now)
+                if (!_stopped && _drain.IsPaused)
+                {
+                    // The characters database writer lock is lost and nobody knows yet whether another world took it (WorldWriterGuard): nothing is picked, snapshots keep waiting (the newest wins)
+                    // and are written once the lane resumes. Shutdown ignores the pause: its writes are refused by the lane, retained, and named by the stop's final report (TakeRetained skips them once stopped, so the consumer ends).
+                    pauseTicks = Stopwatch.Frequency;
+                }
+                else if (!_stopped && _busyUntil > now)
                 {
                     // A write just failed because another connection holds the database: starting another write now would wait out
                     // the whole write bound for nothing. Shutdown ignores the pause (it retries inline and must not sit idle). A
@@ -547,17 +696,42 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
         }
 
         InvalidOperationException? notDrained = null;
+        var sealedDropped = new List<int>();
         lock (_gate)
         {
             if (_terminalFailure is { } terminal)
             {
                 throw new InvalidOperationException("character saves stopped after a terminal ownership failure", terminal);
             }
+            foreach (int retiredId in _failed.Keys.ToArray())
+            {
+                DropRetainedIfRetiredLocked(retiredId); // final pass: whatever a failure path re-retained after the retirement
+            }
+
+            if (_sealed)
+            {
+                // The handoff never decided (its retirement did not reach this process, for example with the gateway link down): a snapshot the fence refused while sealed can never be written once
+                // the takeover landed, so the stop names it in a warning instead of failing on it.
+                foreach ((int sealedId, FailedSave sealedFailure) in _failed.ToArray())
+                {
+                    if (sealedFailure.Failure is CharacterOwnershipRejectedException)
+                    {
+                        _failed.Remove(sealedId);
+                        sealedDropped.Add(sealedId);
+                    }
+                }
+            }
+
             if (_failed.Count > 0)
             {
                 notDrained = new InvalidOperationException($"character saves did not drain for characters {string.Join(", ", _failed.Keys.Order())}",
                     _failed.Values.First().Failure);
             }
+        }
+
+        if (sealedDropped.Count > 0)
+        {
+            _logger.LogWarning("Snapshot(s) of character(s) {Characters} were refused by the fence while a handoff was undecided at stop and are dropped", string.Join(", ", sealedDropped.Order()));
         }
 
         if (notDrained is not null)
@@ -590,6 +764,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
     {
         CharacterState? state;
         Waiter[] waiters;
+        Action[] settled;
         lock (_gate)
         {
             state = slot.State;
@@ -597,6 +772,8 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
             slot.InFlightTicks = state is null ? Stopwatch.GetTimestamp() : slot.FirstTicks;
             waiters = [.. slot.Waiters];
             slot.Waiters.Clear();
+            settled = slot.Settled is { Count: > 0 } ? [.. slot.Settled] : [];
+            slot.Settled?.Clear();
             slot.InFlight = true;
             Refresh(slot);
         }
@@ -635,7 +812,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
             {
                 lock (_gate)
                 {
-                    if (_quarantined.Contains(slot.Id))
+                    if (IsClosedLocked(slot.Id))
                     {
                         dropped = true;
                     }
@@ -655,7 +832,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
                 // A settlement waiter whose snapshot was retained by a locked database and is now being retried.
                 lock (_gate)
                 {
-                    dropped = _quarantined.Contains(slot.Id);
+                    dropped = IsClosedLocked(slot.Id);
                 }
             }
 
@@ -706,6 +883,8 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
             }
         }
 
+        RunSettled(settled); // the write attempt is over, whatever its outcome: a retained snapshot is retried later without holding anyone
+
         if (deferred && error is null)
         {
             return;
@@ -734,6 +913,22 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
         }
     }
 
+    /// <summary>Run the settle callbacks of <see cref="ICharacterSaveQueue.Enqueue(CharacterState, Action)"/>; one that throws must not stop the consumer or the rest.</summary>
+    private void RunSettled(IReadOnlyList<Action> callbacks)
+    {
+        foreach (Action callback in callbacks)
+        {
+            try
+            {
+                callback();
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                _logger.LogFault("writequeue.character-settled", ex, "a character save settle callback failed");
+            }
+        }
+    }
+
     /// <summary>Retry the retained snapshot of a character, if any. True when the database was locked again and the snapshot stays retained for a later retry.</summary>
     private async Task<bool> RecoverAsync(int id, CancellationToken cancellationToken, bool trustedSettlement = false)
     {
@@ -746,7 +941,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
             {
                 return false;
             }
-            if (_quarantined.Contains(id))
+            if (IsClosedLocked(id))
             {
                 if (trustedSettlement)
                 {
@@ -769,7 +964,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
     /// moves on and the snapshot is retried later (<see cref="TakeRetained"/>, a barrier, or a newer snapshot of the character). Any other failure is retried inline up to
     /// <see cref="MaxAttempts"/> times and then thrown. While the queue is stopping, a busy failure is a plain failure and every snapshot keeps its <see cref="MaxAttempts"/> inline
     /// attempts with their backoff, as before the stop drain existed; what the stop adds is the save queue's stop-drain lane: once it has stalled, no first attempt starts
-    /// (<see cref="StopDrainBudget.Refuse"/>: the snapshot stays retained with a <see cref="StopDrainExhaustedException"/> and <see cref="StopAsync"/> names it) and no retry
+    /// (<see cref="StopDrainBudget.Refuse"/>: the snapshot stays retained and <see cref="StopAsync"/> names it, with a <see cref="StopDrainExhaustedException"/>, or with its own failure when it is a sealed ownership refusal that was already retained) and no retry
     /// follows a failure (the snapshot is retained with its real failure).
     /// Returns false when the snapshot was written (or dropped by quarantine).
     /// </summary>
@@ -780,7 +975,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
         {
             lock (_gate)
             {
-                if (_quarantined.Contains(state.Id))
+                if (IsClosedLocked(state.Id))
                 {
                     if (trustedSettlement)
                     {
@@ -795,7 +990,13 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
             {
                 lock (_gate)
                 {
-                    _failed[state.Id] = new FailedSave(state, refused);
+                    // A snapshot retained because the fence refused it while the handoff was sealed keeps that refusal as its Failure: StopAsync only forgives that kind while sealed,
+                    // and the stalled drain must not turn it into a failure that fails the stop.
+                    Exception retainedFailure = _failed.TryGetValue(state.Id, out FailedSave? sealedRefusal) && sealedRefusal.Failure is CharacterOwnershipRejectedException
+                        ? sealedRefusal.Failure
+                        : refused;
+                    _failed[state.Id] = new FailedSave(state, retainedFailure, Deferred: _drain.IsPaused); // a pause ends: the consumer retries a paused refusal once the lane resumes
+                    DropRetainedIfRetiredLocked(state.Id);
                 }
 
                 throw refused; // nothing is attempted: the snapshot stays retained and StopAsync names it
@@ -869,6 +1070,38 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
 
                 return false;
             }
+            catch (CharacterOwnershipRejectedException ex) when (RefusalIsExpected(state.Id))
+            {
+                // The handoff is past its flush and the takeover landed, or it retired this character while the write was in flight: the fence refusing it is the expected end, not a queue fault.
+                // A refusal that is expected only because the handoff is sealed (nothing retired yet) is not proven final: if the handoff aborts, A resumes and still owns the character, so the
+                // snapshot stays retained (not deferred: no timer retries it into the fence) for the next barrier or newer snapshot. The retirement drops it (RetireCharacters), without the lost-save warning.
+                bool retainedForAbort;
+                lock (_gate)
+                {
+                    retainedForAbort = _sealed && !_allRetired && !_retired.Contains(state.Id) && !_quarantined.Contains(state.Id);
+                    if (retainedForAbort)
+                    {
+                        _failed[state.Id] = new FailedSave(state, ex);
+                    }
+                    else
+                    {
+                        _failed.Remove(state.Id);
+                        _exhaustedReported.Remove(state.Id);
+                    }
+                }
+
+                _logger.LogInformation(
+                    retainedForAbort
+                        ? "character {Id} snapshot refused while the handoff is undecided; retained in case it aborts ({Reason})"
+                        : "character {Id} snapshot dropped: the character belongs to another world after the handoff ({Reason})",
+                    state.Id, ex.Message);
+                if (trustedSettlement)
+                {
+                    throw; // a settlement is never told it was saved when nothing was written
+                }
+
+                return false;
+            }
             catch (CharacterOwnershipRejectedException ex)
             {
                 FaultLedger.Shared.Record("writequeue.character-ownership", ex);
@@ -883,6 +1116,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
                 lock (_gate)
                 {
                     _failed[state.Id] = new FailedSave(state, ex, Deferred: true);
+                    DropRetainedIfRetiredLocked(state.Id);
                     long ticks = (long)(BusyBackoff[Math.Min(_busyStreak, BusyBackoff.Count - 1)].TotalSeconds * Stopwatch.Frequency);
                     streak = ++_busyStreak;
                     _busyUntil = Stopwatch.GetTimestamp() + ticks;
@@ -915,6 +1149,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
                 lock (_gate)
                 {
                     _failed[state.Id] = new FailedSave(state, ex);
+                    DropRetainedIfRetiredLocked(state.Id);
                 }
 
                 FaultLedger.Shared.Record("writequeue.character-retry", ex);
@@ -934,6 +1169,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
                 lock (_gate)
                 {
                     _failed[state.Id] = new FailedSave(state, new OperationCanceledException(cancellationToken));
+                    DropRetainedIfRetiredLocked(state.Id);
                 }
 
                 throw;
@@ -957,6 +1193,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
         {
             _failed[state.Id] = new FailedSave(state, ex);
             newEpisode = _exhaustedReported.Add(state.Id); // a retained snapshot failing again is the same episode
+            DropRetainedIfRetiredLocked(state.Id);
         }
 
         if (newEpisode)
@@ -987,12 +1224,36 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
             throw new InvalidOperationException("character save queue has a terminal ownership failure", failure);
     }
 
-    /// <summary>Stops the queue for good because the durable owner of the characters database is not this world (the unfenced world found a claim): every queued snapshot is parked and <see cref="FatalFailure"/> is raised once. Safe from any thread.</summary>
-    public void FailTerminal(Exception failure) => EnterTerminalFailure(null, failure);
+    /// <summary>
+    /// Stops the queue for good because the durable owner of the characters database is not this world (the unfenced world found a claim): every queued snapshot is parked and
+    /// <see cref="FatalFailure"/> is raised once. Safe from any thread. False while a handoff is undecided (sealed): nothing stopped, and a watcher must keep watching, because after a resume the
+    /// same loss is terminal again. True when the caller is done: the queue stopped, or the world retired.
+    /// </summary>
+    public bool FailTerminal(Exception failure)
+    {
+        bool retired;
+        bool handingOff;
+        lock (_gate)
+        {
+            retired = _allRetired;
+            handingOff = _sealed || _allRetired;
+        }
+
+        if (handingOff)
+        {
+            // The takeover moved the ownership on purpose: a watcher of the ownership row (the worker heartbeat) sees that as lost, and a retiring world must not stop for it.
+            _logger.LogInformation("The ownership of the characters moved during a handoff; not a terminal failure ({Reason})", failure.Message);
+            return retired;
+        }
+
+        EnterTerminalFailure(null, failure);
+        return true;
+    }
 
     private void EnterTerminalFailure(CharacterState? current, Exception failure)
     {
         List<Waiter> waiters = [];
+        List<Action> settled = [];
         bool publish;
         lock (_gate)
         {
@@ -1011,6 +1272,12 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
                     slot.State = null;
                 }
 
+                if (slot.Settled is { Count: > 0 })
+                {
+                    settled.AddRange(slot.Settled);
+                    slot.Settled.Clear();
+                }
+
                 waiters.AddRange(slot.Waiters);
                 slot.Waiters.Clear();
                 slot.NormalHint = false;
@@ -1021,6 +1288,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
             _normalHints.Clear();
         }
 
+        RunSettled(settled);
         foreach (Waiter waiter in waiters)
         {
             waiter.Registration.Dispose();
@@ -1055,7 +1323,13 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
     {
         foreach ((int id, FailedSave failed) in _failed)
         {
-            if (!failed.Deferred || failed.Terminal || _quarantined.Contains(id))
+            if (!failed.Deferred || failed.Terminal || IsClosedLocked(id))
+            {
+                continue;
+            }
+
+            // Once stopped, a retry the lane refuses again (a pause-refused snapshot) or that can never change (terminal failure) would be picked forever: the stop's final pass names it instead.
+            if (_stopped && (_terminalFailure is not null || failed.Failure is StopDrainExhaustedException))
             {
                 continue;
             }
@@ -1414,5 +1688,8 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
         public bool Active;
         public bool NormalHint;
         public bool PriorityHint;
+
+        /// <summary>Callbacks of the snapshots merged into <see cref="State"/> (<see cref="ICharacterSaveQueue.Enqueue(CharacterState, Action)"/>); run when its write attempt ends.</summary>
+        public List<Action>? Settled;
     }
 }

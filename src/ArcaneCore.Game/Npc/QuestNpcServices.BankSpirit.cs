@@ -130,7 +130,7 @@ public sealed partial class QuestNpcServices
     /// The gossip spirit healer option (vmangos OnGossipSelect casts 17251 on the healer, whose
     /// effect asks the client to confirm): SMSG_SPIRIT_HEALER_CONFIRM (u64 healer) to a dead player.
     /// </summary>
-    internal static void SendSpiritHealerConfirm(Player player, NpcInfo npc)
+    internal void SendSpiritHealerConfirm(Player player, NpcInfo npc)
     {
         if (!player.IsAlive)
         {

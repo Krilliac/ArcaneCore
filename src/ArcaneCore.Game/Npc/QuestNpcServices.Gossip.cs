@@ -115,6 +115,14 @@ public sealed partial class QuestNpcServices
     public Action<Player>? InteractingCancels { get; set; }
 
     /// <summary>
+    /// Ends the player's Feign Death (vmangos <c>RemoveSpellsCausingAura(SPELL_AURA_FEIGN_DEATH)</c>) at the sites that guard it with the feign
+    /// state but, unlike <see cref="InteractingCancels"/>, do not cancel channels or other auras: HandleTaxiQueryAvailableNodes
+    /// (TaxiHandler.cpp:72-73). The flight start itself is the taxi flight system's before-flight step. Unset: nothing is ended. Set by
+    /// QuestNpcFeature when the spell system is available.
+    /// </summary>
+    public Action<Player>? BreakFeignDeath { get; set; }
+
+    /// <summary>
     /// CMSG_GOSSIP_HELLO and CMSG_QUESTGIVER_HELLO (vmangos HandleGossipHelloOpcode, NPCHandler.cpp:345-368; HandleQuestgiverHelloOpcode,
     /// QuestHandler.cpp:79-105): the creature pauses its movement (<see cref="PauseInteractionMovement"/>; NPCHandler.cpp:357-358,
     /// QuestHandler.cpp:93-95), a spirit guide sends its resurrection timer, SMSG_AREA_SPIRIT_HEALER_TIME (NPCHandler.cpp:360-361), then the
@@ -274,6 +282,12 @@ public sealed partial class QuestNpcServices
     /// unknown ids answer with the default greeting. Content is immutable, so any thread.
     /// </summary>
     public PacketWriter NpcTextQueryResponse(uint textId) => NpcPackets.NpcTextUpdate(textId, Npcs.Text(textId));
+
+    /// <summary>
+    /// A script closed the player's gossip window and sent SMSG_GOSSIP_COMPLETE itself: the menu goes too, so a late CMSG_GOSSIP_SELECT_OPTION for
+    /// it is refused (AzerothCore GossipDef.cpp:241 clears the sender). World thread only.
+    /// </summary>
+    public void ForgetGossipMenu(Player player) => StateOf(player)?.Menu.ClearMenus();
 
     /// <summary>vmangos Player::PrepareGossipMenu (creature source).</summary>
     internal void PrepareGossipMenu(PlayerNpcState s, NpcInfo npc, uint menuId)

@@ -71,6 +71,41 @@ public sealed partial class SpellSystem
     }
 
     /// <summary>
+    /// mangos-classic Unit::InterruptSpell(spellType) (Entities/Unit.cpp:4302-4329) as the DB script command INTERRUPT_SPELL (47) calls it
+    /// (DBScripts/ScriptMgr.cpp:2983-2991). <paramref name="currentSpellType"/> is the CurrentSpellTypes slot (Unit.h:797-804): 0 the queued
+    /// next-swing spell, 1 the cast being prepared, 2 the auto-repeat spell, 3 the channel. Only the unit's own matching cast is cancelled:
+    /// a prepared cast is not a channel and the reverse. A type above 3 is refused by the loader in mangos-classic (ScriptMgr.cpp:815-819), so it
+    /// does nothing here. Not ported: the CanBeInterrupted gate and the OnSpellInterrupt AI callback.
+    /// </summary>
+    /// <returns>True when a cast was cancelled.</returns>
+    public bool InterruptCurrentSpell(Unit unit, uint currentSpellType)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        UnitSpellState? state = GetState(unit.Guid);
+        if (state is null || !ReferenceEquals(state.Unit, unit))
+        {
+            return false;
+        }
+
+        switch (currentSpellType)
+        {
+            case 0 when state.MeleeCast is { State: not SpellCastState.Finished } melee:
+                Cancel(melee);
+                return true;
+            case 1 when state.CurrentCast is { State: SpellCastState.Preparing } generic:
+                Cancel(generic);
+                return true;
+            case 2:
+                return CancelAutoRepeat(unit);
+            case 3 when state.CurrentCast is { State: SpellCastState.Casting } channel:
+                Cancel(channel);
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /// <summary>
     /// vmangos Unit::InterruptSpellsWithChannelFlags: stop the unit's channel when its channel interrupt flags carry any of
     /// <paramref name="flags"/> (a channeled spell that ends when the caster mounts, for instance).
     /// </summary>

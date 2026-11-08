@@ -570,6 +570,9 @@ public sealed partial class Creature : Unit, ICombatCreature
     /// </summary>
     internal bool IgnoreTemplateResistances { get; set; }
 
+    /// <summary>True once <see cref="MarkHunterPetKind"/> ran: this creature is a hunter's permanent pet (vmangos HUNTER_PET). World thread.</summary>
+    internal bool IsHunterPetKind { get; private set; }
+
     /// <summary>
     /// Makes this creature a hunter's permanent pet by kind (vmangos GetPetType() == HUNTER_PET): it stops carrying the beast's template
     /// resistances, whoever owns or controls it. The key is the pet's own kind, set by the spawn of a persistent hunter pet, and not the owner's
@@ -577,6 +580,7 @@ public sealed partial class Creature : Unit, ICombatCreature
     /// </summary>
     internal void MarkHunterPetKind()
     {
+        IsHunterPetKind = true;
         IgnoreTemplateResistances = true;
         ApplyCreateResistances();
     }

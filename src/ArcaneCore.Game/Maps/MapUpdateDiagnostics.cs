@@ -49,6 +49,7 @@ internal sealed class MapUpdateDiagnostics
     internal Grid.GridLifecycleCounters Grids { get; set; }
 
     private PathSearchTotals _tilesBefore;
+    private SyncFileReadTotals _fileReadsBefore;
 
     /// <summary>
     /// Navigation tile installations the world thread made during this map update: on-demand path-query reads and grid tile loads
@@ -58,6 +59,9 @@ internal sealed class MapUpdateDiagnostics
 
     /// <summary>The slowest of those installations (default when none).</summary>
     internal TileLoadDetail SlowestTile { get; private set; }
+
+    /// <summary>Terrain and vmap tile files this thread read synchronously during the update (prefetch misses, <see cref="SyncTileReadCounters"/>).</summary>
+    internal SyncFileReadTotals FileReads { get; private set; }
 
     /// <summary>Forget the previous update's values so one instance can serve every update of a map.</summary>
     internal void Reset()
@@ -72,12 +76,14 @@ internal sealed class MapUpdateDiagnostics
         Grids = default;
         Tiles = default;
         SlowestTile = default;
+        FileReads = default;
     }
 
     /// <summary>Remember the world thread's tile counters at the start of the update (a few loads of thread-static fields).</summary>
     internal void BeginTiles()
     {
         _tilesBefore = PathSearchCounters.Current;
+        _fileReadsBefore = SyncTileReadCounters.Current;
         PathSearchCounters.ResetSlowestSyncTile();
     }
 
@@ -104,6 +110,7 @@ internal sealed class MapUpdateDiagnostics
     {
         CleanupMicros = ElapsedMicros();
         Tiles = PathSearchCounters.Current - _tilesBefore;
+        FileReads = SyncTileReadCounters.Current - _fileReadsBefore;
         SlowestTile = PathSearchCounters.SlowestSyncTile;
         Completed = true;
     }
@@ -176,6 +183,16 @@ internal sealed class MapUpdateDiagnostics
             sb.Append(", slowest map ").Append(SlowestTile.MapId).Append(" tile (").Append(SlowestTile.X).Append(", ").Append(SlowestTile.Y)
                 .Append(") ").Append((SlowestTile.Ticks * 1000.0 / Stopwatch.Frequency).ToString("F1", CultureInfo.InvariantCulture))
                 .Append(" ms, ").Append(SlowestTile.PrefetchHit ? "prefetch hit" : "prefetch miss");
+        }
+
+        if (FileReads.Reads > 0)
+        {
+            sb.Append("; terrain/vmap tile file reads (prefetch misses): ").Append(FileReads.Reads).Append(" (")
+                .Append(FileReads.Ms.ToString("F1", CultureInfo.InvariantCulture)).Append(" ms)");
+            if (FileReads.ReadsHoldingGate > 0)
+            {
+                sb.Append(", holding the serial gate ").Append(FileReads.ReadsHoldingGate);
+            }
         }
 
         return sb.ToString();

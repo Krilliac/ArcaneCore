@@ -195,7 +195,7 @@ public static class ContentTableSpecs
                 "z", "o", "speed", "condition_id",
             ], []),
         // World schema 42: the quest, gossip and event DB scripts (the relay layout, no key; DbScriptDumpImporter) and ScriptDev2's escort paths.
-        .. new[] { "dbscripts_on_quest_start", "dbscripts_on_quest_end", "dbscripts_on_gossip", "dbscripts_on_event", "dbscripts_on_creature_movement", "dbscripts_on_spell" }.Select(table => new TableSpec(table,
+        .. new[] { "dbscripts_on_quest_start", "dbscripts_on_quest_end", "dbscripts_on_gossip", "dbscripts_on_event", "dbscripts_on_creature_movement", "dbscripts_on_spell", "dbscripts_on_go_use", "dbscripts_on_go_template_use" }.Select(table => new TableSpec(table,
             [new KeyColumn("id"), new KeyColumn("delay"), new KeyColumn("priority"), new KeyColumn("command"), new KeyColumn("datalong"),
              new KeyColumn("buddy_entry"), new KeyColumn("dataint"), new KeyColumn("x"), new KeyColumn("y")],
             [
@@ -213,7 +213,24 @@ public static class ContentTableSpecs
         new("script_waypoint", [new KeyColumn("Entry"), new KeyColumn("PathId"), new KeyColumn("Point")],
             ["PositionX", "PositionY", "PositionZ", "Orientation", "WaitTime", "ScriptId"], []),
         new("creature_template_spells", [new KeyColumn("entry"), new KeyColumn("setId")], Enumerable.Range(1, 10).Select(i => "spell" + i), []),
-        new("creature_spell_list", [new KeyColumn("Id"), new KeyColumn("Position")], ["SpellId"], []),
+        // World schema 68: cmangos spell lists (CreatureDumpImporter.ReadSpellListEntry and its neighbours; TotemSpellDumpImporter also reads SpellId).
+        new("creature_spell_list", [new KeyColumn("Id"), new KeyColumn("Position")],
+            ["SpellId", "Flags", "CombatCondition", "TargetId", "ScriptId", "Availability", "Probability", "InitialMin", "InitialMax", "RepeatMin", "RepeatMax"], []),
+        new("creature_spell_list_entry", [new KeyColumn("Id")], ["Name", "ChanceSupportAction", "ChanceRangedAttack"], []),
+        new("creature_spell_targeting", [new KeyColumn("Id")], ["Type", "Param1", "Param2", "Param3", "UnitCondition"], []),
+        new("combat_condition", [new KeyColumn("Id")],
+            [
+                "WorldStateExpressionID", "SelfConditionID", "TargetConditionID", "FriendConditionLogic", "EnemyConditionLogic",
+                "FriendConditionID_0", "FriendConditionID_1", "FriendConditionOp_0", "FriendConditionOp_1", "FriendConditionCount_0", "FriendConditionCount_1",
+                "EnemyConditionID_0", "EnemyConditionID_1", "EnemyConditionOp_0", "EnemyConditionOp_1", "EnemyConditionCount_0", "EnemyConditionCount_1",
+            ], []),
+        new("unit_condition", [new KeyColumn("Id")],
+            [
+                "Flags",
+                .. Enumerable.Range(0, 8).Select(i => "Variable_" + i),
+                .. Enumerable.Range(0, 8).Select(i => "Op_" + i),
+                .. Enumerable.Range(0, 8).Select(i => "Value_" + i),
+            ], []),
         new("spell_template", [new KeyColumn("Id")],
             ["Effect1", "Effect2", "Effect3", "EffectMiscValue1", "EffectMiscValue2", "EffectMiscValue3"], []),
         new("gameobject_template", [new KeyColumn("entry")],
@@ -254,6 +271,9 @@ public static class ContentTableSpecs
         new("skill_fishing_base_level", [new KeyColumn("entry")], ["skill"], []),
         new("spell_proc_item_enchant", [new KeyColumn("entry")], [], [], EnchantProcDumpImporter.ReadsProcColumn),
         new("spell_enchant_charges", [new KeyColumn("entry")], [], [], EnchantProcDumpImporter.ReadsChargesColumn),
+        // World schema 70 (ItemTextDumpImporter): vmangos ObjectMgr::LoadPageTexts and LoadRandomEnchantmentsTable; the patch range is vmangos only.
+        new("page_text", [new KeyColumn("entry")], ["text", "next_page"], []),
+        new("item_enchantment_template", [new KeyColumn("entry"), new KeyColumn("ench")], ["chance", "patch_min", "patch_max"], []),
         new("item_template", [new KeyColumn("entry")], [], s_itemSignatures, ItemQuestDumpImporter.ReadsItemColumn),
         new("quest_template", [new KeyColumn("entry")], [], s_questSignatures, ItemQuestDumpImporter.ReadsQuestColumn),
         new("creature_questrelation", [new KeyColumn("id"), new KeyColumn("quest")], ["patch_min", "patch_max"], s_relationSignatures),
@@ -268,7 +288,7 @@ public static class ContentTableSpecs
         new("playercreateinfo_action", [new KeyColumn("race"), new KeyColumn("class"), new KeyColumn("button")], [], [], PlayerCreateActionDumpImporter.ReadsColumn),
         new("playercreateinfo_skills", [new KeyColumn("raceMask"), new KeyColumn("classMask"), new KeyColumn("skill")], ["step", "note"], []),
         new("spell_target_position", [new KeyColumn("id")], [], s_buildRangeSignatures, PlayerCreateDumpImporter.ReadsTargetColumn),
-        new("spell_script_target", [new KeyColumn("entry"), new KeyColumn("type"), new KeyColumn("targetEntry")], ["inverseEffectMask"], []),
+        new("spell_script_target", [new KeyColumn("entry"), new KeyColumn("type"), new KeyColumn("targetEntry")], ["inverseEffectMask", "conditionId"], []),
         new("creature_linking", [new KeyColumn("guid")], ["master_guid", "flag"], []),
         new("creature_linking_template", [new KeyColumn("entry"), new KeyColumn("map")], ["master_entry", "flag", "search_range"], []),
         new("player_levelstats", [new KeyColumn("race"), new KeyColumn("class"), new KeyColumn("level")], [], [], PlayerCreateDumpImporter.ReadsLevelColumn),
@@ -298,6 +318,8 @@ public static class ContentTableSpecs
         // pet_levelstats: classic-db keys it by creature_entry, vmangos by entry (PetDumpImporter).
         new("pet_levelstats", [new KeyColumn("entry", "creature_entry"), new KeyColumn("level")], [], [], PetDumpImporter.ReadsLevelColumn),
         new("petcreateinfo_spell", [new KeyColumn("entry")], [], [], PetDumpImporter.ReadsSpellColumn),
+        // pet_name_generation: a vmangos table (id, word, entry, half; not checked against classic-db); the halves of a demon's generated name (PetDumpImporter, ObjectMgr::LoadPetNames).
+        new("pet_name_generation", [new KeyColumn("id")], [], [], PetDumpImporter.ReadsNameColumn),
         // The world-state tables (WorldStateDumpImporter reads game_weather and exploration_basexp by name), the seven game-event tables
         // (GameEventDumpImporter, keyed as it keys its own maps), the ship periods (TransportDumpImporter; a missing build reads as 0) and
         // the inns (AreaTriggerTavernDumpImporter reads only id). Without a spec `plan` listed them as read by no importer and the scan

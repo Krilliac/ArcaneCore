@@ -89,12 +89,14 @@ Scripted scans have check id 0 and use `Action`.
 Each kind has an evidence class: timing is protocol health, memory and MPQ are integrity invariants, Lua and scripted scans corroborate,
 and page, driver, module and API-hook scans are threat signatures.
 
-- A failed scan of any kind but timing and scripted is sent again alone, at once (an isolated confirmation rescan), and nothing is
+- A failed scan of any kind but timing, scripted and id 0 is sent again alone, at once (an isolated confirmation rescan), and nothing is
   reported yet.
 - The rescan decides. A match clears it (one log line). A confirmed mismatch of an integrity or threat-signature scan takes the scan's
   action. A confirmed unreadable result, or a confirmed corroboration mismatch, is logged once, and the same check and outcome are not
   rescanned again in that session.
 - A failed timing or scripted scan cannot be confirmed: it is logged (timing, corroboration), never acted on.
+- A failed check with id 0 (memory, MPQ, page, module, driver or API hook, including an unreadable result) is also never confirmed and never
+  acts under `ConfirmFailedScans`: it is logged, so the finding stays visible.
 
 Without the option a failed scan takes its action at once, as before.
 
@@ -116,4 +118,6 @@ Without the option a failed scan takes its action at once, as before.
 - **Evidence classes are fixed per kind** (memory and MPQ integrity, Lua corroboration, page, driver, module and API hook threat
   signature). MaNGOS Zero lets each catalogue row choose its class; ArcaneCore has no per-check override. Confirmation dispositions are
   log lines, not MaNGOS Zero's persisted audit and incident rows.
+- **SFileCloseFile callback RVA is settled, not a gap.** The client's MPQ archive callbacks are sent in MODULE_INITIALIZE command 3, record 1 (`WardenModuleProfile.ArchiveRvas`, encoded by `WardenCodec`); entry 3 stays 0x00248730. A static read of the 1.12.1 client settled the disagreement between references: VA 0x648730 takes a file handle, fcloses its FILE*, frees the handle struct and shares its callers with the open at 0x6477A0, so it is SFileCloseFile (MaNGOS Zero `WardenModuleCatalog.cpp` and krilliac-server-Zero `WardenWin.cpp` Function1[3] agree). The 0x253900 that vmangos lists (`WardenWin.hpp`; VA 0x653900) is a refcounted routine that takes a critical section and unlinks a list entry, and 0x648730 itself calls it on field +60, so it is the archive close, not the file close. No client check is needed.
+- **Id 0 is never confirmed and never acts under `ConfirmFailedScans`.** MaNGOS Zero confirms only a non-zero check id (`WardenEvidence.cpp` NeedsConfirmation); a failure without confirmation produces no decision there, and its catalogue rejects id 0 at load. Here an id 0 memory, MPQ, page, module, driver or API-hook failure (a mismatch or an unreadable result) is logged only; a scripted or timing scan keeps its own rule above. `Warden:Checks` allows at most one id 0 check: a second makes validation fail, so Warden stays off (the gateway reports not ready). Give configured checks distinct non-zero ids to get the confirmation.
 - **Request size.** Queued (login, scripted, confirmation) requests keep to vmangos's 256-byte reply limit; the rotation does not check it.

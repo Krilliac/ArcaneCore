@@ -1,5 +1,8 @@
 using System.Buffers.Binary;
+using System.IO.Compression;
 using System.Text;
+using ArcaneCore.Data.Content.Items;
+using ArcaneCore.Data.Items;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Crafting;
@@ -19,8 +22,10 @@ namespace ArcaneCore.World.Tests.Items;
 /// <summary>
 /// The optional client data of the live realm, read from the real files: the build-5875 DBCs of <c>ARCANECORE_TEST_DBC_DIR</c> (for example
 /// client-dbc-5875-effective) and the classic-db dump of <c>ARCANECORE_CLASSICDB_DUMP</c>, configured with exactly the keys
-/// tools\content\set-optional-data.ps1 writes. The world starts without the five "missing optional data" warnings and each feature answers
-/// from the data: item set bonuses, random suffixes and their enchantments, readable pages and the character-creation appearance check.
+/// tools\content\set-optional-data.ps1 writes. The dump's <c>page_text</c> and <c>item_enchantment_template</c> rows reach the world through
+/// in-memory stores holding what <c>arcane-content-importer</c> would write to the world database. The world starts without the "missing
+/// optional data" warnings and each feature answers from the data: item set bonuses, random suffixes and their enchantments, readable pages
+/// and the character-creation appearance check.
 /// </summary>
 public sealed class OptionalClientDataRealTests(ITestOutputHelper output)
 {
@@ -30,23 +35,50 @@ public sealed class OptionalClientDataRealTests(ITestOutputHelper output)
     internal static readonly string[] MissingDataWarnings =
     [
         "ItemSets:DbcPath is not set",
-        "ItemRandomProperties:DbcPath and ItemRandomProperties:EnchantmentTemplateDumpPath are not both set",
-        "PageText:DumpPath is not set",
+        "ItemRandomProperties:DbcPath is not set",
+        "The world database has no item_enchantment_template rows",
+        "The world database has no page_text rows",
         "no SpellItemEnchantment.dbc is configured",
         "appearance (CharSections.dbc)",
         "CharacterCreation:CharSectionsDbcPath",
     ];
 
-    internal static Dictionary<string, string?> Keys(string dbcDirectory, string dump) => new()
+    internal static Dictionary<string, string?> Keys(string dbcDirectory) => new()
     {
         ["ItemSets:DbcPath"] = Path.Combine(dbcDirectory, "ItemSet.dbc"),
         ["ItemRandomProperties:DbcPath"] = Path.Combine(dbcDirectory, "ItemRandomProperties.dbc"),
-        ["ItemRandomProperties:EnchantmentTemplateDumpPath"] = dump,
-        ["PageText:DumpPath"] = dump,
         ["Enchanting:SpellItemEnchantmentDbcPath"] = Path.Combine(dbcDirectory, "SpellItemEnchantment.dbc"),
         ["CharacterCreation:CharSectionsDbcPath"] = Path.Combine(dbcDirectory, "CharSections.dbc"),
         ["CharacterCreation:CharacterFacialHairStylesDbcPath"] = Path.Combine(dbcDirectory, "CharacterFacialHairStyles.dbc"),
     };
+
+    /// <summary>The rows <c>ItemTextDumpImporter</c> would write to the world database, read from the dump (plain or .gz) with its own parsers.</summary>
+    private static (IReadOnlyList<PageTextRecord> Pages, IReadOnlyList<ItemEnchantmentChance> Templates) ReadDump(string path)
+    {
+        using Stream file = File.OpenRead(path);
+        using Stream input = path.EndsWith(".gz", StringComparison.OrdinalIgnoreCase) ? new GZipStream(file, CompressionMode.Decompress) : file;
+        using var reader = new StreamReader(input);
+        var pages = new List<PageTextRecord>();
+        var templates = new List<ItemEnchantmentChance>();
+        foreach (object item in new ArcaneCore.Data.World.Creatures.MySqlDumpReader(reader).Read())
+        {
+            if (item is not ArcaneCore.Data.World.Creatures.DumpRow row)
+            {
+                continue;
+            }
+
+            if (PageTextDumpReader.Parse(row) is { } page)
+            {
+                pages.Add(page);
+            }
+            else if (ItemEnchantmentTemplateDumpReader.Parse(row) is { } chance)
+            {
+                templates.Add(chance);
+            }
+        }
+
+        return (pages, templates);
+    }
 
     private static (uint Page, string Text, uint Next) DecodePage(byte[] payload)
     {
@@ -60,6 +92,7 @@ public sealed class OptionalClientDataRealTests(ITestOutputHelper output)
     {
         string dbc = Environment.GetEnvironmentVariable(OptionalClientDataFactAttribute.DbcVariable)!;
         string dump = Environment.GetEnvironmentVariable(OptionalClientDataFactAttribute.DumpVariable)!;
+        (IReadOnlyList<PageTextRecord> pages, IReadOnlyList<ItemEnchantmentChance> templates) = ReadDump(dump);
         var logs = new LogCapture();
         var content = new ItemTestContent();
         // classic-db item_enchantment_template entry 454: 17 suffixes ("of Intellect" 5, "of Stamina" 15, "of the Owl" 754, ...).
@@ -72,7 +105,9 @@ public sealed class OptionalClientDataRealTests(ITestOutputHelper output)
         {
             host = WorldTestHost.Start(configureServices: services =>
             {
-                services.AddSingleton<IConfiguration>(new ConfigurationBuilder().AddInMemoryCollection(Keys(dbc, dump)).Build());
+                services.AddSingleton<IConfiguration>(new ConfigurationBuilder().AddInMemoryCollection(Keys(dbc)).Build());
+                services.AddSingleton<IPageTextStore>(new InMemoryPageTextStore(pages));
+                services.AddSingleton<IItemEnchantmentTemplateStore>(new InMemoryItemEnchantmentTemplateStore(templates));
                 logs.Register(services);
             });
         }

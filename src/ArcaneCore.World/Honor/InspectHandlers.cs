@@ -13,7 +13,8 @@ namespace ArcaneCore.World.Honor;
 /// <summary>
 /// CMSG_INSPECT and MSG_INSPECT_HONOR_STATS (vmangos MiscHandler.cpp:943-1036). Both take the target's u64 guid and answer only for
 /// a player on the same map within 10 yards (INSPECT_DISTANCE, ObjectDefines.h:26) that the inspector could not attack: an
-/// enemy-faction player, or anyone unreachable, gets no reply (the original returns silently). CMSG_INSPECT also selects the
+/// enemy-faction player, or anyone unreachable, gets no reply (the original returns silently). A game master with GM mode on skips the
+/// attackability test (an ArcaneCore extension, vmangos has none) and so inspects either faction. CMSG_INSPECT also selects the
 /// target, and its answer is just the guid (the equipment is read by the client from the update fields). The honor statistics are the
 /// 50-byte <see cref="HonorPackets.InspectHonorStats"/> read from the target's honor update fields, so they work for whatever the
 /// honor feature published (zeros without it).
@@ -31,7 +32,7 @@ public sealed class InspectHandlers : IOpcodeHandlerGroup
     }
 
     /// <summary>The player an inspect request may be answered for, or null (HandleInspectOpcode checks, MiscHandler.cpp:949-956).</summary>
-    public static Player? InspectableTarget(Player inspector, ObjectGuid guid)
+    public static Player? InspectableTarget(Player inspector, ObjectGuid guid, bool gmCrossFaction = true)
     {
         ArgumentNullException.ThrowIfNull(inspector);
         if (inspector.Map is not { } map || map.FindPlayer(guid) is not { } target)
@@ -47,7 +48,8 @@ public sealed class InspectHandlers : IOpcodeHandlerGroup
             return null;
         }
 
-        return map.Combat.Hooks.CanAttack(inspector, target) ? null : target;
+        // A game master (.gm on) inspects across factions; the other player's own rules are untouched.
+        return !(gmCrossFaction && inspector.IsGameMaster) && map.Combat.Hooks.CanAttack(inspector, target) ? null : target;
     }
 
     /// <summary>Tell every <see cref="IPlayerInspectReceiver"/> that a real player inspected a playerbot (after the reply was sent).</summary>
@@ -64,6 +66,9 @@ public sealed class InspectHandlers : IOpcodeHandlerGroup
         }
     }
 
+    /// <summary>The <c>World:Honor:GmCrossFactionInspect</c> option (true without the honor feature).</summary>
+    private static bool GmCrossFaction(WorldSession session) => session.Services.GetService<HonorFeature>()?.Options.GmCrossFactionInspect ?? true;
+
     private static void HandleInspect(WorldSession session, Player player, byte[] payload)
     {
         if (payload.Length < 8)
@@ -73,7 +78,7 @@ public sealed class InspectHandlers : IOpcodeHandlerGroup
 
         var guid = new ObjectGuid(new PacketReader(payload).ReadUInt64());
         player.Selection = guid;
-        if (InspectableTarget(player, guid) is { } target)
+        if (InspectableTarget(player, guid, GmCrossFaction(session)) is { } target)
         {
             var writer = new PacketWriter(8);
             writer.WriteUInt64(target.Guid.Value);
@@ -90,7 +95,7 @@ public sealed class InspectHandlers : IOpcodeHandlerGroup
         }
 
         var guid = new ObjectGuid(new PacketReader(payload).ReadUInt64());
-        if (InspectableTarget(player, guid) is { } target)
+        if (InspectableTarget(player, guid, GmCrossFaction(session)) is { } target)
         {
             session.Send(WorldOpcode.MsgInspectHonorStats, HonorPackets.InspectHonorStats(target));
             NotifyBotInspected(session, player, target);

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Numerics.Tensors;
 using System.Runtime.InteropServices;
+using ArcaneCore.Kernel.Safety;
 using ArcaneCore.World.Playerbots.Chat.Inference.Serving;
 
 namespace ArcaneCore.World.Playerbots.Chat.Inference;
@@ -361,6 +362,7 @@ internal sealed class ChatInferenceContext : IDisposable
         for (int t = 0; t < batch; t++) TensorPrimitives.Add(output.AsSpan(t * weight.Rows, weight.Rows), bias, output.AsSpan(t * weight.Rows, weight.Rows));
     }
 
+    [AuditedUnsafe("MemoryMarshal.Cast<byte, float> views one F32 weight row of the read-only GGUF mapping as floats for a dot product; the row is whole floats of the tensor's own type, the view is read-only and not kept past the row")]
     private sealed class MatMulJob(GgufFile file, float[][] scratch) : IInferenceJob
     {
         private WeightMatrix? _weight;

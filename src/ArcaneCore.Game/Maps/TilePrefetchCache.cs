@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using ArcaneCore.Game.Maps.Collision;
 
 namespace ArcaneCore.Game.Maps;
 
@@ -29,14 +30,50 @@ internal sealed class TilePrefetchCache<T>
     /// </summary>
     internal const int MaxArrivalEntries = 32;
 
-    private readonly Dictionary<(uint Map, int X, int Y), (Task<T?> Load, long RequestedMs, bool Arrival)> _entries = [];
+    private const int WaitingForThread = 0;
+    private const int Reading = 1;
+    private const int Claimed = 2;
+
+    private readonly Dictionary<(uint Map, int X, int Y), (Task<T?> Load, long RequestedMs, bool Arrival, Turn Turn)> _entries = [];
     private readonly Stopwatch _clock = Stopwatch.StartNew();
+    private readonly SyncReadFile? _reportedAs;
+
+    /// <param name="reportedAs">
+    /// The file kind whose process totals (<see cref="SyncTileReadCounters.PrefetchDrops"/>) this cache's dropped prefetches go to; none for a
+    /// cache outside those totals (the navigation mesh, tests).
+    /// </param>
+    internal TilePrefetchCache(SyncReadFile? reportedAs = null)
+    {
+        _reportedAs = reportedAs;
+        NowMs = () => _clock.ElapsedMilliseconds;
+    }
+
+    /// <summary>Whether a prefetch's work got a thread or was claimed first (<see cref="TryClaimQueued"/>); both sides race on it once.</summary>
+    private sealed class Turn
+    {
+        internal int State; // WaitingForThread, Reading or Claimed
+    }
+
+    /// <summary>Starts a prefetch's work: the thread pool, unless a test holds the work back.</summary>
+    internal Func<Func<T?>, Task<T?>> Start { get; set; } = work => Task.Run(work);
+
+    /// <summary>The cache's clock in milliseconds: a stopwatch, unless a test moves it.</summary>
+    internal Func<long> NowMs { get; set; }
 
     /// <summary>Prefetched tiles the loader took (diagnostics and tests).</summary>
     internal int Hits { get; private set; }
 
     /// <summary>Prefetches started.</summary>
     internal int Requests { get; private set; }
+
+    /// <summary>Untaken approach prefetches dropped to make room (<see cref="MaxEntries"/>): the loader reads such a tile itself if it is still needed.</summary>
+    internal int Evictions { get; private set; }
+
+    /// <summary>Untaken arrival prefetches dropped to make room (<see cref="MaxArrivalEntries"/>).</summary>
+    internal int ArrivalEvictions { get; private set; }
+
+    /// <summary>Untaken prefetches dropped past <see cref="ExpiryMs"/>. Counted when a later <see cref="Request"/> sweeps them, not at the moment they expire.</summary>
+    internal int Expiries { get; private set; }
 
     /// <summary>Prefetches waiting to be taken.</summary>
     internal int Pending => _entries.Count;
@@ -54,8 +91,14 @@ internal sealed class TilePrefetchCache<T>
 
         Sweep(arrival);
         Requests++;
-        _entries[(mapId, tileX, tileY)] = (Task.Run(() =>
+        var turn = new Turn();
+        _entries[(mapId, tileX, tileY)] = (Start(() =>
         {
+            if (Interlocked.CompareExchange(ref turn.State, Reading, WaitingForThread) != WaitingForThread)
+            {
+                return null; // claimed while it waited for a thread: the file is read elsewhere
+            }
+
             try
             {
                 return load();
@@ -64,19 +107,21 @@ internal sealed class TilePrefetchCache<T>
             {
                 return null; // the loader reads it again itself and reports the problem as it always did
             }
-        }), _clock.ElapsedMilliseconds, arrival);
+        }), NowMs(), arrival, turn);
     }
 
     /// <summary>The prefetched tile if it finished; the entry is dropped either way (an unfinished one is not waited for).</summary>
     internal bool TryTake(uint mapId, int tileX, int tileY, out T value)
     {
-        if (_entries.Remove((mapId, tileX, tileY), out (Task<T?> Load, long RequestedMs, bool Arrival) entry)
+#pragma warning disable ARC0006 // IsCompletedSuccessfully is checked in the same condition, so Result does not block
+        if (_entries.Remove((mapId, tileX, tileY), out (Task<T?> Load, long RequestedMs, bool Arrival, Turn Turn) entry)
             && entry.Load.IsCompletedSuccessfully && entry.Load.Result is { } loaded)
         {
             Hits++;
             value = loaded;
             return true;
         }
+#pragma warning restore ARC0006
 
         value = null!;
         return false;
@@ -84,7 +129,23 @@ internal sealed class TilePrefetchCache<T>
 
     /// <summary>Whether a prefetch of the tile is still being read (not finished, not taken).</summary>
     internal bool IsRunning(uint mapId, int tileX, int tileY)
-        => _entries.TryGetValue((mapId, tileX, tileY), out (Task<T?> Load, long RequestedMs, bool Arrival) entry) && !entry.Load.IsCompleted;
+        => _entries.TryGetValue((mapId, tileX, tileY), out (Task<T?> Load, long RequestedMs, bool Arrival, Turn Turn) entry) && !entry.Load.IsCompleted;
+
+    /// <summary>
+    /// Take back a prefetch that has no thread yet, for a caller that must not wait on a busy pool and will read the tile itself: the entry
+    /// is dropped and its work reads nothing when it does run. False, with the entry kept, when there is none or its read has begun.
+    /// </summary>
+    internal bool TryClaimQueued(uint mapId, int tileX, int tileY)
+    {
+        if (!_entries.TryGetValue((mapId, tileX, tileY), out (Task<T?> Load, long RequestedMs, bool Arrival, Turn Turn) entry)
+            || Interlocked.CompareExchange(ref entry.Turn.State, Claimed, WaitingForThread) != WaitingForThread)
+        {
+            return false;
+        }
+
+        _entries.Remove((mapId, tileX, tileY));
+        return true;
+    }
 
     /// <summary>Whether a prefetch of the tile was asked for and not taken yet, finished or not (diagnostics and tests).</summary>
     internal bool Contains(uint mapId, int tileX, int tileY) => _entries.ContainsKey((mapId, tileX, tileY));
@@ -94,17 +155,18 @@ internal sealed class TilePrefetchCache<T>
 
     private void Sweep(bool arrival)
     {
-        long now = _clock.ElapsedMilliseconds;
         if (_entries.Count == 0)
         {
             return;
         }
 
+        long now = NowMs();
+
         List<(uint, int, int)>? expired = null;
         (uint, int, int)? oldest = null;
         long oldestMs = long.MaxValue;
         int sameClass = 0;
-        foreach (((uint, int, int) key, (Task<T?> _, long requested, bool entryArrival)) in _entries)
+        foreach (((uint, int, int) key, (Task<T?> _, long requested, bool entryArrival, Turn _)) in _entries)
         {
             if (now - requested > ExpiryMs)
             {
@@ -126,12 +188,32 @@ internal sealed class TilePrefetchCache<T>
             foreach ((uint, int, int) key in expired)
             {
                 _entries.Remove(key);
+                Expiries++;
+                Report(PrefetchDrop.Expired);
             }
         }
 
         if (sameClass >= (arrival ? MaxArrivalEntries : MaxEntries) && oldest is { } drop)
         {
             _entries.Remove(drop);
+            if (arrival)
+            {
+                ArrivalEvictions++;
+            }
+            else
+            {
+                Evictions++;
+            }
+
+            Report(arrival ? PrefetchDrop.ArrivalEvicted : PrefetchDrop.Evicted);
+        }
+    }
+
+    private void Report(PrefetchDrop drop)
+    {
+        if (_reportedAs is { } file)
+        {
+            SyncTileReadCounters.RecordPrefetchDrop(file, drop);
         }
     }
 }

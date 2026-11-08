@@ -62,9 +62,11 @@ internal sealed class PlayerbotChatSafety
     private readonly Dictionary<ulong, long> _disclosed = [];
     private readonly ConcurrentQueue<BotChatMute> _mutes = new();
     private readonly object _filterGate = new();
-    private PlayerbotChatSafetyFilter _filter = PlayerbotChatSafetyFilter.Default;
-    private (string File, bool Replace, DateTime Written) _filterSource = (string.Empty, false, default);
-    private DateTimeOffset _filterCheckedAt = DateTimeOffset.MinValue;
+    private FilterState _filterState = new(PlayerbotChatSafetyFilter.Default, string.Empty, false, default);
+    private long _filterCheckedTicks;
+    private (string File, bool Replace, TimeSpan Timeout) _filterAttempt; // guarded by _filterGate: the keys the last file read was started for
+    private Task _filterRefresh = Task.CompletedTask; // guarded by _filterGate
+    private long _filterGeneration; // guarded by _filterGate: bumped by every publish, so a refresh started before one never overwrites it
     private long _screened;
     private long _flagged;
     private long _moderationFlagged;
@@ -82,7 +84,7 @@ internal sealed class PlayerbotChatSafety
         _options = options;
         _time = time;
         _logger = logger;
-        _ = Warm(_filter); // on the thread pool: the first player line after start does not pay the patterns' first-match cost
+        _ = Warm(_filterState.Filter); // on the thread pool: the first player line after start does not pay the patterns' first-match cost
     }
 
     /// <summary>
@@ -97,6 +99,12 @@ internal sealed class PlayerbotChatSafety
 
     private PlayerbotChatSafetyOptions Options => _options().Safety;
 
+    /// <summary>How a terms file is read into a filter (thread pool). <see cref="PlayerbotChatSafetyFilter.Load"/>; tests replace it to hold a read open.</summary>
+    internal Func<string, bool, TimeSpan, PlayerbotChatSafetyFilter> LoadTerms { get; set; } = (file, replace, timeout) => PlayerbotChatSafetyFilter.Load(file, replace, timeout);
+
+    /// <summary>The filter last published, read without the options check of <see cref="Filter"/> (tests).</summary>
+    internal PlayerbotChatSafetyFilter PublishedFilter => Volatile.Read(ref _filterState).Filter;
+
     /// <summary>
     /// One number per login of a player (world thread): a new <see cref="Game.Entities.Player"/> is made at every login, so the
     /// disclosure is once per login without any login hook.
@@ -105,7 +113,15 @@ internal sealed class PlayerbotChatSafety
 
     // --- the filter -------------------------------------------------------------------------------------------------------
 
-    /// <summary>The filter for the current options: the shipped list, plus or instead of the operator's file (re-read when it changes).</summary>
+    /// <summary>The filter in use and the keys it was built from. Immutable; swapped whole with <see cref="Volatile.Write{T}(ref T, T)"/>.</summary>
+    private sealed record FilterState(PlayerbotChatSafetyFilter Filter, string File, bool Replace, DateTime Written);
+
+    /// <summary>
+    /// The filter for the current options: the shipped list, plus or instead of the operator's file. Never does file I/O and never takes
+    /// the lock on the common path (it may run on the world tick). The file is checked every <see cref="TermsFileCheck"/> (a read that fails is retried at that pace too, not on every call) and, when it
+    /// (or the file, replace or timeout option) changed, read and rebuilt on the thread pool; until that finishes the previous filter is
+    /// returned, then the new one is published whole. A change of the timeout alone (no file) rebuilds here: it reads nothing.
+    /// </summary>
     internal PlayerbotChatSafetyFilter Filter()
     {
         PlayerbotChatSafetyOptions options = Options;
@@ -113,25 +129,87 @@ internal sealed class PlayerbotChatSafety
         bool replace = options.ReplaceDefaultTerms;
         TimeSpan timeout = options.PatternTimeout;
         DateTimeOffset now = _time.GetUtcNow();
+        FilterState state = Volatile.Read(ref _filterState);
+        bool sameKeys = state.File == file && state.Replace == replace && state.Filter.MatchTimeout == timeout;
+        if (sameKeys && (file.Length == 0 || now.UtcTicks - Volatile.Read(ref _filterCheckedTicks) < TermsFileCheck.Ticks))
+            return state.Filter;
+
         lock (_filterGate)
         {
-            bool sameKeys = _filterSource.File == file && _filterSource.Replace == replace && _filter.MatchTimeout == timeout;
-            if (sameKeys && (file.Length == 0 || now - _filterCheckedAt < TermsFileCheck)) return _filter;
-            _filterCheckedAt = now;
-            DateTime written = file.Length == 0 ? default : WrittenAt(file);
-            if (sameKeys && written == _filterSource.Written) return _filter;
-            PlayerbotChatSafetyFilter filter = file.Length == 0 && timeout == PlayerbotChatSafetyFilter.PatternTimeout
-                ? PlayerbotChatSafetyFilter.Default
-                : PlayerbotChatSafetyFilter.Load(file.Length == 0 ? null : file, replace, timeout);
-            foreach (string problem in filter.Problems) _logger.LogWarning("Bot chat safety: {Problem}", problem);
-            if (file.Length > 0)
-                _logger.LogInformation("Bot chat safety: {Terms} terms and {Patterns} patterns loaded ({Source})",
-                    filter.Size.Terms, filter.Size.Patterns, replace ? file : "the shipped list and " + file);
-            _filter = filter;
-            _ = Warm(filter); // a new or reloaded filter is warmed on the thread pool, never on the caller's (maybe the world) thread
-            _filterSource = (file, replace, written);
-            return filter;
+            state = _filterState;
+            sameKeys = state.File == file && state.Replace == replace && state.Filter.MatchTimeout == timeout;
+            if (sameKeys && (file.Length == 0 || now.UtcTicks - Volatile.Read(ref _filterCheckedTicks) < TermsFileCheck.Ticks))
+                return state.Filter;
+            if (file.Length == 0)
+            {
+                // Options changed and there is no file: building the rules reads nothing, so it is done here (as it always was).
+                PlayerbotChatSafetyFilter built = timeout == PlayerbotChatSafetyFilter.PatternTimeout
+                    ? PlayerbotChatSafetyFilter.Default
+                    : PlayerbotChatSafetyFilter.Load(null, replace, timeout);
+                Publish(built, file, replace, default, null);
+                return built;
+            }
+
+            if (!_filterRefresh.IsCompleted)
+                return state.Filter; // a check is already running; it publishes when done
+
+            // The same file and options were already tried less than TermsFileCheck ago and did not publish (the read failed, or the file
+            // vanished): every line of chat would otherwise start a read and log a fault. A change of the keys starts one at once.
+            if (_filterAttempt == (file, replace, timeout) && now.UtcTicks - Volatile.Read(ref _filterCheckedTicks) < TermsFileCheck.Ticks)
+                return state.Filter;
+            _filterAttempt = (file, replace, timeout);
+            Volatile.Write(ref _filterCheckedTicks, now.UtcTicks);
+            long generation = _filterGeneration;
+            _filterRefresh = Task.Run(() => RefreshFromFile(file, replace, timeout, generation));
+            return state.Filter;
         }
+    }
+
+    /// <summary>The in-flight terms file check (or a completed task): for tests, and for a caller that must see the reload before it goes on.</summary>
+    internal Task SettleFilter()
+    {
+        _ = Filter();
+        lock (_filterGate) return _filterRefresh;
+    }
+
+    /// <summary>Thread pool: stat the file, and when it or the keys changed read it and publish the rebuilt filter.</summary>
+    private void RefreshFromFile(string file, bool replace, TimeSpan timeout, long generation)
+    {
+        try
+        {
+            DateTime written = WrittenAt(file);
+            FilterState state = Volatile.Read(ref _filterState);
+            bool sameKeys = state.File == file && state.Replace == replace && state.Filter.MatchTimeout == timeout;
+            if (sameKeys && written == state.Written) return;
+            PlayerbotChatSafetyFilter filter = LoadTerms(file, replace, timeout);
+            lock (_filterGate)
+            {
+                // Something was published while this file was read (an options change with no file builds and publishes at once), or the
+                // options no longer ask for this file: this result is older than the filter in force and is dropped. The next Filter()
+                // call starts a fresh check when the keys still differ.
+                PlayerbotChatSafetyOptions now = Options;
+                if (_filterGeneration != generation || (now.TermsFile?.Trim() ?? string.Empty) != file || now.ReplaceDefaultTerms != replace || now.PatternTimeout != timeout)
+                    return;
+                Publish(filter, file, replace, written, file);
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("playerbot.chat-safety-reload", ex);
+            _logger.LogFault("chat-safety-reload", ex, "Bot chat safety: the terms file {File} could not be reloaded; the previous filter stays", file);
+        }
+    }
+
+    /// <summary>Swap in <paramref name="filter"/> (called with <c>_filterGate</c> held: the lock guards only this swap and its bookkeeping).</summary>
+    private void Publish(PlayerbotChatSafetyFilter filter, string file, bool replace, DateTime written, string? loggedFile)
+    {
+        foreach (string problem in filter.Problems) _logger.LogWarning("Bot chat safety: {Problem}", problem);
+        if (loggedFile is not null)
+            _logger.LogInformation("Bot chat safety: {Terms} terms and {Patterns} patterns loaded ({Source})",
+                filter.Size.Terms, filter.Size.Patterns, replace ? loggedFile : "the shipped list and " + loggedFile);
+        _filterGeneration++;
+        Volatile.Write(ref _filterState, new FilterState(filter, file, replace, written));
+        _ = Warm(filter); // a new or reloaded filter is warmed on the thread pool, never on the caller's (maybe the world) thread
     }
 
     private static DateTime WrittenAt(string file)

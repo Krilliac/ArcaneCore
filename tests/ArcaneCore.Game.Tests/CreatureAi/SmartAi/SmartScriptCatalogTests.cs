@@ -250,7 +250,7 @@ public sealed class SmartScriptCatalogTests
         Assert.Empty(SmartScriptSupport.Events(SmartScriptSource.TimedActionList));
         Assert.Equal(SmartScriptSupport.Actions(SmartScriptSource.Creature), SmartScriptSupport.Actions(SmartScriptSource.TimedActionList));
         Assert.Equal(SmartScriptSupport.Targets(SmartScriptSource.Creature), SmartScriptSupport.Targets(SmartScriptSource.TimedActionList));
-        Assert.Equal<byte>([1, 37, 59, 60, 61, 63, 64], SmartScriptSupport.Events(SmartScriptSource.GameObject).Order());
+        Assert.Equal<byte>([1, 37, 38, 59, 60, 61, 63, 64], SmartScriptSupport.Events(SmartScriptSource.GameObject).Order());
         Assert.Equal<byte>([46, 61], SmartScriptSupport.Events(SmartScriptSource.AreaTrigger).Order());
         Assert.Equal<byte>([1, 80, 87, 88], SmartScriptSupport.Actions(SmartScriptSource.AreaTrigger).Order());
         Assert.Equal<byte>([7, 19, 21], SmartScriptSupport.Targets(SmartScriptSource.AreaTrigger).Order());

@@ -187,8 +187,10 @@ public sealed class GameObjectSpellTypeTests
         rig.World.RunTick(50);
         Assert.False(near.IsSpawned); // its one charge
 
-        // The button is still active, but its use still asks for the linked trap (GameObject.cpp:1441-1455): the nearest one is despawned.
-        rig.System.Use(player, button.Guid);
+        // The button is still active, so a click stops at the opcode (SpellHandler.cpp:295-296). A use that skips the opcode still asks for the
+        // linked trap (GameObject.cpp:1441-1455): the nearest one is despawned.
+        Assert.Equal(GameObjectUseResult.InUse, rig.System.Use(player, button.Guid));
+        rig.System.UseByUnit(player, button);
         Assert.Single(rig.Spells.Casts);
     }
 
@@ -196,18 +198,18 @@ public sealed class GameObjectSpellTypeTests
     public void ALinkedTrapKeepsItsOwnCooldown_LikeAnyUseOfTheTrap()
     {
         // GameObject::Use (GameObject.cpp:1421-1428) gates every use of an object that has a cooldown (GetCooldown: trap.cooldown, data5,
-        // GameObjectDefines.h:632-640) and starts it; TriggerLinkedGameObject reaches the trap through Use, so a second click within the trap's
-        // cooldown casts nothing.
+        // GameObjectDefines.h:632-640) and starts it; TriggerLinkedGameObject reaches the trap through Use, so a second use of the button within
+        // the trap's cooldown casts nothing. The button stays in use (no auto-close time), so the repeats skip the opcode, which would refuse them.
         GameObjectTypeRig rig = Create([GoSpawn(1, CooldownTrapButton, 3, 0), GoSpawn(2, CooldownTrap, 3, 0)]);
         (Player player, _) = rig.Join(1);
         GameObject button = rig.Single(CooldownTrapButton);
 
         rig.System.Use(player, button.Guid);
-        rig.System.Use(player, button.Guid);
+        rig.System.UseByUnit(player, button);
         Assert.Single(rig.Spells.Casts);
 
         rig.Seconds(6);
-        rig.System.Use(player, button.Guid);
+        rig.System.UseByUnit(player, button);
         Assert.Equal(2, rig.Spells.Casts.Count);
     }
 

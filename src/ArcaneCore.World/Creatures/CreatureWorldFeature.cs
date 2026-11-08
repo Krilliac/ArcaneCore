@@ -216,7 +216,8 @@ public sealed class CreatureWorldFeature(IServiceProvider services, ILogger<Crea
             WorldRuntime world = _world ?? throw new InvalidOperationException("the creature feature is not attached");
             system = new CreatureMapSystem(
                 map, Content, Options, _height, new Random(), () => world.NowMs, logger, _aiServices, RespawnFeature?.Persistence, RespawnFeature?.Clock,
-                display => displayModelMetadata?.Content.Find(display));
+                display => displayModelMetadata?.Content.Find(display),
+                qa: services.GetService<Game.Diagnostics.IGameQaObserver>()); // bot QA: creature AI and script gaps (docs/areas/playbots-qa.md)
             SubscribeSpellLifecycle(system);
             map.AddUpdater(system);
             _instanceSystems[map] = system;
@@ -234,7 +235,8 @@ public sealed class CreatureWorldFeature(IServiceProvider services, ILogger<Crea
             Map map = world.GetMap(mapId);
             system = new CreatureMapSystem(
                 map, Content, Options, _height, new Random(), () => world.NowMs, logger, _aiServices, RespawnFeature?.Persistence, RespawnFeature?.Clock,
-                display => displayModelMetadata?.Content.Find(display));
+                display => displayModelMetadata?.Content.Find(display),
+                qa: services.GetService<Game.Diagnostics.IGameQaObserver>()); // bot QA: creature AI and script gaps (docs/areas/playbots-qa.md)
             SubscribeSpellLifecycle(system);
             map.AddUpdater(system);
             _systems[mapId] = system;

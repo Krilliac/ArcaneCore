@@ -25,7 +25,9 @@ public sealed class AutoBroadcastOptions
 
 /// <summary>
 /// vmangos AutoBroadCastMgr (src/game/AutoBroadCastMgr.cpp): every interval, one message picked at random is sent to every player as a
-/// system message (World::SendWorldText). Nothing happens with no messages.
+/// system message (World::SendWorldText). Nothing happens with no messages. On a clustered map worker the feature is attached on every node and
+/// follows the social realm authority lease: it counts and sends only while this node holds it, so the survivor of a dead holder starts broadcasting
+/// when it takes the lease over (a full interval after it did), with no restart.
 /// </summary>
 public sealed class AutoBroadcastFeature(IServiceProvider services, ILogger<AutoBroadcastFeature>? logger = null)
     : IWorldFeature, Cluster.Social.IRealmSingletonHalt
@@ -45,6 +47,22 @@ public sealed class AutoBroadcastFeature(IServiceProvider services, ILogger<Auto
     }
 
     public AutoBroadcastOptions Options { get; } = Bind(services.GetService<IConfiguration>());
+
+    // Resolved on first use (never in the constructor: the keeper builds the singletons it halts). Null when nothing is clustered. World thread.
+    private Cluster.Social.RealmAuthorityLeaseKeeper? _keeper;
+    private bool _keeperResolved;
+
+    /// <summary>Whether this node may broadcast now: always when nothing is clustered, otherwise only while it holds the social lease.</summary>
+    private bool MayBroadcast()
+    {
+        if (!_keeperResolved)
+        {
+            _keeper = services.GetService<Cluster.Social.RealmAuthorityLeaseKeeper>();
+            _keeperResolved = true;
+        }
+
+        return Cluster.Social.RealmAuthorityLeaseKeeper.HeldOrUnclustered(_keeper, ArcaneCore.Kernel.Cluster.Social.RealmAuthorityScopes.Social);
+    }
 
     internal Random Random { get; set; } = Random.Shared;
 
@@ -72,7 +90,7 @@ public sealed class AutoBroadcastFeature(IServiceProvider services, ILogger<Auto
     /// <summary>AutoBroadCastMgr::Update: the message due after <paramref name="diffMs"/>, or null.</summary>
     internal string? Update(uint diffMs)
     {
-        if (_halted || Options.Messages.Count == 0) return null;
+        if (_halted || Options.Messages.Count == 0 || !MayBroadcast()) return null;
         _current += diffMs;
         if (_current < Options.IntervalMs) return null;
         _current = 0;

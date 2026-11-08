@@ -22,7 +22,7 @@ Options:
                            ItemRandomProperties, SpellItemEnchantment, CharSections and CharacterFacialHairStyles.
                            The world reads the last six at every start: give a permanent directory.
   --dump <file>            the classic-db dump (default <$ARCANECORE_REFS_ROOT>/classic-db/Full_DB/ClassicDB_1_12_1_z2815.sql.gz)
-  --no-optional-data       do not set the seven optional client data keys (refresh-world-content.ps1 without -AppSettings)
+  --no-optional-data       do not set the five optional client data keys (refresh-world-content.ps1 without -AppSettings)
   --no-transports          leave World:Transports:Enabled as it is (by default it is set true: 9 ships)
   --no-elevators           do not set GameObjects:TransportAnimationDbcPath
   --mangos-defense-wear    set Items:DurabilityLossChanceParry/Block/Absorb to 0.05/0.05/0.5 (the pre-wave-3 wear)
@@ -107,12 +107,12 @@ def main() -> int:
     ap.add_argument("--operator-character", default="Claudeop")
     args = ap.parse_args()
 
-    profile = Path(args.profile) if args.profile else opsenv.live_profile()
-    out = Path(args.out) if args.out else (opsenv.deploy_root() / args.label)
+    profile = Path(args.profile) if args.profile else opsenv.live_profile("--profile")
+    out = Path(args.out) if args.out else (opsenv.deploy_root("--out") / args.label)
     art = Path(args.artifacts)
-    terrain_arg = str(opsenv.data_root() / "terrain-5875") if args.terrain is None else args.terrain
-    dbc_dir = Path(args.dbc_dir) if args.dbc_dir else (opsenv.data_root() / "client-dbc-5875")
-    dump_path = Path(args.dump) if args.dump else (opsenv.refs_root() / "classic-db" / "Full_DB" / "ClassicDB_1_12_1_z2815.sql.gz")
+    terrain_arg = str(opsenv.data_root("--terrain") / "terrain-5875") if args.terrain is None else args.terrain
+    dbc_dir = Path(args.dbc_dir) if args.dbc_dir else (opsenv.data_root("--dbc-dir") / "client-dbc-5875")
+    dump_path = Path(args.dump) if args.dump else (opsenv.refs_root("--dump") / "classic-db" / "Full_DB" / "ClassicDB_1_12_1_z2815.sql.gz")
 
     for item in args.set or []:
         require(item.partition("=")[0] and "=" in item, f"--set expects Section:Key=value, got {item!r}")
@@ -457,7 +457,7 @@ def main() -> int:
         require(not flipped, f"DesiredEnabled changed for non-population bots: {flipped[:5]}")
         text = log_text("world")
         report["world_log_checks"] = deploy_log_lines.check_log(text, args.no_transports, args.no_optional_data, args.no_elevators)
-        report["world_log_counts"] = {k: text.count(k) for k in ("unknown target map", "not existing zone id", " WARN ", " ERROR ", " FATAL ")}
+        report["world_log_counts"] = deploy_log_lines.log_counts(text)
         missing_lines = [k for k, ok in report["world_log_checks"].items() if not ok]
         if missing_lines:
             save()

@@ -39,7 +39,8 @@ The list re-sorts lazily (only after a change), with a stable insertion sort, as
 - No threat packets exist in vanilla 1.12 (`wow_messages` threat packets are 3.3.5 only), so nothing is sent.
 - Assist threat zeroing for a stunned owner whose stun breaks on damage and for UNIT_STATE_ISOLATED needs aura-holder data
   that the spell lane does not publish; only confused and fleeing are applied.
-- "Taxi flying" targets going offline wait for a taxi primitive on `Player`; the GM case is real.
+- "Taxi flying" targets go offline in every threat list while a flight runs and come back on landing (`TaxiFlightSystem`; the GM case uses the same path).
+  A threat change during the flight leaves them offline (`ThreatRules.IsTargetUnreachable`, vmangos `updateOnlineStatus`).
 - The second-choice selector predicate (`isLowPriority`) is supported by `SelectVictim`; the creature host passes feared and
   confused targets only (damage-immune, breakable-CC and totem second choices need aura-holder data and a spell catalog).
 

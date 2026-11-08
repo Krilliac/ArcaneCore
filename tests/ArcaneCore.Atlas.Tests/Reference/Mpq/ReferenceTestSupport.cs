@@ -32,6 +32,12 @@ internal sealed class TestDirectory : IDisposable
     {
         try
         {
+            // git writes its object files read-only, which makes the recursive delete fail on Windows.
+            foreach (string file in Directory.EnumerateFiles(Path, "*", SearchOption.AllDirectories))
+            {
+                File.SetAttributes(file, FileAttributes.Normal);
+            }
+
             Directory.Delete(Path, recursive: true);
         }
         catch (IOException)

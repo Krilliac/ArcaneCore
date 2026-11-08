@@ -37,6 +37,7 @@ public sealed class TradeEnchantSettlementTests
             feature.System.Store = new SpellStore([.. feature.System.Store.All, new SpellInfo
             {
                 Id = TradeEnchantSpell,
+                SpellVisual = 1, // a trade spell is triggered: its SMSG_SPELL_GO is only sent for a visible spell
                 ManaCost = 5,
                 RecoveryTime = 1000,
                 StartRecoveryTime = 1500,

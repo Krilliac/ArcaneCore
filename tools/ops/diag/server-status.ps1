@@ -5,7 +5,7 @@
 .DESCRIPTION
   - Realm list: the `realmlist` rows the logon server serves to clients, read from the profile's auth.db with SQLite opened
     read-only (mode=ro). The auth DB path comes from appsettings.json Database:Auth.
-  - Processes: who listens on the World, Auth, and Cluster Node ports (19081..19087), their uptime, working set and CPU.
+  - Processes: who listens on the World, Auth, and (when running) split Cluster Node ports (19081..19087, shifted by -SplitNodePortBase), their uptime, working set and CPU.
   - Watchdog & Supervisor (-Supervise): monitors `Ops:Watchdog:Heartbeat:FilePath` (default `logs/world.heartbeat`) and the
     Realm/World processes recorded in `standard-processes.json`. Automatically restarts a crashed or `.server restart` (exit code 2)
     daemon, kills and restarts a World process whose heartbeat file stays stale past `-HangKillSeconds` (default 90 s), refuses to
@@ -28,6 +28,7 @@ param(
     [Alias('Profile')][string] $ProfileDir = '',
     [int] $WorldPort = 8085,
     [int] $AuthPort = 3724,
+    [int] $SplitNodePortBase = 19081,
     [int] $IntervalSeconds = 5,
     [string] $MetricsUrl = '',
     [string] $RealmMetricsUrl = '',
@@ -269,15 +270,20 @@ function FindName([string] $text, [string] $stem) {
 
 $servicesList = @(
     @{ N = 'Realm';            P = $AuthPort;  Role = 'logon' },
-    @{ N = 'World';            P = $WorldPort; Role = 'world' },
-    @{ N = 'worker:EK';        P = 19081;      Role = 'map 0 (EK)' },
-    @{ N = 'worker:Kalimdor';  P = 19082;      Role = 'map 1 (Kalimdor)' },
-    @{ N = 'worker:instances'; P = 19083;      Role = '28 instance/BG maps' },
-    @{ N = 'gateway';          P = 19084;      Role = 'session router' },
-    @{ N = 'social';           P = 19085;      Role = 'presence & chat' },
-    @{ N = 'coordinator';      P = 19086;      Role = 'economy & instances' },
-    @{ N = 'supervisor';       P = 19087;      Role = 'diagnostics & fence' }
+    @{ N = 'World';            P = $WorldPort; Role = 'world' }
 )
+# Split-cluster nodes (the old cluster-node-bridge topology). The live cluster runs one combined world that hosts every map, so these
+# are listed only when something listens on their port; see the "split nodes" line in the PROCESSES section.
+$splitNodes = @(
+    @{ N = 'worker:EK';        P = $SplitNodePortBase;       Role = 'map 0 (EK)' },
+    @{ N = 'worker:Kalimdor';  P = $SplitNodePortBase + 1;   Role = 'map 1 (Kalimdor)' },
+    @{ N = 'worker:instances'; P = $SplitNodePortBase + 2;   Role = '33 instance/BG maps' },
+    @{ N = 'gateway';          P = $SplitNodePortBase + 3;   Role = 'session router' },
+    @{ N = 'social';           P = $SplitNodePortBase + 4;   Role = 'presence & chat' },
+    @{ N = 'coordinator';      P = $SplitNodePortBase + 5;   Role = 'economy & instances' },
+    @{ N = 'supervisor';       P = $SplitNodePortBase + 6;   Role = 'diagnostics & fence' }
+)
+$splitPortRange = "$($splitNodes[0].P)-$($splitNodes[-1].P)"
 
 $logicalCores = [Math]::Max(1, [Environment]::ProcessorCount)
 $prevCpu = @{}
@@ -306,8 +312,11 @@ while ($true) {
 
     $out.Add('PROCESSES & CLUSTER CONSOLES')
     $activeListeners = @{}
-    foreach ($svc in $servicesList) {
+    $splitDown = [System.Collections.Generic.List[int]]::new()
+    foreach ($svc in ($servicesList + $splitNodes)) {
         $p = ListenerProc $svc.P
+        $isSplit = $splitNodes -contains $svc
+        if ($isSplit -and -not $p) { $splitDown.Add([int]$svc.P); continue }
         $activeListeners[$svc.N] = $p
         if ($p) {
             if ($svc.N -eq 'Realm' -or $svc.N -eq 'World') {
@@ -329,6 +338,11 @@ while ($true) {
         } else {
             $out.Add(('  {0,-16} NOT LISTENING on port {1,-5} [{2}]' -f $svc.N, $svc.P, $svc.Role))
         }
+    }
+    if ($splitDown.Count -eq $splitNodes.Count) {
+        $out.Add("  split nodes      none running (ports $splitPortRange; the combined world hosts every map)")
+    } elseif ($splitDown.Count -gt 0) {
+        $out.Add("  split nodes      not listening: ports $($splitDown -join ', ')")
     }
     $prevCpu = $nextCpu
     $prevCpuAt = $now

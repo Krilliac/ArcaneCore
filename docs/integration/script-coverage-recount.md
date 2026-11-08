@@ -165,6 +165,8 @@ None.
 |---|---|---|---|---|---|
 | 620 | Chicken | `npc_chicken_cluck` | AI | 111 | `world/npcs_special.cpp` |
 
+Done after this recount: entry 620 is `ChickenCluckAI` (`src/ArcaneCore.Game/Creatures/Scripts/ChickenCluckAI.cs`). The counts above are as of the recount.
+
 ### P3 dungeon and raid scripts (0)
 
 None.
@@ -311,7 +313,7 @@ First ArcaneCore file that carries the entry id, the script name or the escort J
 | 9022 | `npc_dughal_stormwing` | `Instances/Scripts/BlackrockDepths/BlackrockDepthsInstance.JailBreak.cs` |
 | 9023 | `npc_marshal_windsor` | `Instances/Scripts/BlackrockDepths/BlackrockDepthsInstance.JailBreak.cs` |
 | 9033 | `boss_general_angerforge` | `Instances/Scripts/BlackrockDepths/BlackrockDepthsInstance.Events.cs` |
-| 9039 | `boss_doomrel` | `Instances/Scripts/BlackrockDepths/BlackrockDepthsInstance.Events.cs` |
+| 9039 | `boss_doomrel` | `Instances/Scripts/BlackrockDepths/DoomrelAI.cs` (registered by `DepthsNpcScripts`) |
 | 9156 | `boss_ambassador_flamelash` | `Instances/Scripts/BlackrockDepths/BlackrockDepthsInstance.Events.cs` |
 | 9453 | `mob_aquementas` | `Creatures/Scripts/AquementasAI.cs` |
 | 9460 | `guard_contested` | `Creatures/Guards/GuardPostTable.cs` |

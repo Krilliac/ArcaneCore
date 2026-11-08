@@ -30,7 +30,8 @@ namespace ArcaneCore.World.Instances;
 /// A <see cref="CharacterOwnershipRejectedException"/> is terminal on the first attempt: it is never
 /// retried as a transient failure, stops the queue from issuing further store writes, notifies the
 /// host lifetime (<see cref="IHostApplicationLifetime.StopApplication"/>) and <see cref="FatalFailure"/>,
-/// and faults <see cref="FlushCharacterAsync"/> and <see cref="StopAsync"/>.
+/// and faults <see cref="FlushCharacterAsync"/> and <see cref="StopAsync"/>. While a handoff has sealed or retired the process a refusal of any key is dropped instead
+/// (<see cref="CharacterRetirementRegistry"/>), and <see cref="FlushSharedAsync"/> is what writes the keys of no character before that.
 /// </para>
 /// </summary>
 public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logger, StopDrainBudget? drain = null) : IInstancePersistence
@@ -85,6 +86,7 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
         Write,
         Barrier,
         FlushCharacter,
+        FlushShared,
         Retry,
         DrainAll,
         Sweep,
@@ -104,6 +106,18 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
             lock (_gate)
             {
                 return [.. _retainedByCharacter.Keys.Order()];
+            }
+        }
+    }
+
+    /// <summary>The retained writes of no one character (instance rows, script data, deletions, raid reset times), which <see cref="RetainedCharacters"/> does not list; described, in order.</summary>
+    public IReadOnlyList<string> RetainedSharedWrites
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return [.. _retained.Keys.Where(k => !IsCharacterKey(k.Kind)).OrderBy(k => k.Kind).ThenBy(k => k.A).Select(DescribeKey).Distinct()];
             }
         }
     }
@@ -365,6 +379,21 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
             : RetainedFailureTask(characterId);
     }
 
+    /// <summary>
+    /// The handoff barrier for what no character's barrier reaches: after every earlier write, retries the retained writes of no one character once more and faults with
+    /// <see cref="InvalidOperationException"/> while one is still not durable, or the queue is terminal.
+    /// </summary>
+    public Task FlushSharedAsync()
+    {
+        if (_consumer is null || _stopped)
+        {
+            return SharedFailureTask();
+        }
+
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        return _channel.Writer.TryWrite(new Work(WorkKind.FlushShared, default, default, 0, 0, done)) ? done.Task : SharedFailureTask();
+    }
+
     /// <summary>Queue a fire-and-forget retry of the character's retained writes (logout).</summary>
     public void RequestRetry(int characterId)
     {
@@ -462,11 +491,21 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
     private static bool IsCharacterKey(KeyKind kind)
         => kind is KeyKind.PlayerBind or KeyKind.LastInstance or KeyKind.GroupBind or KeyKind.CharacterDelete;
 
+    /// <summary>True when the handoff took this write away from the process: its character is retired, or, for a key of no character, the whole process is.</summary>
+    private bool Drops(Key key) => IsCharacterKey(key.Kind)
+        ? CharacterRetirementRegistry.Drops(Retirement, QueueName, key.A)
+        : CharacterRetirementRegistry.DropsShared(Retirement, QueueName);
+
+    /// <summary>As <see cref="Drops"/> for a write the fence just refused, which is also an expected end while the process is sealed.</summary>
+    private bool DropsRefused(Key key) => IsCharacterKey(key.Kind)
+        ? CharacterRetirementRegistry.DropsRefused(Retirement, QueueName, key.A)
+        : CharacterRetirementRegistry.DropsSharedRefused(Retirement, QueueName);
+
     private void EnqueueWriteCore(Key key, Payload value)
     {
-        if (IsCharacterKey(key.Kind) && CharacterRetirementRegistry.Drops(Retirement, QueueName, key.A))
+        if (Drops(key))
         {
-            return; // the character belongs to another world now: nothing is enqueued, retained or reported
+            return; // another world owns this now: nothing is enqueued, retained or reported
         }
 
         if (_stopped)
@@ -580,6 +619,22 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
     private Task RetainedFailureTask(int characterId)
         => RetainedFailureOf(characterId) is { } failure ? Task.FromException(NotDurable(characterId, failure)) : Task.CompletedTask;
 
+    private InvalidOperationException? SharedFailure()
+    {
+        lock (_gate)
+        {
+            KeyValuePair<Key, Retained>[] left = [.. _retained.Where(r => !IsCharacterKey(r.Key.Kind)).OrderBy(r => r.Key.Kind).ThenBy(r => r.Key.A)];
+            if (left.Length > 0)
+            {
+                return new InvalidOperationException($"instance writes for {string.Join(", ", left.Select(r => DescribeKey(r.Key)).Distinct())} are not durable", left[0].Value.Failure);
+            }
+
+            return _terminalFailure is { } terminal ? new InvalidOperationException("the instance write queue stopped after terminal ownership rejection", terminal) : null;
+        }
+    }
+
+    private Task SharedFailureTask() => SharedFailure() is { } failure ? Task.FromException(failure) : Task.CompletedTask;
+
     private static InvalidOperationException NotDurable(int characterId, Exception failure)
         => new($"instance writes for character {characterId} are not durable", failure);
 
@@ -652,6 +707,18 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
                         if (RetainedFailureOf(work.CharacterId) is { } failure)
                         {
                             work.Done?.TrySetException(NotDurable(work.CharacterId, failure));
+                        }
+                        else
+                        {
+                            work.Done?.TrySetResult();
+                        }
+
+                        break;
+                    case WorkKind.FlushShared:
+                        await RetryOpaqueAsync(null, MaxAttempts).ConfigureAwait(false);
+                        if (SharedFailure() is { } sharedFailure)
+                        {
+                            work.Done?.TrySetException(sharedFailure);
                         }
                         else
                         {
@@ -931,7 +998,7 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
 
     private async Task<Exception?> TryWriteAsync(Key key, Payload value, int attempts, WriteAttemptCount? made = null)
     {
-        if (IsCharacterKey(key.Kind) && CharacterRetirementRegistry.Drops(Retirement, QueueName, key.A))
+        if (Drops(key))
         {
             return null; // retired since it was queued (or retained): dropped, which the caller records as drained
         }
@@ -1008,11 +1075,11 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
                 progress.Succeeded();
                 return null;
             }
-            catch (CharacterOwnershipRejectedException) when (IsCharacterKey(key.Kind) && CharacterRetirementRegistry.Drops(Retirement, QueueName, key.A))
+            catch (Exception unwrapped) when (OwnershipRefusal.Find(unwrapped) is not null && DropsRefused(key)) // a refusal EF wrapped counts too
             {
-                return null; // refused because the character moved to another world: counted, neither logged nor terminal
+                return null; // refused because this write moved to another world with the handoff: counted, neither logged nor terminal
             }
-            catch (CharacterOwnershipRejectedException ex)
+            catch (Exception wrapped) when (OwnershipRefusal.Find(wrapped) is { } ex)
             {
                 FaultLedger.Shared.Record("writequeue.instance-ownership", ex);
                 FailTerminal(ex, scope.ServiceProvider);

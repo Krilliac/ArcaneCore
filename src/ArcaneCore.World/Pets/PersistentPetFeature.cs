@@ -21,6 +21,8 @@ public sealed class PersistentPetFeature(IServiceProvider services, IServiceScop
     // Weak keys: a login that aborts after the loading hooks (a later hook throws, TryBeginLogin/EnterWorld refuse) never raises
     // PlayerLoggedIn, so nothing removes its entry; the table must not keep that Player (and its session) alive. Same idiom as SpellFeature._staged.
     private readonly ConditionalWeakTable<Player, LoadedPet> _pending = [];
+    private const string PetWriteQueueName = "SummonService";
+    private CharacterRetirementRegistry? _retirement;
     private PetsFeature? _pets;
     private WorldRuntime? _world;
     private Action<Player>? _onLoggedIn;
@@ -39,6 +41,11 @@ public sealed class PersistentPetFeature(IServiceProvider services, IServiceScop
         {
             await using AsyncServiceScope scope = scopes.CreateAsyncScope();
             return await scope.ServiceProvider.GetRequiredService<IPersistentPetStore>().LoadCurrentAsync(id, ct).ConfigureAwait(false);
+        };
+        pets.Service.LoadDemonsPersistence = async (id, ct) =>
+        {
+            await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+            return await scope.ServiceProvider.GetRequiredService<IPersistentPetStore>().LoadDemonsAsync(id, ct).ConfigureAwait(false);
         };
         pets.Service.LoadCallablePersistence = async (id, ct) =>
         {
@@ -60,6 +67,13 @@ public sealed class PersistentPetFeature(IServiceProvider services, IServiceScop
             await using AsyncServiceScope scope = scopes.CreateAsyncScope();
             await scope.ServiceProvider.GetRequiredService<IPersistentPetStore>().DeleteAsync(id, ct).ConfigureAwait(false);
         };
+        if (services.GetService<CharacterRetirementRegistry>() is { } retirement)
+        {
+            pets.Service.WritesRetired = id => retirement.TryDrop(PetWriteQueueName, id);
+            pets.Service.WritesSealed = () => retirement.IsSealed;
+            _retirement = retirement;
+        }
+
         _world = world;
         _onLoggedIn = player => PublishLoaded(world, player, pets);
         // A retire after a committed transfer must not save: the target owns the pet row now.
@@ -117,7 +131,7 @@ public sealed class PersistentPetFeature(IServiceProvider services, IServiceScop
             _ = ReloadAsync(world, player, pets);
             return;
         }
-        if (loaded.Snapshot is { } snapshot && player.Class == ArcaneCore.Game.Class.Hunter
+        if (loaded.Snapshot is { } snapshot && player.Class is ArcaneCore.Game.Class.Hunter or ArcaneCore.Game.Class.Warlock
             && player.PetGuid.IsEmpty && !player.IsQuestSettlementPending)
             pets.Service.RestoreCurrentPet(player, snapshot);
     }
@@ -174,7 +188,24 @@ public sealed class PersistentPetFeature(IServiceProvider services, IServiceScop
             _onTransferPreparing = null;
         }
 
-        return _pets?.Service.StopAsync() ?? Task.CompletedTask;
+        return StopPetsAsync();
+    }
+
+    private async Task StopPetsAsync()
+    {
+        if (_pets is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await _pets.Service.StopAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            _retirement?.LogStopSummary(logger, PetWriteQueueName);
+        }
     }
 
     private sealed record LoadedPet(PersistentPetSnapshot? Snapshot, long Generation);

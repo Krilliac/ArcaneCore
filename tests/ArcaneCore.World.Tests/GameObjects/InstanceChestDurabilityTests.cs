@@ -354,6 +354,8 @@ public sealed class InstanceChestDurabilityTests
         await f.Store.CommitEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
         Assert.True(await f.Host.OnWorldAsync(() => f.Settlements.IsPending(key)));
         Assert.True(await f.Host.PlayerStateAsync("Dlootee", p => p.IsQuestSettlementPending));
+        int dlootee = (int)await f.Host.PlayerStateAsync("Dlootee", p => p.Guid.Low);
+        Assert.Equal(new[] { dlootee }, await f.Host.OnWorldAsync(() => f.Settlements.SettlingCharacters)); // the barrier's open-character list names the chest actor
         Assert.Equal(0u, await f.Host.PlayerStateAsync("Dlootee", p => Count(p, Cloth)));
 
         // Another take, another opening and the same slot all wait for the operation.

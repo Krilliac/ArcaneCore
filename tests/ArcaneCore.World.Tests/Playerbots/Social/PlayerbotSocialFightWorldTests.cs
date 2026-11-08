@@ -155,6 +155,7 @@ public sealed class PlayerbotSocialFightWorldTests
         Assert.Equal(helperBefore, RelationOf(world, helperBot, victimGuid)!.Affinity);
 
         // The fight ends and a new one starts (another mob): the helper who joins it is credited again.
+        PlayerbotFightSocial tracker = PartyTestHost.Feature(world.Host).FightOf(victim)!;
         await world.Host.OnWorldAsync(() =>
         {
             Player bot = Online(world, "Helpvictim");
@@ -164,8 +165,10 @@ public sealed class PlayerbotSocialFightWorldTests
             bot.Map!.Combat.CombatStop(bot);
             system.Despawn(mob);
             Assert.False(bot.Combat.IsInCombat);
+            // The feature reads an out-of-combat bot on its slower pass, which a loaded machine stretches past any fixed wait: read it here, in the
+            // same world turn, so the end of the fight is seen whatever the pass is doing (the later pass finds no fight and returns).
+            tracker.Observe(bot, world.Host.World, world.Host.World.NowMs);
         });
-        PlayerbotFightSocial tracker = PartyTestHost.Feature(world.Host).FightOf(victim)!;
         await world.Host.WaitForWorldAsync(() => !tracker.InFight, "the fight tracker to see the fight end");
         await world.Host.OnWorldAsync(() =>
         {

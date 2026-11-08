@@ -15,6 +15,12 @@ public sealed class GameObjectOptions
     public bool RandomRespawn { get; set; } = true;
 
     /// <summary>
+    /// <c>GameObjects:PersistRespawn</c>: despawned database spawns keep their respawn time across restarts (vmangos <c>gameobject_respawn</c>,
+    /// characters database; the counterpart of <c>Creatures:Respawn:Persist</c>). False keeps the timers in memory only, as before the table existed.
+    /// </summary>
+    public bool PersistRespawn { get; set; } = true;
+
+    /// <summary>
     /// vmangos Rate.Mining.Amount (CONFIG_FLOAT_RATE_MINING_AMOUNT, default 1; LootHandler.cpp:455-457): scales the minimum and maximum
     /// number of opens of a multi-use mineral vein (chest.minSuccessOpens / maxSuccessOpens). Default 1 (retail).
     /// </summary>

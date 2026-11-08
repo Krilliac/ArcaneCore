@@ -1151,12 +1151,19 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         // A split worker fills its own share of the realm-wide target (see PopulationMapScope.ShareOf), never above its own running cap (MaxBots);
         // combined mode keeps all of it.
         if (_world is { } scopeWorld && ScopeOf(scopeWorld) is { OwnsEverything: false } shareScope)
-            effectiveTarget = Math.Min(shareScope.ShareOf(pop.TargetOnline), Math.Max(0, _options.MaxBots));
+        {
+            // The weight of a map is its creature spawn count in the shared world data, which every worker holds for every allowed map (no terrain survey);
+            // without content the share falls back to the even split.
+            CreatureContent? shareContent = services.GetService<CreatureWorldFeature>()?.Content;
+            Func<uint, int>? capacity = shareContent is null ? null : map => shareContent.GetSpawns(map).Count;
+            effectiveTarget = Math.Min(shareScope.ShareOf(pop.TargetOnline, capacity), Math.Max(0, _options.MaxBots));
+        }
         // Filled once the membership is read: a band counts only the population's own bots (PopulationCounts), which leaves out
         // the pending-deletion members.
         int[] desired = new int[input.Bands.Length];
         int[] have = new int[input.Bands.Length];
-        int operatorRunning = 0, ownedTarget = 0;
+        int operatorRunning = 0, ownedTarget = 0, outOfBand = 0;
+        string? heldBack = null;
         int windows = _windows.Observe(input.Samples, input.TotalSamples, input.P95Ms, pop);
 
         PopulationDecision decision = new(PopulationAction.Hold, 0, "error", "the pass did not complete");
@@ -1214,6 +1221,7 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
                 members.Keys.Count(id => input.States.TryGetValue(id, out ManagedPlayerbotState s) && s == ManagedPlayerbotState.Running),
                 input.Running.Where(f => members.ContainsKey(f.BotId)).Select(f => f.Level));
             (desired, have, operatorRunning, ownedTarget) = (counts.Desired, counts.Have, counts.OperatorRunning, counts.OwnedTarget);
+            outOfBand = counts.OutOfBand;
             if (input.RushCount > 0)
             {
                 // A rush bypasses the budget loop and its confirmation windows (its own brake watches the tick p95), and plans against
@@ -1280,6 +1288,8 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
 
             if (homeChanges > 0) actions += (actions.Length == 0 ? string.Empty : ", ") + $"start homes {homeChanges}";
             if (ctx.Note is not null) actions += (actions.Length == 0 ? string.Empty : ", ") + "held back: " + ctx.Note;
+            heldBack = ctx.Note;
+            pass.Note = ctx.Note;
             if (input.RushCount > 0 && ctx.Note is not null && ctx.Note.StartsWith(PopulationRush.StartZonesFullNote, StringComparison.Ordinal))
                 Volatile.Write(ref _rushDeferredUntilMs, ClockMs + (pop.IntervalSeconds * 1000L));
             // A rush keeps the tick window: its brake reads the load the rush itself causes.
@@ -1314,7 +1324,7 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         while (_createTimes.Count > 0 && now - _createTimes.Peek() >= 60_000) _createTimes.Dequeue();
         if (!pop.FreshLaunch && !input.ShedOnly && input.RushCount == 0 && pop.TargetOnline > 0)
         {
-            ObserveBandDeficits(input.Bands, desired, have, now, pop, ctxNote: decision.Reason);
+            ObserveBandDeficits(input.Bands, desired, have, now, pop, ctxNote: BandDeficitNote(decision.Reason, heldBack));
         }
 
         PopulationBandStatus[] bands = [.. input.Bands.Select((b, i) => new PopulationBandStatus(b.MinLevel, b.MaxLevel, b.Weight, desired[i], have[i],
@@ -1322,8 +1332,8 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         _actionLog.Add(pass);
         if (_actionLog.Due(now, pop.ActionLogSeconds) is { } line)
             logger.LogInformation(
-                "Playerbot population: {Actions}; state {State}: {Reason}; operator bots running {Operator}, population share {OwnedTarget}; bands {Bands}",
-                line, decision.State, decision.Reason, operatorRunning, ownedTarget,
+                "Playerbot population: {Actions}; state {State}: {Reason}; operator bots running {Operator}, population share {OwnedTarget}, out of band {OutOfBand}; bands {Bands}",
+                line, decision.State, decision.Reason, operatorRunning, ownedTarget, outOfBand,
                 string.Join(", ", bands.Select(b => string.Create(CultureInfo.InvariantCulture, $"{b.MinLevel}-{b.MaxLevel} want {b.Want} have {b.Have}"))));
         Publish(new PopulationStatus(true, decision.State, actions.Length == 0 ? decision.Reason : decision.Reason + "; " + actions,
             input.P95Ms, input.Samples, pop.TickP95BudgetMs, pop.TargetOnline, effectiveTarget, input.RunningAll, ownedRunning, ownedParked,
@@ -1331,6 +1341,9 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
             input.Atlas.CountFor(Team.Alliance), input.Atlas.CountFor(Team.Horde), bands,
             _lastError, Interlocked.Increment(ref _passes), operatorRunning, ownedTarget, pop.FreshLaunch));
     }
+
+    /// <summary>The note a band-deficit anomaly carries: the decision's reason, then <c>; held back: ...</c> when the pass held something back.</summary>
+    internal static string BandDeficitNote(string reason, string? heldBack) => heldBack is null ? reason : reason + "; held back: " + heldBack;
 
     private void ObserveBandDeficits(PopulationBand[] bands, int[] desired, int[] have, long nowMs, PlayerbotPopulationOptions pop, string? ctxNote)
     {
@@ -1455,11 +1468,14 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
 
     /// <summary>
     /// True for the refusals of a start that did nothing to the bot (another worker runs it, the owner of it could not be told, the whole feature is busy or stopping): they do not use an attempt.
-    /// A refusal that is not here (an owner the account store refuses, a failed start) uses one, so such a bot is bounded too.
+    /// A refusal that is not here (an owner the account store refuses, a failed start, a login refused after the check passed: <see cref="ManagedPlayerbotFeature.LoginRaced"/>) uses one, so such a bot is bounded too.
     /// </summary>
     internal static bool MadeNoStartAttempt(string code)
         => code is "playerbot-capacity" or ManagedPlayerbotFeature.LiveOnOtherWorker or ManagedPlayerbotFeature.LiveOwnerUnknown
             or "fleet-reset-running" or "playerbots-stopping" or "playerbots-disabled" or ManagedPlayerbotFeature.PlayerbotsDetaching;
+
+    /// <summary>Test seam: awaited before each fault retry's start, inside the retry's containment (null in production).</summary>
+    internal Func<Guid, Task>? BeforeRetryStartForTests { get; set; }
 
     /// <summary>An attempt was made at <paramref name="nowMs"/>: count it and set the wait before the next one.</summary>
     private void StampFaultRetry(Guid botId, long nowMs)
@@ -1540,17 +1556,25 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
             {
                 // Counted when a start was really attempted, not when the bot was picked: a refusal that did nothing to the bot (MadeNoStartAttempt) uses no attempt, any other result does
                 // (a refusal that writes nothing, such as an owner the account store refuses, included, so that bot is bounded too).
-                // A start that throws (its fault row could not be written either) would, uncaught, end the whole pass: AddAsync's exception reaches RunAsync's catch, which logs it and drops the rest of
-                // the pass (the remaining restarts and every creation), so one bot whose fault row cannot be written would hold the worker's population back at each of its attempts. In split scope
+                // A start that throws (the feature contains failed fault-row and put-back writes, so this is an unexpected fault) would, uncaught, end the whole pass: AddAsync's exception reaches RunAsync's catch, which logs it and drops the rest of
+                // the pass (the remaining restarts and every creation), so one bot that faults unexpectedly would hold the worker's population back at each of its attempts. In split scope
                 // (the only place a retry happens) the exception is contained: logged once, counted as a failed attempt, and the pass goes on. A cancellation and a split-brain latch still end the pass.
-                bool attempted = true;
+                // A latch or the caller's own cancellation did nothing to the bot and uses no attempt; a cancellation that is not the caller's (the start's own timeout) is a start that was made, so it does.
+                bool attempted = false;
                 try
                 {
+                    if (BeforeRetryStartForTests is { } beforeRetry) await beforeRetry(member.BotId).ConfigureAwait(false);
                     result = Checked(await managed.StartForRetryAsync(member.BotId, ct).ConfigureAwait(false));
                     attempted = !MadeNoStartAttempt(result.Code);
                 }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                {
+                    attempted = true;
+                    throw;
+                }
                 catch (Exception ex) when (ex is not OutOfMemoryException and not OperationCanceledException and not ManagedPlayerbotFeature.PlayerbotSplitBrainException)
                 {
+                    attempted = true;
                     logger.LogFault("playerbot.population", ex, "Playerbot population: the retry start of {Bot} failed ({Type}: {Message}); the pass goes on", member.BotId, ex.GetType().Name, ex.Message);
                     result = new PlayerbotOperationResult(false, "retry-faulted", member.BotId);
                 }
@@ -1574,9 +1598,9 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
                 if (band >= 0) ctx.Have[band]++;
             }
             else if (result.Code == "playerbot-capacity") { capacity = true; stoppedBecause = "the running bot cap (MaxBots) is reached"; break; }
-            else if (result.Code is ManagedPlayerbotFeature.LiveOnOtherWorker or ManagedPlayerbotFeature.LiveOwnerUnknown)
+            else if (result.Code is ManagedPlayerbotFeature.LiveOnOtherWorker or ManagedPlayerbotFeature.LiveOwnerUnknown or ManagedPlayerbotFeature.LoginRaced)
             {
-                // Another worker runs this bot: not a failure and nothing was written. It is left alone for a while, like a bot saved on another worker's map.
+                // Another worker runs this bot: not a failure and nothing was left written (a raced login refusal put its row back, and used an attempt of a retry: MadeNoStartAttempt). It is left alone for a while, like a bot saved on another worker's map.
                 _foreignUntilMs[member.CharacterId] = ctx.Input.ClockMs + ForeignBotMemoryMs;
                 if (band >= 0) planned[band]--; // it will not fill its band: a new bot may
             }

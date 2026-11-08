@@ -5,8 +5,9 @@ using static ArcaneCore.World.Tests.Playerbots.Combat.RotationTestKit;
 namespace ArcaneCore.World.Tests.Playerbots.Combat;
 
 /// <summary>
-/// Serpent Sting skips the poison-immune creature types (CreatureType.dbc 4 elemental, 9 mechanical), and Hamstring is not recast on
-/// a victim that is already rooted or slowed (vmangos PartyBotAI warrior branch).
+/// Creature immunities reach the hunter and warrior rotations through CanCast, not a type list in the rotation (Serpent Sting on
+/// poison-immune elementals and mechanicals, bleeds on bleed-immune victims), and Hamstring is not recast on a victim that is already
+/// rooted or slowed (vmangos PartyBotAI warrior branch).
 /// </summary>
 public sealed class PlayerbotImmunityGuardTests
 {

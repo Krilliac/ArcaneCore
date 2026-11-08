@@ -67,8 +67,9 @@ public sealed class FileHeartbeatSink : IHeartbeatSink
 
 /// <summary>
 /// One <c>heartbeat &lt;UTC&gt; pid=&lt;pid&gt; &lt;state&gt;</c> line per beat on a text writer (standard output for a supervisor that reads the console).
-/// The <c>dumping</c> line reads <c>dumping max=&lt;seconds&gt; token=&lt;token&gt;</c>, authenticated with the supervisor's per-run token (the one the
-/// <c>lifecycle stopping</c> line carries) because child output also holds text a player or GM can influence.
+/// With a supervisor token every line ends in <c>token=&lt;token&gt;</c> (the <c>dumping</c> line reads <c>dumping max=&lt;seconds&gt; token=&lt;token&gt;</c>):
+/// the per-run token the <c>lifecycle stopping</c> line carries, because child output also holds text a player or GM can influence and an
+/// unauthenticated heartbeat could be forged from logged text to make a hung child look alive.
 /// </summary>
 public sealed class TextWriterHeartbeatSink : IHeartbeatSink
 {
@@ -77,7 +78,7 @@ public sealed class TextWriterHeartbeatSink : IHeartbeatSink
     private readonly Func<DateTimeOffset> _now;
     private readonly string? _supervisorToken;
 
-    /// <param name="supervisorToken">The supervisor's per-run token (<c>ARCANECORE_SUPERVISOR_TOKEN</c>) for the authenticated <c>dumping</c> line; null or empty writes it without one.</param>
+    /// <param name="supervisorToken">The supervisor's per-run token (<c>ARCANECORE_SUPERVISOR_TOKEN</c>) that every line carries; null or empty writes the lines without one.</param>
     public TextWriterHeartbeatSink(TextWriter writer, int processId, string description = "stdout", Func<DateTimeOffset>? now = null, string? supervisorToken = null)
     {
         _writer = writer;
@@ -91,11 +92,11 @@ public sealed class TextWriterHeartbeatSink : IHeartbeatSink
 
     public string? LastError { get; private set; }
 
-    public bool Ready(string status) => Write("ready");
+    public bool Ready(string status) => Write(SupervisorProtocol.FormatAuthenticatedState("ready", _supervisorToken));
 
-    public bool Beat() => Write("alive");
+    public bool Beat() => Write(SupervisorProtocol.FormatAuthenticatedState("alive", _supervisorToken));
 
-    public bool Stopping(string status) => Write("stopping");
+    public bool Stopping(string status) => Write(SupervisorProtocol.FormatAuthenticatedState("stopping", _supervisorToken));
 
     public bool Dumping(string status, int maxSeconds) => Write(SupervisorProtocol.FormatDumpingState(maxSeconds, _supervisorToken));
 

@@ -559,7 +559,11 @@ internal sealed partial class MatchRuntime : IBattlegroundHost, IWrappingSpawnGa
         }
     }
 
-    /// <summary>The first living player in reach of the trap, in map enumeration order, found without allocating (players are re-read per trap, as a cast can change them).</summary>
+    /// <summary>
+    /// The first living player in reach of the trap, in map enumeration order, found without allocating (players are re-read per trap, as a cast can change them).
+    /// Deliberate deviation, not taken from vmangos (GameObject.cpp:546-552 casts on any living player): a game master is never the trap's target, so
+    /// it neither receives the buff nor starts the cooldown that would keep the match's players from the buff.
+    /// </summary>
     private Player? FindTrapTarget(Map map, GameObject go)
     {
         bool owned = !_trapPlayersInUse;
@@ -571,7 +575,7 @@ internal sealed partial class MatchRuntime : IBattlegroundHost, IWrappingSpawnGa
             for (int i = 0; i < players.Count; i++)
             {
                 Player p = players[i];
-                if (p.IsAlive && Within(go, p, BattlegroundConstants.BattlegroundTrapCooldownSeconds))
+                if (p.IsAlive && !p.IsGameMaster && Within(go, p, BattlegroundConstants.BattlegroundTrapCooldownSeconds))
                 {
                     return p;
                 }
@@ -620,7 +624,7 @@ internal sealed partial class MatchRuntime : IBattlegroundHost, IWrappingSpawnGa
             _trapCooldowns[go.Guid] = _clockMs + (BattlegroundConstants.BattlegroundTrapCooldownSeconds * 1000L);
 
             // vmangos GameObject.cpp:546-552: the buff is cast on any living player in reach, but only a player who is in the battleground
-            // (Player::InBattleGround) uses the object up; a game master or anyone else on the map leaves it where it is.
+            // (Player::InBattleGround) uses the object up; anyone else on the map leaves it where it is (a game master is excluded in FindTrapTarget).
             if (Battleground.PlayerTeam(target.Guid) is null)
             {
                 continue;

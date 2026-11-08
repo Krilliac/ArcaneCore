@@ -29,7 +29,7 @@ public sealed class EconomyAuctionDeletionBarrierTests
     [Fact]
     public async Task SuccessfulAuctionCommit_DisconnectThenDeleteWaitsForPublicationBeforeCacheCleanup()
     {
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        using var deadline = new CancellationTokenSource();
         CancellationToken token = deadline.Token;
         var control = new Control();
         await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync(services =>
@@ -41,6 +41,8 @@ public sealed class EconomyAuctionDeletionBarrierTests
             services.AddScoped<ICharacterStore>(provider => new ObservedCharacters(
                 new EfCharacterStore(provider.GetRequiredService<CharacterDbContext>()), control));
         }, token);
+        // The fixture starts under its own hang bound; the scenario deadline is armed after it returns (TestDeadlines).
+        deadline.CancelAfter(TimeSpan.FromSeconds(45));
         await server.AddAccountAsync(Account, Password, token);
         await using WorldClient original = await AuthenticateAsync(server, token);
         var connection = new ScenarioConnection(original);

@@ -272,6 +272,41 @@ public sealed class CharacterOwnershipShardTests : IAsyncLifetime
         Assert.Equal(a.Epoch + 2, reacquired.Epoch); // acquire +1, reap +1, acquire +1
     }
 
+    [Fact]
+    public void HeartbeatModule_CreatesItsOwnTable_AfterTheShardModule()
+    {
+        var module = new CharacterOwnershipHeartbeatDataModule();
+        Assert.Equal(DatabaseComponent.Characters, module.Component);
+        Assert.True(module.SchemaVersion > CharacterOwnershipShardDataModule.Version);
+        Assert.Contains(CharacterDataCleanups.All, c => c.GetType() == module.GetType());
+        Assert.Contains(module.SchemaChanges, c => c is CreateTableChange { Table: CharacterOwnershipHeartbeatDataModule.Table });
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task Heartbeat_WritesItsOwnTable_NeverTheFenceRow_AndRefusesAStaleToken(DatabaseProvider provider)
+    {
+        DatabaseConnectionOptions connection = await SetupAsync(provider);
+        CharacterOwnershipToken a = (await Run(connection, s => s.TryAcquireAsync(ShardA, "node-a", Guid.NewGuid(), [1u])))!;
+        CharacterOwnershipRow before = await ReadRowAsync(connection, ShardA);
+        long claimBeat = await ReadBeatAsync(connection, ShardA);
+        Assert.True(claimBeat > 0); // the claim records the first beat
+
+        long later = claimBeat + 5_000;
+        Assert.True(await Run(connection, s => s.HeartbeatAsync(a, later)));
+        Assert.True(await Run(connection, s => s.HeartbeatAsync(a, later + 1)));
+        Assert.Equal(later + 1, await ReadBeatAsync(connection, ShardA)); // upsert: one row, updated in place
+
+        CharacterOwnershipRow after = await ReadRowAsync(connection, ShardA);
+        Assert.Equal(before.WriteSequence, after.WriteSequence);
+        Assert.Equal(before.Epoch, after.Epoch);
+        Assert.Null(after.HeartbeatAtMs); // the retired column is never written
+
+        Assert.False(await Run(connection, s => s.HeartbeatAsync(a with { Epoch = a.Epoch + 1 }, later + 100)));
+        Assert.False(await Run(connection, s => s.HeartbeatAsync(a with { Incarnation = Guid.NewGuid() }, later + 100)));
+        Assert.Equal(later + 1, await ReadBeatAsync(connection, ShardA)); // a refused beat writes nothing
+    }
+
     [Theory]
     [MemberData(nameof(Providers))]
     public async Task Takeover_MovesAWorkerShardAndKeepsItsMaps(DatabaseProvider provider)
@@ -340,6 +375,18 @@ public sealed class CharacterOwnershipShardTests : IAsyncLifetime
     {
         await using CharacterDbContext db = TestContexts.Create<CharacterDbContext>(connection);
         await call(new EfCharacterOwnershipStore(db));
+    }
+
+    private static async Task<CharacterOwnershipRow> ReadRowAsync(DatabaseConnectionOptions connection, string scope)
+    {
+        await using CharacterDbContext db = TestContexts.Create<CharacterDbContext>(connection);
+        return await db.Set<CharacterOwnershipRow>().AsNoTracking().SingleAsync(r => r.Scope == scope);
+    }
+
+    private static async Task<long> ReadBeatAsync(DatabaseConnectionOptions connection, string scope)
+    {
+        await using CharacterDbContext db = TestContexts.Create<CharacterDbContext>(connection);
+        return await db.Set<CharacterOwnershipHeartbeatRow>().AsNoTracking().Where(r => r.Scope == scope).Select(r => r.HeartbeatAtMs).SingleAsync();
     }
 
     private static CharacterState State(int id, uint map, CharacterOwnershipToken? ownership)

@@ -3,6 +3,8 @@ using System.Net;
 using System.Text;
 using ArcaneCore.Data.Characters.Transfers;
 using ArcaneCore.Game;
+using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Death;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Teleport;
@@ -39,6 +41,35 @@ public sealed class GatewayCrossWorkerTeleportTests
     private static readonly TimeSpan Deadline = TimeSpan.FromSeconds(150);
     private static readonly TeleportDestination Landing = new(1, -1196.22f, 29.0f, 176.949f, 3.1f);
 
+    /// <summary>
+    /// Blocks the gateway's read-loop thread inside a test hook until <paramref name="released"/> is set or the test is cancelled: a real kernel wait on a signal, bounded by <see cref="Deadline"/>
+    /// and by the test's own token, with no polling on the hook's thread. The router exposes only its two counters (the route switch completed and nothing is staged), so the test side watches them
+    /// with <see cref="ReleaseWhenRouteSwitchedAsync"/> (an asynchronous poll that holds no thread) and sets the signal.
+    /// </summary>
+    private static void HoldUntil(ManualResetEventSlim released, CancellationToken cancellation)
+    {
+        try
+        {
+            released.Wait(Deadline, cancellation);
+        }
+        catch (OperationCanceledException)
+        {
+            // The test ended: let the read loop go.
+        }
+    }
+
+    /// <summary>
+    /// Sets <paramref name="release"/> once the hook has captured <paramref name="held"/> and the route switch has completed: the connection's session generation moved off
+    /// <paramref name="readUnder"/> (never 0 once the hook ran) and nothing is staged. Poll on the test's thread pool, not on the gateway's read loop.
+    /// </summary>
+    private static async Task ReleaseWhenRouteSwitchedAsync(
+        Cluster cluster, Func<GatewayClientConnection?> held, Func<long> readUnder, ManualResetEventSlim release, CancellationToken token)
+    {
+        await Cluster.WaitUntilAsync(
+            () => Task.FromResult(held() is { } connection && readUnder() != 0 && connection.SessionGeneration != readUnder() && cluster.Gateway.Transfers.StagedCount == 0), token);
+        release.Set();
+    }
+
     [Fact]
     public async Task ATeleportToKalimdor_OnTheEasternKingdomsWorker_MovesThePlayerToTheKalimdorWorker_AndTheJournalSaysCompleted()
     {
@@ -53,14 +84,16 @@ public sealed class GatewayCrossWorkerTeleportTests
         Assert.True(await cluster.TeleportAsync(guid, Landing));
 
         // The retail far-teleport sequence, sent by the Kalimdor worker (the east worker sends no loading-screen packet of its own).
-        WorldFrame pending = await client.ReadUntilAsync((ushort)WorldOpcode.SmsgTransferPending, cts.Token);
+        WorldFrame pending = await ReadPatientlyAsync(client, WorldOpcode.SmsgTransferPending, cts.Token);
         Assert.Equal(Landing.MapId, BinaryPrimitives.ReadUInt32LittleEndian(pending.Payload));
-        WorldFrame newWorld = await client.ReadUntilAsync((ushort)WorldOpcode.SmsgNewWorld, cts.Token);
+        WorldFrame newWorld = await ReadPatientlyAsync(client, WorldOpcode.SmsgNewWorld, cts.Token);
         Assert.Equal(Landing.MapId, BinaryPrimitives.ReadUInt32LittleEndian(newWorld.Payload));
         Assert.True(await cluster.Kalimdor.World.InvokeAsync(() => cluster.Kalimdor.World.FindOnlinePlayer(guid) is not null, cts.Token));
         Assert.False(await cluster.Eastern.World.InvokeAsync(() => cluster.Eastern.World.FindOnlinePlayer(guid) is not null, cts.Token));
 
         await client.SendAsync((ushort)WorldOpcode.MsgMoveWorldportAck, ReadOnlyMemory<byte>.Empty, cts.Token);
+        // The journal turns Completed at the arrival registration, not when the client has loaded: wait for the arrival login packets before anything else is sent or asserted.
+        await ReadPatientlyAsync(client, WorldOpcode.SmsgInitWorldStates, cts.Token);
 
         await Cluster.WaitUntilAsync(
             async () => await cluster.Kalimdor.World.InvokeAsync(() => cluster.Kalimdor.World.FindOnlinePlayer(guid) is { Map.MapId: 1 }, cts.Token), cts.Token);
@@ -73,6 +106,68 @@ public sealed class GatewayCrossWorkerTeleportTests
         Assert.Equal(0, cluster.Gateway.Transfers.StagedCount);
         await Cluster.WaitUntilAsync(
             () => Task.FromResult(cluster.Gateway.Workers[1].Link!.SessionCount == 1 && cluster.Gateway.Workers[0].Link!.SessionCount == 0), cts.Token);
+    }
+
+    /// <summary>
+    /// A real ghost through the whole transfer, from a body made by a real death. The source captures it into the production bundle and its settlement save writes it, the journal holds the
+    /// bundle, the target rebuilds the ghost from the stored life and, not owning the body's continent, keeps the body outside every map; the source's map loses the body at the retire, and
+    /// the target's logout save stores it unchanged, so nothing lost it on the way.
+    /// </summary>
+    [Fact]
+    public async Task AGhostTeleportedToKalimdor_ArrivesAsAGhost_AndItsBodySurvivesTheTransfer_FromBundleToTheNextSave()
+    {
+        using var cts = new CancellationTokenSource(Deadline);
+        await using Cluster cluster = await Cluster.StartAsync(cts.Token);
+        WorldClient client = await cluster.EnterEastAsync("TELEGHOST", "Teleghost", cts.Token);
+        await using var ownedClient = client;
+        ObjectGuid guid = ObjectGuid.Player((uint)cluster.CharacterId);
+        await Cluster.WaitUntilAsync(() => Task.FromResult(cluster.EastTeleports.ClusterFarRouter is not null), cts.Token);
+
+        CorpseSnapshot body = await cluster.Eastern.World.InvokeAsync(() =>
+        {
+            Player player = cluster.Eastern.World.FindOnlinePlayer(guid) ?? throw new InvalidOperationException("the character is not online");
+            player.Health = 0;
+            player.Map!.Combat.KillPlayer(player);
+            Assert.True(player.Map!.Combat.RepopPlayer(player));
+            return PlayerLife.Capture(player).Corpse ?? throw new InvalidOperationException("the release made no body");
+        }, cts.Token);
+        Assert.Equal(0u, body.MapId);
+
+        Assert.True(await cluster.TeleportAsync(guid, Landing));
+        await ReadPatientlyAsync(client, WorldOpcode.SmsgNewWorld, cts.Token);
+        await client.SendAsync((ushort)WorldOpcode.MsgMoveWorldportAck, ReadOnlyMemory<byte>.Empty, cts.Token);
+        // The journal turns Completed at the arrival registration, not when the client has loaded: wait for the arrival login packets before anything else is sent or asserted.
+        await ReadPatientlyAsync(client, WorldOpcode.SmsgInitWorldStates, cts.Token);
+        await Cluster.WaitUntilAsync(
+            async () => await cluster.Kalimdor.World.InvokeAsync(() => cluster.Kalimdor.World.FindOnlinePlayer(guid) is { Map.MapId: 1, Combat.Corpse: not null }, cts.Token), cts.Token);
+
+        Guid transferId = cluster.Router.LastTransferId;
+        await Cluster.WaitUntilAsync(
+            async () => (await cluster.Store.GetDecisionAsync(transferId, cts.Token))?.DecisionState == PlayerTransferDecisionState.Completed, cts.Token);
+        PlayerTransferBundle journalled = Assert.IsType<PlayerTransferBundle>((await cluster.Store.GetDecisionAsync(transferId, cts.Token))!.CapturedBundle);
+        Assert.True(journalled.IsGhost);
+        Assert.Equal(body, journalled.Corpse);
+
+        await cluster.Kalimdor.World.InvokeAsync(() =>
+        {
+            Player player = cluster.Kalimdor.World.FindOnlinePlayer(guid) ?? throw new InvalidOperationException("the character is not online");
+            Assert.NotEqual(0u, (uint)(player.Flags & PlayerFlags.Ghost));
+            Assert.False(player.IsAlive);
+            Assert.Equal(1u, player.Health);
+            Assert.Equal(body, PlayerLife.Capture(player).Corpse);
+            Assert.Null(player.Combat.Corpse!.Map); // map 0 belongs to the east worker
+            Assert.Null(cluster.Kalimdor.World.FindMap(0));
+            return true;
+        }, cts.Token);
+        await Cluster.WaitUntilAsync(
+            async () => await cluster.Eastern.World.InvokeAsync(() => cluster.Eastern.World.GetMap(0).Combat.Corpses.Count == 0, cts.Token), cts.Token);
+
+        await client.DisposeAsync(); // logout on the target: its save is the next write of the body
+        await Cluster.WaitUntilAsync(async () => await cluster.Store.GetActiveOwnershipAsync((ulong)cluster.CharacterId, cts.Token) is null, cts.Token);
+        await using AsyncServiceScope scope = cluster.Kalimdor.Services.CreateAsyncScope();
+        CharacterLife stored = Assert.IsType<CharacterLife>(await scope.ServiceProvider.GetRequiredService<ICharacterLifeStore>().LoadAsync(cluster.CharacterId, cts.Token));
+        Assert.True(stored.IsGhost);
+        Assert.Equal(body, stored.Corpse);
     }
 
     [Fact]
@@ -97,6 +192,8 @@ public sealed class GatewayCrossWorkerTeleportTests
         WorldFrame newWorld = await ReadPatientlyAsync(client, WorldOpcode.SmsgNewWorld, cts.Token);
         Assert.Equal(Landing.MapId, BinaryPrimitives.ReadUInt32LittleEndian(newWorld.Payload));
         await client.SendAsync((ushort)WorldOpcode.MsgMoveWorldportAck, ReadOnlyMemory<byte>.Empty, cts.Token);
+        // The journal turns Completed at the arrival registration, not when the client has loaded: wait for the arrival login packets before anything else is sent or asserted.
+        await ReadPatientlyAsync(client, WorldOpcode.SmsgInitWorldStates, cts.Token);
 
         await Cluster.WaitUntilAsync(
             async () => await cluster.Kalimdor.World.InvokeAsync(() => cluster.Kalimdor.World.FindOnlinePlayer(guid) is { Map.MapId: 1 }, cts.Token), cts.Token);
@@ -133,8 +230,8 @@ public sealed class GatewayCrossWorkerTeleportTests
     }
 
     /// <summary>
-    /// Reads frames until one with <paramref name="opcode"/> arrives. A transfer is seconds of silence, and the mock client's 5 s bound on a whole search flakes under load (see
-    /// TestDeadlines in the mock client's tests), so only the wait for a frame's first byte is long here. A teleport that was refused sends nothing that ends this; the 60 s bound does.
+    /// Reads frames until one with <paramref name="opcode"/> arrives. A transfer is seconds of silence, and a short bound on a whole search flakes under load (this assembly's TestDeadlines
+    /// sets the mock client's per-operation bound to 30 s), so only the wait for a frame's first byte is long here. A teleport that was refused sends nothing that ends this; the 60 s bound does.
     /// </summary>
     private static async Task<WorldFrame> ReadPatientlyAsync(WorldClient client, WorldOpcode opcode, CancellationToken token)
     {
@@ -184,7 +281,11 @@ public sealed class GatewayCrossWorkerTeleportTests
         long ackReadUnder = 0;
         long ackRoutedAfter = 0;
         bool ackReadWhileStaged = false;
+        GatewayClientConnection? ackConnection = null;
         using var ackRead = new ManualResetEventSlim();
+        using var ackRelease = new ManualResetEventSlim();
+        // Set after the hook's last write: the release only wakes the blocked read loop, so the test must not read ackRoutedAfter on the strength of the release alone.
+        var ackRouted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         cluster.Gateway.BeforeRouteClientPacket = (connection, opcode) =>
         {
             if (opcode != WorldOpcode.MsgMoveWorldportAck)
@@ -194,28 +295,41 @@ public sealed class GatewayCrossWorkerTeleportTests
 
             // Hold the read loop until the route switch has completed: the session moved to a new generation and nothing is staged any more.
             long read = connection.SessionGeneration;
+            Volatile.Write(ref ackConnection, connection);
             Interlocked.Exchange(ref ackReadUnder, read);
             Volatile.Write(ref ackReadWhileStaged, cluster.Gateway.Transfers.StagedCount == 1);
             ackRead.Set();
-            while (!cts.IsCancellationRequested && (connection.SessionGeneration == read || cluster.Gateway.Transfers.StagedCount != 0))
-            {
-                Thread.Sleep(5);
-            }
+            HoldUntil(ackRelease, cts.Token);
 
             Interlocked.Exchange(ref ackRoutedAfter, connection.SessionGeneration);
+            ackRouted.TrySetResult();
         };
 
         // The Kalimdor world thread waits until the gateway has read the ack, so the activation (a command on that thread) and the route switch after it
         // cannot run before the read: the ack is read under the Eastern Kingdoms generation, while the transfer is staged, every time.
         cluster.Kalimdor.World.Post(() => ackRead.Wait(cts.Token));
-        Assert.True(await cluster.TeleportAsync(guid, Landing));
-        await client.ReadUntilAsync((ushort)WorldOpcode.SmsgTransferPending, cts.Token); // the gateway's, at the end of stage 4
-        await client.SendAsync((ushort)WorldOpcode.MsgMoveWorldportAck, ReadOnlyMemory<byte>.Empty, cts.Token);
-        await client.ReadUntilAsync((ushort)WorldOpcode.SmsgNewWorld, cts.Token);
+        // On a failing test the poll must not outlive it, the hook must not outlive the signal it waits on, and the held read loop is let go.
+        using var pollStop = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
+        Task releasing = ReleaseWhenRouteSwitchedAsync(cluster, () => Volatile.Read(ref ackConnection), () => Interlocked.Read(ref ackReadUnder), ackRelease, pollStop.Token);
+        try
+        {
+            Assert.True(await cluster.TeleportAsync(guid, Landing));
+            await ReadPatientlyAsync(client, WorldOpcode.SmsgTransferPending, cts.Token); // the gateway's, at the end of stage 4
+            await client.SendAsync((ushort)WorldOpcode.MsgMoveWorldportAck, ReadOnlyMemory<byte>.Empty, cts.Token);
+            await ReadPatientlyAsync(client, WorldOpcode.SmsgNewWorld, cts.Token);
 
-        await Cluster.WaitUntilAsync(
-            async () => await cluster.Kalimdor.World.InvokeAsync(() => cluster.Kalimdor.World.FindOnlinePlayer(guid) is { Map.MapId: 1 }, cts.Token), cts.Token);
-        cluster.Gateway.BeforeRouteClientPacket = null;
+            await Cluster.WaitUntilAsync(
+                async () => await cluster.Kalimdor.World.InvokeAsync(() => cluster.Kalimdor.World.FindOnlinePlayer(guid) is { Map.MapId: 1 }, cts.Token), cts.Token);
+            cluster.Gateway.BeforeRouteClientPacket = null;
+            await releasing;
+            await ackRouted.Task.WaitAsync(cts.Token);
+        }
+        finally
+        {
+            cluster.Gateway.BeforeRouteClientPacket = null;
+            pollStop.Cancel();
+            ackRelease.Set();
+        }
 
         // The race was the one described: the ack was read under one generation and routed after the switch to another.
         long readUnder = Interlocked.Read(ref ackReadUnder);
@@ -227,6 +341,60 @@ public sealed class GatewayCrossWorkerTeleportTests
         Guid transferId = router.LastTransferId;
         await Cluster.WaitUntilAsync(
             async () => (await cluster.Store.GetDecisionAsync(transferId, cts.Token))?.DecisionState == PlayerTransferDecisionState.Completed, cts.Token);
+    }
+
+    [Fact]
+    public async Task AWorldportAckLetThroughBeforeTheStage_AndRoutedAfterTheSwitch_ReachesTheKalimdorWorker()
+    {
+        // The other re-route branch: nothing is staged when the transfer router lets the packet through, so it is not held and not dropped; the whole transfer then runs before the link is
+        // chosen. The generation under the redirect gate is no longer the one the packet was read under, and the packet must go down the new link. The player can only enter the map through
+        // this one ack, so sending it down the old link or dropping it fails the wait below.
+        using var cts = new CancellationTokenSource(Deadline);
+        await using Cluster cluster = await Cluster.StartAsync(cts.Token);
+        await using WorldClient client = await cluster.EnterEastAsync("TELEROUTE", "Teleroute", cts.Token);
+        ObjectGuid guid = ObjectGuid.Player((uint)cluster.CharacterId);
+        await Cluster.WaitUntilAsync(() => Task.FromResult(cluster.EastTeleports.ClusterFarRouter is not null), cts.Token);
+
+        int taken = 0;
+        long readUnder = 0;
+        GatewayClientConnection? passedConnection = null;
+        using var passed = new ManualResetEventSlim();
+        using var passedRelease = new ManualResetEventSlim();
+        cluster.Gateway.AfterInterceptClientPacket = (connection, opcode) =>
+        {
+            if (opcode != WorldOpcode.MsgMoveWorldportAck || Interlocked.Exchange(ref taken, 1) != 0)
+            {
+                return;
+            }
+
+            long read = connection.SessionGeneration;
+            Volatile.Write(ref passedConnection, connection);
+            Interlocked.Exchange(ref readUnder, read);
+            passed.Set();
+            HoldUntil(passedRelease, cts.Token);
+        };
+
+        using var pollStop = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
+        Task releasing = ReleaseWhenRouteSwitchedAsync(cluster, () => Volatile.Read(ref passedConnection), () => Interlocked.Read(ref readUnder), passedRelease, pollStop.Token);
+        try
+        {
+            await client.SendAsync((ushort)WorldOpcode.MsgMoveWorldportAck, ReadOnlyMemory<byte>.Empty, cts.Token);
+            passed.Wait(cts.Token);
+            Assert.True(await cluster.TeleportAsync(guid, Landing));
+            await ReadPatientlyAsync(client, WorldOpcode.SmsgNewWorld, cts.Token);
+
+            await Cluster.WaitUntilAsync(
+                async () => await cluster.Kalimdor.World.InvokeAsync(() => cluster.Kalimdor.World.FindOnlinePlayer(guid) is { Map.MapId: 1 }, cts.Token), cts.Token);
+            cluster.Gateway.AfterInterceptClientPacket = null;
+            await releasing;
+        }
+        finally
+        {
+            cluster.Gateway.AfterInterceptClientPacket = null;
+            pollStop.Cancel();
+            passedRelease.Set();
+        }
+        Assert.NotEqual(0, Interlocked.Read(ref readUnder));
     }
 
     [Fact]

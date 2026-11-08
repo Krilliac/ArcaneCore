@@ -40,7 +40,7 @@ internal sealed class RealTerrainBotFactAttribute : FactAttribute
 /// route planning and its motion are checked there. Positions are the live characters' and the world database's creature spawns.
 /// Time moves only on the manual world clock; every wait is for a state, bounded by game time.
 /// </summary>
-public sealed class PlayerbotRealTerrainNavigationTests : RealTerrainNavigationTestBase
+public sealed partial class PlayerbotRealTerrainNavigationTests : RealTerrainNavigationTestBase
 {
     public PlayerbotRealTerrainNavigationTests(ITestOutputHelper output) : base(output) { }
 

@@ -122,7 +122,7 @@ public sealed class RetailTableTests
         (string Path, int Level)[] expected =
         [
             ("saveall", 6), ("announce", 4), ("notify", 4), ("gm", 2), ("gm chat", 1), ("kick", 2), ("tele", 2), ("go xyz", 2),
-            ("learn", 5), ("unlearn", 3), ("cast", 5), ("unaura", 3), ("cooldown", 3), ("modify money", 4),
+            ("learn", 5), ("unlearn", 3), ("cast", 5), ("cast self", 5), ("cast target", 5), ("cast back", 5), ("cast dist", 5), ("unaura", 3), ("cooldown", 3), ("modify money", 4),
             ("instance listbinds", 3), ("instance unbind", 3), ("instance stats", 4),
             ("guild create", 3), ("guild delete", 4), ("guild invite", 3), ("guild uninvite", 3), ("guild rank", 3),
             ("save", 0), ("help", 0), ("commands", 0), ("gps", 1), ("server info", 0), ("server motd", 0),
@@ -141,6 +141,22 @@ public sealed class RetailTableTests
         CommandTable table = ChatCommands.CreateTable(new GmOptions { RetailLevels = false });
         Assert.Equal(3, table.Find("kick")!.RequiredLevel(table.Gm));   // the legacy GameMaster declaration, not retail TICKETMASTER (2)
         Assert.Equal(1, table.Find("saveall")!.RequiredLevel(table.Gm));   // legacy Moderator, not retail ADMINISTRATOR (6)
+    }
+
+    [Fact]
+    public void TheCastChildren_NeedTheSameLevelAsCast_WhetherRetailLevelsAreOnOrOff()
+    {
+        foreach (bool retail in new[] { true, false })
+        {
+            CommandTable table = ChatCommands.CreateTable(new GmOptions { RetailLevels = retail });
+            int cast = table.Find("cast")!.RequiredLevel(table.Gm);
+            foreach (string child in new[] { "cast self", "cast target", "cast back", "cast dist" })
+            {
+                Assert.True(cast == table.Find(child)!.RequiredLevel(table.Gm), $"retail={retail}: {child} needs a different level than cast ({cast})");
+            }
+
+            Assert.Equal(retail ? 5 : table.Gm.LevelOf(AccountSecurity.Administrator), cast); // the stored Administrator tier when the retail table is off
+        }
     }
 
     [Fact]

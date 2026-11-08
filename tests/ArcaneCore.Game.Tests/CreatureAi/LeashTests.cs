@@ -208,7 +208,7 @@ public sealed class LeashTests
         Assert.False(f.Wolf.IsMoving);
         Assert.True(MapCombat.CanReachWithMeleeAutoAttack(f.Wolf, f.Player));
         Run(f.World, 4800); // just under 5 s standing again since the move: still no refresh
-        Assert.True(LeashAge(f) >= 9 && !f.Wolf.IsInEvadeMode, $"DBG age={LeashAge(f)} evade={f.Wolf.IsInEvadeMode}");
+        Assert.True(LeashAge(f) >= 9 && !f.Wolf.IsInEvadeMode, $"leash age={LeashAge(f)} evade={f.Wolf.IsInEvadeMode}");
 
         Run(f.World, 300); // 5 s standing: the refresh
         Assert.Equal(0, LeashAge(f));

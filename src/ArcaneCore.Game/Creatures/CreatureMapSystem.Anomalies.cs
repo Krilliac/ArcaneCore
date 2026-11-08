@@ -216,11 +216,11 @@ public sealed partial class CreatureMapSystem
             return;
         }
 
-        // Exclude creatures on transports, flyers, water-only creatures, or currently swimming/flying/hovering units.
+        // Exclude creatures on transports, flyers, water-only creatures, or currently swimming/flying/hovering/levitating units.
         if (creature.Movement.TransportGuid != 0
             || (creature.Template.InhabitType & 4) != 0
             || creature.Template.InhabitType == 2
-            || (creature.Movement.Flags & (MovementFlags.Flying | MovementFlags.Hover | MovementFlags.Swimming)) != 0)
+            || (creature.Movement.Flags & (MovementFlags.Flying | MovementFlags.Hover | MovementFlags.Levitating | MovementFlags.Swimming)) != 0)
         {
             creature.ClearUnderMapEpisode();
             return;
@@ -298,7 +298,7 @@ public sealed partial class CreatureMapSystem
             creature.SetHome(creature.Home with { Z = standZ });
         }
 
-        creature.Relocate(creature.X, creature.Y, standZ, creature.Orientation, unchecked((uint)_clockMs));
+        creature.Relocate(creature.X, creature.Y, standZ, creature.Orientation, _serverTime());
         creature.ClearUnderMapEpisode();
         return true;
     }
@@ -346,7 +346,7 @@ public sealed partial class CreatureMapSystem
             creature.SetHome(creature.Home with { Z = standZ });
         }
 
-        creature.Relocate(creature.X, creature.Y, standZ, creature.Orientation, unchecked((uint)_clockMs));
+        creature.Relocate(creature.X, creature.Y, standZ, creature.Orientation, _serverTime());
         return true;
     }
 

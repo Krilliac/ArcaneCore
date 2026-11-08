@@ -175,7 +175,7 @@ into a throwaway configuration (the live root is never reloaded: a broken file w
 on the world thread, so every reader sees the new value on its next read.
 - Live: `UpdateCompressionThreshold`, `AutosaveIntervalMs`, `CharactersPerRealm`, `Motd`,
   `ListenRange*`, `AllowTwoSideChat`, `AllowTwoSideWhoList`, `LogoutDelayMs`, `InstantLogoutSecurity`,
-  `GmLevelInWhoList`, `PlayerCommands`, `World:Maps:GridUnload`, `World:Maps:GridCleanUpDelayMs`,
+  `GmLevelInWhoList`, `PlayerCommands`, `LimitPlayTime` (a session registered while it was off starts its play clock at its first in-world tick after the switch), `CompressMovementCount` (read at each relayed movement packet), `ExpectedSpamRecords`, `World:Maps:GridUnload`, `World:Maps:GridCleanUpDelayMs`,
   `World:Maps:VisibilityRelocationLowerLimit` (read by `Map.OnObjectMoved` at each move),
   `World:Maps:UpdateActiveCellsOnly` (read by each continent map update),
   `World:Maps:GridActivationDistance` (`GridContainer` reads the shared `MapOptions` at each use; grids
@@ -232,7 +232,7 @@ table or catalog from the database).
 | `command` (817), `mangos_string` (864) | yes (:899-901) | none | no store |
 | `reserved_name` (888) | yes (:900) | `reserved_name` (in `all` when a SQL reserved-name store is registered; see below) | delivered |
 | `creature` (819), `creature_groups` (823), `creature_display_info_addon` (822), `cinematic_waypoints` (816) | no | none | owner lane (creature-movement-spawns) |
-| `creature_spells` (828) | no | none | no store |
+| `creature_spells` (828) | no | none | no store (the cmangos spell lists reload with `creature_template`: their catalog is part of the AI content, and a creature rebinds at its next tick out of combat) |
 | `creature_onkill_reputation` (826), `reputation_reward_rate` (886), `reputation_spillover_template` (887) | no | none | owner lane (reputation-factions) |
 | `spell_proc_item_enchant` (901) | yes, via all_spell (:972-981) | `spell_proc_item_enchant` (in `all` when its SQL store is registered; see below) | delivered |
 | `spell_enchant_charges` (no vmangos reload command) | - | `spell_enchant_charges`, an ArcaneCore addition (in `all` when its SQL store is registered; see below) | delivered |

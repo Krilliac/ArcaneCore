@@ -38,11 +38,11 @@ public sealed record CrashDumpOutcome(string? Path, CrashDumpMode Mode, string N
 
 /// <summary>
 /// The in-process crash dump (<c>Diagnostics:CrashDump</c>): picks the directory and the file name, walks the Full, Heap, Mini fallback chain
-/// with a timeout per attempt, restricts the file to its owner on Unix, and prunes the oldest files beyond <c>MaxFiles</c>.
+/// with a per-attempt answer timeout bounded by what is left of the chain's maximum (<see cref="MaxWaitSeconds"/> in all), restricts the file to its owner on Unix, and prunes the oldest files beyond <c>MaxFiles</c>.
 /// <para>
 /// Ownership: one instance per <see cref="CrashHandler"/>; no static state. Threading: <see cref="Run"/> is called on the crashing thread, which
 /// blocks while the dump is written on a dedicated background thread (never the thread pool, which a crash may have starved), so a hung runtime
-/// costs at most <see cref="MaxWaitSeconds"/> for the whole fallback chain (the timeout is per attempt, the limit is per chain). Nothing here throws to the caller except out-of-memory; every failure is logged through the supplied callback.
+/// costs at most <see cref="MaxWaitSeconds"/> for the whole fallback chain (an attempt gets what is left of the chain's limit, not a fresh one). Nothing here throws to the caller except out-of-memory; every failure is logged through the supplied callback.
 /// </para>
 /// </summary>
 public sealed class CrashDumpService
@@ -136,6 +136,7 @@ public sealed class CrashDumpService
     {
         EnsureDirectory(directory, log);
         string path = UniquePath(directory, FileNameFor(daemon, Environment.ProcessId, utcNow));
+        // Math.Max(1, ..) is a defence for options built in code: the start-up check (CrashDumpConfigChecks) refuses a TimeoutSeconds below 1, so a configured value is never raised to 1 here.
         TimeSpan timeout = TimeSpan.FromSeconds(Math.Max(1, options.TimeoutSeconds));
         CrashDumpMode requested = options.Mode;
         CrashDumpMode attempt = requested;
@@ -200,6 +201,7 @@ public sealed class CrashDumpService
     }
 
     /// <summary>The most seconds the crash path waits for a dump in total, across every attempt of the fallback chain: the answer timeout, then as long as the file grows, capped at three times the timeout. The heartbeat grace of the supervisors is sized from this.</summary>
+    // The Math.Max(1, ..) matches WriteChain: a configured value below 1 is refused at start-up and never reaches here.
     public static int MaxWaitSeconds(CrashDumpOptions options) => checked(3 * Math.Max(1, options.TimeoutSeconds));
 
     private readonly record struct AttemptResult(string? Error, bool StopChain);

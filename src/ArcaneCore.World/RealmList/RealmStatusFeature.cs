@@ -12,7 +12,8 @@ namespace ArcaneCore.World.RealmList;
 /// <summary>
 /// The population half of the world's realm-list row, and the clean-stop hook, as vmangos mangosd does:
 /// <list type="bullet">
-/// <item>when a session is added the population becomes 2 x sessions / <see cref="RealmStatusOptions.PlayerLimit"/> (World.cpp:340-353,
+/// <item>when a session is added the population becomes 2 x sessions / <see cref="RealmStatusOptions.PlayerLimit"/>, where sessions counts every
+/// registered session, playerbot sessions included (World.cpp:340-353,
 /// in <c>World::AddSession_</c>; vmangos has no timer for it, so neither is there one here);</item>
 /// <item>before the world stops (<see cref="WorldLifecycleStage.BeforeWorldStop"/>, which a failed start runs too), the pending population write
 /// finishes and <see cref="RealmLivenessService"/> marks the row Offline and Stopped (Master.cpp:330 <c>realmflags | REALM_FLAG_OFFLINE</c>).</item>
