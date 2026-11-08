@@ -25,11 +25,13 @@ public sealed class BanRecheckTests
         await using var host = WorldTestHost.Start(banOptions: Fast);
         await using WorldTestClient client = await host.EnterWorldAsync("EXTERNAL", "Extern");
         int id = (await host.Accounts.FindByUsernameAsync("EXTERNAL"))!.Id;
+        ArcaneCore.World.Net.WorldSession? session = host.Registry.Find(id);
 
         host.Bans.AddAccountRow(id, RealNow - 1, RealNow - 1); // SQL / AccountTool in another process: no event
 
         Assert.True(await client.IsClosedByServerAsync());
         await WorldTestHost.WaitForAsync(() => host.Registry.Find(id) is null, "the session to unregister");
+        Assert.Equal("account banned", session!.KickReason);
     }
 
     [Fact]
@@ -69,10 +71,13 @@ public sealed class BanRecheckTests
     {
         await using var host = WorldTestHost.Start(banOptions: Fast);
         await using WorldTestClient client = await host.EnterWorldAsync("FLIPPED", "Flipper");
+        int id = (await host.Accounts.FindByUsernameAsync("FLIPPED"))!.Id;
+        ArcaneCore.World.Net.WorldSession? session = host.Registry.Find(id);
 
         (await host.Accounts.FindByUsernameAsync("FLIPPED"))!.Status = AccountStatus.Banned; // raw write, no event
 
         Assert.True(await client.IsClosedByServerAsync());
+        Assert.Equal("account status is no longer active", session!.KickReason);
     }
 
     [Fact]
@@ -80,10 +85,13 @@ public sealed class BanRecheckTests
     {
         await using var host = WorldTestHost.Start(banOptions: Fast);
         await using WorldTestClient client = await host.EnterWorldAsync("IPEXT", "Ipext");
+        int id = (await host.Accounts.FindByUsernameAsync("IPEXT"))!.Id;
+        ArcaneCore.World.Net.WorldSession? session = host.Registry.Find(id);
 
         host.Bans.AddIpRow("127.0.0.1", RealNow - 1, RealNow - 1);
 
         Assert.True(await client.IsClosedByServerAsync());
+        Assert.Equal("address 127.0.0.1 banned", session!.KickReason);
     }
 
     [Fact]

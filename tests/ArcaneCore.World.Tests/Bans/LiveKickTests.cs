@@ -4,6 +4,7 @@ using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Bans;
+using ArcaneCore.World.Net;
 using ArcaneCore.World.Tests.Security;
 using Xunit;
 
@@ -28,10 +29,12 @@ public sealed class LiveKickTests
         WorldTestClient client = await host.EnterWorldAsync("VICTIM", "Victim");
         int id = (await host.Accounts.FindByUsernameAsync("VICTIM"))!.Id;
         await host.PlaceAsync("Victim", MarkerX, 10f, 20f);
+        WorldSession? session = host.Registry.Find(id);
 
         await host.Bans.BanAccountAsync(new BanRequest(id, 0, "cheating", "GM"));
 
         Assert.True(await client.IsClosedByServerAsync(), "the banned client must be disconnected");
+        Assert.Equal("account banned", session!.KickReason);
         await WorldTestHost.WaitForAsync(() => host.Registry.Find(id) is null, "the session to unregister");
         await WorldTestHost.WaitForAsync(() => host.World.OnlinePlayerCount == 0, "the player to leave the world");
         await WorldTestHost.WaitForAsync(() => host.Characters.SaveCount > 0, "the final save");
@@ -53,11 +56,14 @@ public sealed class LiveKickTests
     {
         await using var host = WorldTestHost.Start();
         await using WorldTestClient client = await host.EnterWorldAsync("COLUMNVIC", "Colvic");
+        int id = (await host.Accounts.FindByUsernameAsync("COLUMNVIC"))!.Id;
+        WorldSession? session = host.Registry.Find(id);
 
         Assert.True(await host.Accounts.SetStatusAsync("COLUMNVIC", status));
 
         Assert.True(await client.IsClosedByServerAsync());
         await WorldTestHost.WaitForAsync(() => host.World.OnlinePlayerCount == 0, "the player to leave the world");
+        Assert.Equal(status == AccountStatus.Banned ? "account banned" : "account suspended", session!.KickReason);
     }
 
     [Fact]
@@ -111,6 +117,7 @@ public sealed class LiveKickTests
         await using var host = WorldTestHost.Start();
         await using WorldTestClient client = await host.EnterWorldAsync("LOOPBACKER", "Loopy");
         int id = (await host.Accounts.FindByUsernameAsync("LOOPBACKER"))!.Id;
+        WorldSession? session = host.Registry.Find(id);
 
         await host.Bans.BanIpAsync(new IpBanRequest("10.1.2.3", 0, "other address", "GM"));
         await PingAsync(client); // an unrelated address: untouched
@@ -119,6 +126,7 @@ public sealed class LiveKickTests
         await host.Bans.BanIpAsync(new IpBanRequest("127.0.0.1", 0, "this address", "GM"));
         Assert.True(await client.IsClosedByServerAsync());
         await WorldTestHost.WaitForAsync(() => host.Registry.Find(id) is null, "the session to unregister");
+        Assert.Equal("address 127.0.0.1 banned", session!.KickReason);
     }
 
     [Fact]
