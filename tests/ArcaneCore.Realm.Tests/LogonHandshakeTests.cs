@@ -23,6 +23,7 @@ namespace ArcaneCore.Realm.Tests;
 /// 1.12.1 client, validating the full M1 wire exchange (challenge → proof → realm list)
 /// byte-for-byte without a database or the real game client.
 /// </summary>
+[Collection(LogonSessionsCollection.Name)]
 public sealed class LogonHandshakeTests
 {
     private const string Username = "TESTER";
