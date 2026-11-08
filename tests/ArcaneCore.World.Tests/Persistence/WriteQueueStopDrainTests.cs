@@ -184,9 +184,14 @@ public sealed class WriteQueueStopDrainTests
         Assert.DoesNotContain(capture.Notices, n => n.Code == "write-retry-exhausted" && n.Detail.Contains("StopDrainExhaustedException", StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// Polls until <paramref name="condition"/> holds, within <see cref="Wait"/>. The fake store blocks a pool thread for its delay, so on
+    /// a loaded CI runner the queue's first write can take seconds to be scheduled; a 5 s deadline here failed "the write never started"
+    /// on otherwise green runs while the same test's stop waits already had the 60 s budget.
+    /// </summary>
     private static async Task UntilAsync(Func<bool> condition, string what)
     {
-        DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        DateTime deadline = DateTime.UtcNow + Wait;
         while (!condition())
         {
             Assert.True(DateTime.UtcNow < deadline, what);

@@ -290,6 +290,9 @@ internal sealed class ObserverFeedServer : IAsyncDisposable
                 if (line == LineReader.TooLong)
                 {
                     await SendAsync(ObserverFrames.Error("line-too-long", "a line is longer than " + MaxLineBytes.ToString(CultureInfo.InvariantCulture) + " bytes")).ConfigureAwait(false);
+
+                    // clean close on Unix; see DrainLineAsync
+                    await reader.DrainLineAsync(stop).ConfigureAwait(false);
                     return;
                 }
 
@@ -459,6 +462,12 @@ internal sealed class ObserverFeedServer : IAsyncDisposable
         /// <summary>The value <see cref="ReadLineAsync"/> returns for a line over the limit.</summary>
         public const string TooLong = "\0too-long";
 
+        /// <summary>The most <see cref="DrainLineAsync"/> reads past the point <see cref="TooLong"/> was returned, before it gives up.</summary>
+        public const int DrainLimitBytes = 1024 * 1024;
+
+        /// <summary>The longest <see cref="DrainLineAsync"/> waits for the offending line's newline before it gives up.</summary>
+        public static readonly TimeSpan DrainTimeout = TimeSpan.FromSeconds(2);
+
         private readonly byte[] _buffer = new byte[maxBytes + 1];
         private int _length;
 
@@ -488,6 +497,51 @@ internal sealed class ObserverFeedServer : IAsyncDisposable
                 }
 
                 _length += read;
+            }
+        }
+
+        /// <summary>
+        /// After <see cref="TooLong"/>: discards the buffered start of the line and reads on until its newline, so the
+        /// connection can be closed with nothing unread (on Unix the pipe is a socket, and a close with unread bytes resets it
+        /// before the client sees the answer). Bounded: at most <see cref="DrainLimitBytes"/> more bytes and
+        /// <see cref="DrainTimeout"/>, so a client that never sends the newline cannot hold the connection; those cases, and a
+        /// client that has already gone, end the drain quietly.
+        /// </summary>
+        public async Task DrainLineAsync(CancellationToken cancellationToken)
+        {
+            _length = 0;
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            deadline.CancelAfter(DrainTimeout);
+            long total = 0;
+            try
+            {
+                while (true)
+                {
+                    int read = await stream.ReadAsync(_buffer.AsMemory(), deadline.Token).ConfigureAwait(false);
+                    if (read == 0)
+                    {
+                        return;
+                    }
+
+                    total += read;
+                    if (Array.IndexOf(_buffer, (byte)'\n', 0, read) >= 0)
+                    {
+                        return;
+                    }
+
+                    if (total >= DrainLimitBytes)
+                    {
+                        return;
+                    }
+                }
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                // the deadline fired, not the caller's token: the client never finished the line
+            }
+            catch (IOException)
+            {
+                // the client went away
             }
         }
     }
