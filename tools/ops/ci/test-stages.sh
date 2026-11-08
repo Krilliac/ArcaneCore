@@ -434,7 +434,7 @@ if [ "$stage" = batch ] || [ "$stage" = all ]; then
       summary+=("  $t: rc=$rc executed $e passed $p failed $f skipped $s")
       if grep -q 'test run timeout of [0-9]* milliseconds exceeded' "$log"; then fail "batch $t was stopped at its ${suite_budget_min}m time budget (GATE_SUITE_BUDGET_MIN)"; fi
       grep -q 'Test Run Aborted' "$log" && fail "batch $t: test run aborted"
-      if [ $rc -ne 0 ] || [ "$f" -gt 0 ]; then
+      if [ "$rc" -ne 0 ] || [ "$f" -gt 0 ]; then
         failed_names "$log" | sort -u | head -30 | sed 's/^/  Failed /'
         fail "batch $t (spell batching ${batch_ms} ms) rc=$rc failed=$f"
       fi

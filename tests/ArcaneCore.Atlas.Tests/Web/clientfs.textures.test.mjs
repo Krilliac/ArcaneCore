@@ -279,7 +279,7 @@ function mcnkBytes(index, { layers = [], holes = 0 } = {}) {
 
 /** A whole 1.12.1 ADT (MVER 18, MHDR, MCIN, MTEX and 256 MCNK). `spec(index)` gives each MCNK's layers and holes. */
 function adtBytes(names, spec) {
-    const mtexPayload = Uint8Array.from([...names.flatMap((n) => [...Buffer.from(`${n}\0`, 'latin1')])]);
+    const mtexPayload = Uint8Array.from(names.flatMap((n) => [...Buffer.from(`${n}\0`, 'latin1')]));
     const chunks = Array.from({ length: 256 }, (_, i) => mcnkBytes(i, spec(i)));
     const mcinAt = 12 + 8 + 64;
     const mtexAt = mcinAt + 8 + 4096;
