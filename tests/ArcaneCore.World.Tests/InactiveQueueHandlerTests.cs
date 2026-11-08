@@ -101,6 +101,7 @@ public sealed class InactiveQueueHandlerTests
     }
 
     [Fact]
+    [Trait("Category", "Timing")] // synchronizes test and world threads through 10 s waits (PR 1872 spell-batching leg: one failure, 5/5 in isolation)
     public async Task QueuedStatusPollCannotRunAgainstAnotherSessionsPlayer()
     {
         await using WorldTestHost host = WorldTestHost.Start();
