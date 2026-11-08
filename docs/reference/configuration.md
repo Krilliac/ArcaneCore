@@ -63,7 +63,6 @@ How to read the tables:
 - [`Ops:Metrics`](#opsmetrics)
 - [`Ops:Observability`](#opsobservability)
 - [`Ops:Watchdog`](#opswatchdog)
-- [`PageText`](#pagetext)
 - [`PerformanceLog`](#performancelog)
 - [`Pets`](#pets)
 - [`Pets:Names`](#petsnames)
@@ -329,7 +328,7 @@ How to read the tables:
 | `Cluster:Fencing:AllowSqliteWorkerScope` | `bool` | `false` | - | With Scope=Worker, allows a SQLite characters database. Off by default: a split cluster needs PostgreSQL or MariaDB; only in-process tests set it. |
 | `Cluster:Fencing:ClaimWatchIntervalSeconds` | `int` | `10` | - | With fencing disabled, how often the world reads the characters ownership row to notice that a fenced world has claimed the database, in seconds (1 to 300). Independent of autosave; an unfenced world can keep writing for up to this long after a claim. |
 | `Cluster:Fencing:Enabled` | `bool` | `false` | - | Enable durable character ownership fencing at world startup; disabled by default. Mandatory in worker mode (Cluster:Worker:Enabled): a worker with fencing off refuses to start. Also required (startup check, exit 78) with Cluster:Node:Role other than Combined and for every world child of a Cluster:Supervisor that runs more than one world: an unfenced world skips the durable id allocator priming and collides on in-memory id counters. Each world of such a cluster needs its own OwnerNode and Cluster:Worker:NodeId, on a PostgreSQL or MariaDB characters database. The gateway reads this key too: with it or Cluster:Worker:Enabled true, the write fence is attached to the gateway's own characters connection (the handoff and transfer journals). |
-| `Cluster:Fencing:HeartbeatSeconds` | `int` | `10` | - | With Scope=Worker, how often the worker records that it is alive on its ownership row, in seconds (1 to 60). A reap only ever fires on a heartbeat older than ReapAfterSeconds. |
+| `Cluster:Fencing:HeartbeatSeconds` | `int` | `10` | - | With Scope=Worker, how often the worker records that it is alive on its heartbeat row, in seconds (1 to 60). A reap only ever fires on a heartbeat older than ReapAfterSeconds. |
 | `Cluster:Fencing:OwnerNode` | `string` | `"<machine-name>"` | - | The durable owner identity; defaults to the current machine name and must be stable while the world owns the database. Must be distinct for each world of a multi-world cluster (the supervisor check refuses a duplicate). |
 | `Cluster:Fencing:ReapAfterSeconds` | `int` | `150` | - | With Scope=Worker, the age of a worker row's last heartbeat before another worker may reap it as dead, in seconds (30 to 3600, and more than three heartbeats). Keep it above the advisory lock's stale-session timeout (about 4 x 30 s). |
 | `Cluster:Fencing:ReapDeadOwners` | `bool` | `true` | - | With Scope=Worker, whether a worker may reap a dead shard (lock free and heartbeat older than ReapAfterSeconds) so its characters become claimable; false leaves that to an operator. Ignored in Realm scope. |
@@ -396,8 +395,8 @@ How to read the tables:
 |---|---|---|---|---|
 | `Cluster:Worker:AllowInstanceMaps` | `bool` | `true` | - | With an OwnedMaps list: whether instance copies (dungeons, raids, battlegrounds) of maps outside the list also run on this worker. `true`, the default, lets a continent worker host the instances it hands out; `false` refuses them. Ignored while OwnedMaps is empty. |
 | `Cluster:Worker:BindAddress` | `string` | `"127.0.0.1"` | - | Address of the gateway listener. Keep it on loopback or a private network: the link is not encrypted. |
-| `Cluster:Worker:CharactersSchemaVersion` | `int` | `75` | - | Characters schema version both ends must agree on (an override label, used only while `VersionsFromDatabase` is false). |
-| `Cluster:Worker:ContentRevision` | `string` | `"world-schema-69"` | - | Content revision label both ends of the link must agree on; an override, used only while `VersionsFromDatabase` is false. |
+| `Cluster:Worker:CharactersSchemaVersion` | `int` | `77` | - | Characters schema version both ends must agree on (an override label, used only while `VersionsFromDatabase` is false). |
+| `Cluster:Worker:ContentRevision` | `string` | `"world-schema-72"` | - | Content revision label both ends of the link must agree on; an override, used only while `VersionsFromDatabase` is false. |
 | `Cluster:Worker:Enabled` | `bool` | `false` | - | `true` opens the gateway listener (worker mode) and makes character fencing mandatory: Cluster:Fencing:Enabled must be true, and the characters write fence is attached either way. `false`, the default, is Combined mode: no listener, no change. The gateway reads this key too, only to attach the write fence to its own characters connection (the handoff and transfer journals), as it does for Cluster:Fencing:Enabled. |
 | `Cluster:Worker:LinkSecret` | `string` | `""` | - | Shared secret a gateway proves (HMAC-SHA256 of a per-link challenge) before it may open sessions; must equal Gateway:LinkSecret. Required in worker mode on every bind address, loopback included: at least 16 characters, or the world refuses to start. An admitted gateway opens sessions for any account it authenticated, so treat the secret like a database password. |
 | `Cluster:Worker:NodeId` | `string` | `"world"` | - | This worker's node id in the link manifest (shown in the gateway's log). |
@@ -406,7 +405,7 @@ How to read the tables:
 | `Cluster:Worker:RealmId` | `int` | `1` | - | Realm id both ends of the link must agree on. |
 | `Cluster:Worker:Standby` | `bool` | `false` | - | Standby (Tier 3b handoff target; needs Enabled): start the process, build its services and link to the gateway, but admit no session, claim no characters ownership, run no schema DDL, take no writer lock until promoted (promotion takes it and is refused while the old world holds it), open no World:Port listener, and attach no feature nor start the simulation until promoted by a handoff (features read the characters database, which the active world still owns). `false`, the default, is an active worker. |
 | `Cluster:Worker:VersionsFromDatabase` | `bool` | `true` | - | `true`, the default, advertises the versions the databases record (characters and world schema version rows, and a content revision derived from the world schema version; an unreadable version refuses to link) instead of the three labels below, so a worker and gateway on mixed versions are refused at admission. The worker logs the values it advertises at start. `false` advertises the labels (the explicit override; tests and operators who pin them). The gateway has no database access: set its Gateway:* labels to the values the worker logs, or every gateway is refused. |
-| `Cluster:Worker:WorldSchemaVersion` | `int` | `69` | - | World schema version both ends must agree on (an override label, used only while `VersionsFromDatabase` is false). |
+| `Cluster:Worker:WorldSchemaVersion` | `int` | `72` | - | World schema version both ends must agree on (an override label, used only while `VersionsFromDatabase` is false). |
 
 ## `Cluster:Worker:Handoff`
 
@@ -655,8 +654,8 @@ How to read the tables:
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
 | `Gateway:BindAddress` | `string` | `"0.0.0.0"` | - | Address the client listener binds. |
-| `Gateway:CharactersSchemaVersion` | `int` | `75` | - | The characters schema version this gateway advertises; defaults to the version this build targets. Explicit override only. |
-| `Gateway:ContentRevision` | `string` | `"world-schema-69"` | - | The content revision this gateway advertises; must equal the worker's. Defaults to the revision derived from the world schema version this build targets (`GatewayManifestVersions.ContentRevisionFor`), which is what a default worker (Cluster:Worker:VersionsFromDatabase on) advertises once its database is at that version. Set it only to pin an explicit override (then set the worker's labels and Cluster:Worker:VersionsFromDatabase=false to match). |
+| `Gateway:CharactersSchemaVersion` | `int` | `77` | - | The characters schema version this gateway advertises; defaults to the version this build targets. Explicit override only. |
+| `Gateway:ContentRevision` | `string` | `"world-schema-72"` | - | The content revision this gateway advertises; must equal the worker's. Defaults to the revision derived from the world schema version this build targets (`GatewayManifestVersions.ContentRevisionFor`), which is what a default worker (Cluster:Worker:VersionsFromDatabase on) advertises once its database is at that version. Set it only to pin an explicit override (then set the worker's labels and Cluster:Worker:VersionsFromDatabase=false to match). |
 | `Gateway:LinkRetryDelay` | `TimeSpan` | `00:00:01` | - | First wait before reconnecting a lost or refused worker link; doubles up to 30 s. |
 | `Gateway:LinkSecret` | `string` | `""` | - | The shared link secret (Cluster:Worker:LinkSecret on the worker): at least 16 characters, or the gateway refuses to start. |
 | `Gateway:LoginWorker` | `string` | `""` | - | Node id of the worker new sessions open on (it must name a `Workers` entry, or `LegacyWorkerNodeId` in single-worker mode). While it is down, sessions open on the ready link with the fewest sessions. Empty, the default, designates none: sessions always spread over the ready links. |
@@ -670,7 +669,7 @@ How to read the tables:
 | `Gateway:WorkerAddress` | `string` | `"127.0.0.1"` | - | Address of the world worker's gateway listener (Cluster:Worker:BindAddress). Used only while `Workers` is empty. |
 | `Gateway:WorkerPort` | `int` | `8095` | - | Port of the world worker's gateway listener (Cluster:Worker:Port). Used only while `Workers` is empty. |
 | `Gateway:Workers` | `List<GatewayWorkerEntry>` | `[]` | - | The world workers this gateway links to, one link each (node id, address, port, optional maps). When empty, the single-worker keys `WorkerAddress` and `WorkerPort` describe one entry named `LegacyWorkerNodeId`; when set, those two keys are ignored. Every worker must accept the same `LinkSecret`, `RealmId` and manifest values. An entry may also name a standby process (StandbyNodeId, StandbyAddress, StandbyPort), the target of a whole-World handoff of that slot (needs Gateway:Handoff:Enabled). |
-| `Gateway:WorldSchemaVersion` | `int` | `69` | - | The world schema version this gateway advertises; defaults to the version this build targets. Explicit override only. |
+| `Gateway:WorldSchemaVersion` | `int` | `72` | - | The world schema version this gateway advertises; defaults to the version this build targets. Explicit override only. |
 
 ## `Gateway:Control`
 
@@ -714,8 +713,7 @@ How to read the tables:
 
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
-| `ItemRandomProperties:DbcPath` | `string` | `null` | - | The build-5875 ItemRandomProperties.dbc (16 fields), supplied by the developer and never downloaded by the daemon. Empty: no item gets a random property. A configured file that is unreadable or has another layout refuses startup. |
-| `ItemRandomProperties:EnchantmentTemplateDumpPath` | `string` | `null` | - | A MySQL world dump (vmangos or cmangos classic-db, plain or .gz) holding `item_enchantment_template`; only that table is read. Both this and `DbcPath` are needed for random properties. A configured dump that cannot be read refuses startup. |
+| `ItemRandomProperties:DbcPath` | `string` | `null` | - | The build-5875 ItemRandomProperties.dbc (16 fields), supplied by the developer and never downloaded by the daemon. Empty: no item gets a random property. The file is read only when the item_enchantment_template table has rows; a file that is unreadable or has another layout then refuses startup. |
 
 ## `ItemSets`
 
@@ -929,12 +927,6 @@ How to read the tables:
 | `Ops:Watchdog:TickMonitor:StackCaptureTool` | `string` | `""` | - | A stack tool run once per hung tick (past `HangMs`) against this process, out of process and off the world thread, whose output (every managed thread's stack, the world thread's among them) goes to `StackCaptureDirectory`; it is called as `&lt;tool&gt; report -p &lt;pid&gt;` (dotnet-stack). `%VAR%` references are expanded. Empty, or a file that does not exist: no capture. Default empty. |
 | `Ops:Watchdog:TickMonitor:SummaryIntervalSeconds` | `int` | `300` | - | Seconds between periodic frame-time summaries (p50/p99/max, overruns) at Information level. 0 disables the summary. Default 300. |
 | `Ops:Watchdog:TickMonitor:WarnIntervalSeconds` | `int` | `30` | - | Least seconds between two overrun warnings; overruns in between are counted and reported with the next warning. Default 30. |
-
-## `PageText`
-
-| Key | Type | Default | Reload | Meaning |
-|---|---|---|---|---|
-| `PageText:DumpPath` | `string` | `null` | - | A MySQL world dump (vmangos or cmangos classic-db, plain or .gz) holding the `page_text` table; only that table is read. Empty: no page text, so every page a client asks for is answered "Item page missing." (the vmangos answer for an unknown page). A configured file that cannot be read refuses startup. |
 
 ## `PerformanceLog`
 
@@ -2500,7 +2492,7 @@ These options hold entries that are themselves groups of keys. A list entry is n
 | `Category` | `byte` | `0` | The realm category (timezone group) id of the build-5875 realm-list layout. |
 | `Flags` | `RealmFlags` | `None` | The realm flags stored with the row (offline, new players, recommended and so on). A seeded row starts stopped (offline in the realm list) until a world reports in. Values: `None`, `Invalid`, `Offline`, `SpecifyBuild`, `NewPlayers`, `Recommended`. |
 | `Name` | `string` | `"ArcaneCore"` | The realm name shown on the realm-list screen. |
-| `Population` | `float` | `0` | The population value stored with the row and sent in the realm list as it is. It holds only until a world reports in: with realm liveness on, the world resets it to 0 and then writes sessions / player limit * 2, so on that scale 0 is empty and 2 is full. |
+| `Population` | `float` | `0` | The population value stored with the row and sent in the realm list as it is. It holds only until a world reports in: with realm liveness on, the world (the gateway, in a split) resets it to 0 and then, when `World:Realm:PlayerLimit` is above 0, writes sessions / player limit * 2, so on that scale 0 is empty and 2 is full. With a limit of 0 nothing is written after the reset, and bot sessions count, so 2 is not a ceiling. |
 | `Type` | `RealmType` | `Normal` | The realm type (icon) shown on the realm-list screen; the numeric values are the build-5875 wire values. Values: `Normal`, `PvP`, `Normal2`, `RP`, `RpPvP`. |
 
 ### `Warden:Checks`

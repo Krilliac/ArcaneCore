@@ -231,7 +231,7 @@ public sealed class QuestRewardEffects(SpellSystem spells, ILogger logger) : IQu
                 // handlers of the two base effects; a replaced handler is unknown code.
                 if (IsTeleportOrSummon(effect.Effect)
                     && (nested || effect.Effect is not (SpellEffectName.TeleportUnits or SpellEffectName.Summon)
-                        || !spells.HasBuiltInEffectHandler(effect.Effect)))
+                        || !spells.HasBuiltInEffectHandler(effect.Effect, spell.Id)))
                 {
                     return false;
                 }

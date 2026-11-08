@@ -57,7 +57,6 @@
 #   NET
 #   NPCSERVICES
 #   OPS
-#   PAGETEXT
 #   PERFORMANCELOG
 #   PETS
 #   PROGRESSION
@@ -1850,7 +1849,7 @@ Cluster.Fencing.Enabled = false
 #
 #    Cluster.Fencing.HeartbeatSeconds
 #        Description: With Scope=Worker, how often the worker records that it is alive on its
-#                     ownership row, in seconds (1 to 60). A reap only ever fires on a heartbeat
+#                     heartbeat row, in seconds (1 to 60). A reap only ever fires on a heartbeat
 #                     older than ReapAfterSeconds.
 #        Type: int
 #        Default: 10
@@ -2438,24 +2437,24 @@ Cluster.Worker.BindAddress = "127.0.0.1"
 #        Description: Characters schema version both ends must agree on (an override label, used
 #                     only while VersionsFromDatabase is false).
 #        Type: int
-#        Default: 75
+#        Default: 77
 #        Allowed: a whole number, -2147483648 to 2147483647
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#clusterworker
 #
-Cluster.Worker.CharactersSchemaVersion = 75
+Cluster.Worker.CharactersSchemaVersion = 77
 
 #
 #    Cluster.Worker.ContentRevision
 #        Description: Content revision label both ends of the link must agree on; an override, used
 #                     only while VersionsFromDatabase is false.
 #        Type: string
-#        Default: "world-schema-69"
+#        Default: "world-schema-72"
 #        Allowed: text
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#clusterworker
 #
-Cluster.Worker.ContentRevision = "world-schema-69"
+Cluster.Worker.ContentRevision = "world-schema-72"
 
 #
 #    Cluster.Worker.Enabled
@@ -2578,12 +2577,12 @@ Cluster.Worker.VersionsFromDatabase = true
 #        Description: World schema version both ends must agree on (an override label, used only
 #                     while VersionsFromDatabase is false).
 #        Type: int
-#        Default: 69
+#        Default: 72
 #        Allowed: a whole number, -2147483648 to 2147483647
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#clusterworker
 #
-Cluster.Worker.WorldSchemaVersion = 69
+Cluster.Worker.WorldSchemaVersion = 72
 
 #----------------------------------------------------------------------------
 # Cluster:Worker:Handoff
@@ -5382,8 +5381,9 @@ HotReload.NegativeNumbers = Retail
 #
 #    ItemRandomProperties.DbcPath
 #        Description: The build-5875 ItemRandomProperties.dbc (16 fields), supplied by the developer
-#                     and never downloaded by the daemon. Empty: no item gets a random property. A
-#                     configured file that is unreadable or has another layout refuses startup.
+#                     and never downloaded by the daemon. Empty: no item gets a random property. The
+#                     file is read only when the item_enchantment_template table has rows; a file
+#                     that is unreadable or has another layout then refuses startup.
 #        Type: string
 #        Default: (not set)
 #        Allowed: text
@@ -5391,20 +5391,6 @@ HotReload.NegativeNumbers = Retail
 #        Docs: docs/reference/configuration.md#itemrandomproperties
 #
 # ItemRandomProperties.DbcPath =
-
-#
-#    ItemRandomProperties.EnchantmentTemplateDumpPath
-#        Description: A MySQL world dump (vmangos or cmangos classic-db, plain or .gz) holding
-#                     item_enchantment_template; only that table is read. Both this and DbcPath are
-#                     needed for random properties. A configured dump that cannot be read refuses
-#                     startup.
-#        Type: string
-#        Default: (not set)
-#        Allowed: text
-#        Reload: Start-up (read once when the daemon starts)
-#        Docs: docs/reference/configuration.md#itemrandomproperties
-#
-# ItemRandomProperties.EnchantmentTemplateDumpPath =
 
 ###############################################################################
 # ITEMSETS
@@ -7396,28 +7382,6 @@ Ops.Watchdog.TickMonitor.SummaryIntervalSeconds = 300
 #        Docs: docs/reference/configuration.md#opswatchdog
 #
 Ops.Watchdog.TickMonitor.WarnIntervalSeconds = 30
-
-###############################################################################
-# PAGETEXT
-###############################################################################
-
-#----------------------------------------------------------------------------
-# PageText
-#----------------------------------------------------------------------------
-
-#
-#    PageText.DumpPath
-#        Description: A MySQL world dump (vmangos or cmangos classic-db, plain or .gz) holding the
-#                     page_text table; only that table is read. Empty: no page text, so every page a
-#                     client asks for is answered "Item page missing." (the vmangos answer for an
-#                     unknown page). A configured file that cannot be read refuses startup.
-#        Type: string
-#        Default: (not set)
-#        Allowed: text
-#        Reload: Start-up (read once when the daemon starts)
-#        Docs: docs/reference/configuration.md#pagetext
-#
-# PageText.DumpPath =
 
 ###############################################################################
 # PERFORMANCELOG
