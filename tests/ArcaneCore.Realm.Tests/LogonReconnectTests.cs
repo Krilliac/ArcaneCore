@@ -15,6 +15,7 @@ using Xunit;
 
 namespace ArcaneCore.Realm.Tests;
 
+[Collection(LogonSessionsCollection.Name)]
 public sealed class LogonReconnectTests : IAsyncLifetime
 {
     private readonly List<TcpClient> _clients = [];

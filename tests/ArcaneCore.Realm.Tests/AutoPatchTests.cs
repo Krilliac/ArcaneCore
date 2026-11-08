@@ -22,6 +22,7 @@ using Xunit;
 
 namespace ArcaneCore.Realm.Tests;
 
+[Collection(LogonSessionsCollection.Name)]
 public sealed class AutoPatchTests : IDisposable
 {
     private const string Username = "TESTER";
