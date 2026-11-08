@@ -251,7 +251,7 @@ the split).
 `if`/`throw ArgumentException`, not `Invariant.Assert`: the loop below mutates the rolling cipher state
 (`_sendIndex`/`_sendPrevious`, `_recvIndex`/`_recvPrevious`) as a side effect, and a wrong-length span must be rejected
 before that happens in every build, not only Debug — `Assert` is `[Conditional("DEBUG")]` and would let Release run the
-loop anyway, desynchronising every header decrypted or encrypted afterwards. Proof: `GatewayFuzzAndExceptionTests.WorldHeaderCrypt_ExceptionAndInvariantGuards`.
+loop anyway, desynchronising every header decrypted or encrypted afterwards. Proof: `GatewayFuzzAndExceptionTests.WorldHeaderCrypt_ExceptionAndInvariantGuards`. Trade-off: a plain throw is not counted in `Invariant.FailureCount`/`Invariant.Failures()` and is not rate-limit logged; it surfaces as a session fault (`WorldServer.HandleClientAsync` / `GatewayServer`) that closes the one connection. No production caller can reach it (both lengths come from the cipher's own `IncomingHeaderLength`/`OutgoingHeaderLength`), so the census is unaffected.
 
 ### Data (`src/ArcaneCore.Data/Schema`)
 

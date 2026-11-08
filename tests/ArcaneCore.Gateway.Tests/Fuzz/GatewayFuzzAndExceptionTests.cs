@@ -523,7 +523,7 @@ public sealed class GatewayFuzzAndExceptionTests
         // Wrong header lengths on an initialized cipher throw ArgumentException — unconditionally, in both
         // Debug and Release, because this guard is a plain `if`/`throw` in WorldHeaderCrypt.EncryptHeader
         // and DecryptHeader rather than Invariant.Assert (which Release strips together with its condition).
-        // Not fenced behind #if DEBUG: a Release build that skipped this check would silently RC4-step the
+        // Not fenced behind #if DEBUG: a Release build that skipped this check would silently advance the rolling xor/add (not ARC4) cipher state, i.e. step the
         // rolling cipher state on a malformed span and desynchronise every later header.
         ArgumentException encTooShort = Assert.Throws<ArgumentException>("header", () => crypt.EncryptHeader(new byte[3]));
         Assert.Contains("6 or 4 bytes, got 3", encTooShort.Message, StringComparison.Ordinal);
