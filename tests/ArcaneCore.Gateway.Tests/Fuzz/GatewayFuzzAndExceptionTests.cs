@@ -520,17 +520,64 @@ public sealed class GatewayFuzzAndExceptionTests
             Assert.Contains("initialised once per connection", scope.Failures[0].Message, StringComparison.Ordinal);
         }
 
-#if DEBUG
-        // Wrong header lengths on an initialized cipher trigger Invariant.Assert.
-        using (InvariantCapture scope = Invariant.Capture())
+        // Wrong header lengths on an initialized cipher throw ArgumentException — unconditionally, in both
+        // Debug and Release, because this guard is a plain `if`/`throw` in WorldHeaderCrypt.EncryptHeader
+        // and DecryptHeader rather than Invariant.Assert (which Release strips together with its condition).
+        // Not fenced behind #if DEBUG: a Release build that skipped this check would silently RC4-step the
+        // rolling cipher state on a malformed span and desynchronise every later header.
+        ArgumentException encTooShort = Assert.Throws<ArgumentException>("header", () => crypt.EncryptHeader(new byte[3]));
+        Assert.Contains("6 or 4 bytes, got 3", encTooShort.Message, StringComparison.Ordinal);
+        ArgumentException encTooLong = Assert.Throws<ArgumentException>("header", () => crypt.EncryptHeader(new byte[5]));
+        Assert.Contains("6 or 4 bytes, got 5", encTooLong.Message, StringComparison.Ordinal);
+        ArgumentException decTooShort = Assert.Throws<ArgumentException>("header", () => crypt.DecryptHeader(new byte[2]));
+        Assert.Contains("6 or 4 bytes, got 2", decTooShort.Message, StringComparison.Ordinal);
+        ArgumentException decTooLong = Assert.Throws<ArgumentException>("header", () => crypt.DecryptHeader(new byte[7]));
+        Assert.Contains("6 or 4 bytes, got 7", decTooLong.Message, StringComparison.Ordinal);
+
+        // A rejected call must leave the rolling cipher state untouched. Encrypt (and separately decrypt) a
+        // sequence of two correctly sized headers with a rejected wrong-length call sandwiched in between,
+        // and compare against the same sequence run with no failed call at all: if the failed call had
+        // advanced _sendIndex/_sendPrevious (or _recvIndex/_recvPrevious), the second header of the
+        // "with a failed call" run would diverge from the "without" run.
+        byte[] sendKey = new byte[WowSrp6.SessionKeyLength];
+        for (int i = 0; i < sendKey.Length; i++)
         {
-            Assert.Throws<InvariantViolationException>(() => crypt.EncryptHeader(new byte[3]));
-            Assert.Throws<InvariantViolationException>(() => crypt.EncryptHeader(new byte[5]));
-            Assert.Throws<InvariantViolationException>(() => crypt.DecryptHeader(new byte[2]));
-            Assert.Throws<InvariantViolationException>(() => crypt.DecryptHeader(new byte[7]));
-            Assert.Equal(4, scope.Failures.Count);
+            sendKey[i] = (byte)(i * 11 + 5);
         }
-#endif
+
+        byte[] smsgHeader1 = [0x00, 0x08, 0x55, 0x01];
+        byte[] smsgHeader2 = [0x00, 0x0C, 0x66, 0x02];
+        byte[] cmsgHeader1 = [0x00, 0x08, 0x55, 0x01, 0x00, 0x00];
+        byte[] cmsgHeader2 = [0x00, 0x0C, 0x66, 0x02, 0x00, 0x00];
+
+        var withoutFailedCall = new WorldHeaderCrypt();
+        withoutFailedCall.Initialize(sendKey);
+        byte[] expectedSmsg1 = (byte[])smsgHeader1.Clone();
+        withoutFailedCall.EncryptHeader(expectedSmsg1);
+        byte[] expectedSmsg2 = (byte[])smsgHeader2.Clone();
+        withoutFailedCall.EncryptHeader(expectedSmsg2);
+        byte[] expectedCmsg1 = (byte[])cmsgHeader1.Clone();
+        withoutFailedCall.DecryptHeader(expectedCmsg1);
+        byte[] expectedCmsg2 = (byte[])cmsgHeader2.Clone();
+        withoutFailedCall.DecryptHeader(expectedCmsg2);
+
+        var withFailedCall = new WorldHeaderCrypt();
+        withFailedCall.Initialize(sendKey);
+        byte[] actualSmsg1 = (byte[])smsgHeader1.Clone();
+        withFailedCall.EncryptHeader(actualSmsg1);
+        Assert.Throws<ArgumentException>(() => withFailedCall.EncryptHeader(new byte[3]));
+        byte[] actualSmsg2 = (byte[])smsgHeader2.Clone();
+        withFailedCall.EncryptHeader(actualSmsg2);
+        byte[] actualCmsg1 = (byte[])cmsgHeader1.Clone();
+        withFailedCall.DecryptHeader(actualCmsg1);
+        Assert.Throws<ArgumentException>(() => withFailedCall.DecryptHeader(new byte[7]));
+        byte[] actualCmsg2 = (byte[])cmsgHeader2.Clone();
+        withFailedCall.DecryptHeader(actualCmsg2);
+
+        Assert.Equal(expectedSmsg1, actualSmsg1);
+        Assert.Equal(expectedSmsg2, actualSmsg2);
+        Assert.Equal(expectedCmsg1, actualCmsg1);
+        Assert.Equal(expectedCmsg2, actualCmsg2);
     }
 
     [Fact]

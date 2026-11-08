@@ -73,8 +73,16 @@ public sealed class WorldHeaderCrypt : IWorldHeaderCrypt
         }
 
         // The rolling state advances one byte per header byte on both peers; a span that is not a
-        // whole 6-byte CMSG header (server) or 4-byte SMSG header (client) desynchronises every later header.
-        Invariant.Assert(header.Length is IncomingHeaderLength or OutgoingHeaderLength, $"a header is {IncomingHeaderLength} or {OutgoingHeaderLength} bytes, got {header.Length}");
+        // whole 6-byte CMSG header (server) or 4-byte SMSG header (client) desynchronises every later
+        // header. This must be checked unconditionally — not Invariant.Assert, which Release builds strip
+        // together with its condition — and must run before the loop below touches _recvIndex/_recvPrevious:
+        // once that state advances on a malformed span, every header decrypted afterwards is wrong, in
+        // Debug and in Release alike.
+        if (header.Length is not (IncomingHeaderLength or OutgoingHeaderLength))
+        {
+            throw new ArgumentException($"a header is {IncomingHeaderLength} or {OutgoingHeaderLength} bytes, got {header.Length}", nameof(header));
+        }
+
         for (int t = 0; t < header.Length; t++)
         {
             _recvIndex = (byte)(_recvIndex % _key.Length);
@@ -97,7 +105,13 @@ public sealed class WorldHeaderCrypt : IWorldHeaderCrypt
             return;
         }
 
-        Invariant.Assert(header.Length is IncomingHeaderLength or OutgoingHeaderLength, $"a header is {IncomingHeaderLength} or {OutgoingHeaderLength} bytes, got {header.Length}");
+        // Unconditional for the same reason as DecryptHeader above: a wrong-length span must never
+        // reach the loop, which mutates _sendIndex/_sendPrevious — in Debug or Release.
+        if (header.Length is not (IncomingHeaderLength or OutgoingHeaderLength))
+        {
+            throw new ArgumentException($"a header is {IncomingHeaderLength} or {OutgoingHeaderLength} bytes, got {header.Length}", nameof(header));
+        }
+
         for (int t = 0; t < header.Length; t++)
         {
             _sendIndex = (byte)(_sendIndex % _key.Length);

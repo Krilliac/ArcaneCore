@@ -243,10 +243,15 @@ the split).
 |---|---|---|---|
 | `WorldHeaderCrypt.Initialize` | C | not already initialised | keyed once per connection after CMSG_AUTH_SESSION (vmangos `WorldSocket::HandleAuthSession` calls `m_Crypt.Init` once); a second call resets both rolling states and desynchronises the peer. Counted; the key is applied (the test clients re-key deliberately in no test) |
 | `WorldHeaderCrypt.Initialize` | C | `key.Length == 40` | the cipher is keyed with K; another length means the wrong field was read. Counted; the cipher still runs (the algorithm, like vmangos `AuthCrypt::Init`, is defined for any length) |
-| `WorldHeaderCrypt.Encrypt/DecryptHeader` | A | span is 4 or 6 bytes | the rolling state advances one byte per header byte on both peers; any other length desynchronises every later header |
 | `PacketWriter.WritePackedGuid` | A | bytes after the mask = popcount(mask) | `PacketReader.ReadPackedGuid` (vmangos `readPackGUID`) consumes one byte per set bit |
 | `PacketWriter.WriteCString` | A | encoded bytes = counted bytes | the terminator goes right after the text; a disagreement leaves stale buffer bytes inside the string |
 | `PacketWriter.EnsureCapacity` | A | the buffer now fits `_length + additional` | postcondition of the resize every writer relies on |
+
+**Not in this table on purpose.** `WorldHeaderCrypt.EncryptHeader`/`DecryptHeader` guard their span length with a plain
+`if`/`throw ArgumentException`, not `Invariant.Assert`: the loop below mutates the rolling cipher state
+(`_sendIndex`/`_sendPrevious`, `_recvIndex`/`_recvPrevious`) as a side effect, and a wrong-length span must be rejected
+before that happens in every build, not only Debug — `Assert` is `[Conditional("DEBUG")]` and would let Release run the
+loop anyway, desynchronising every header decrypted or encrypted afterwards. Proof: `GatewayFuzzAndExceptionTests.WorldHeaderCrypt_ExceptionAndInvariantGuards`.
 
 ### Data (`src/ArcaneCore.Data/Schema`)
 
