@@ -102,7 +102,7 @@ public sealed class SessionRegistry : ISessionClaims, IDisposable
 
         if (supersededSelf)
         {
-            session.Kick();
+            session.Kick("superseded by a newer session of the account");
             return;
         }
 
@@ -113,7 +113,7 @@ public sealed class SessionRegistry : ISessionClaims, IDisposable
 
         if (replaced is not null)
         {
-            replaced.Kick();
+            replaced.Kick("superseded by a newer login of the account");
         }
 
         Registered?.Invoke(session);
@@ -204,7 +204,11 @@ public sealed class SessionRegistry : ISessionClaims, IDisposable
 
             if (_byAccount.TryRemove(new KeyValuePair<int, WorldSession>(newer.AccountId, existing)))
             {
-                existing.Kick();
+                // Invalidate() publishes a tombstone claim with NodeIncarnation Guid.Empty (IAccountSessionClaimStore.SubscribeRevocations);
+                // every other claim here is a newer login on some node (this one or another).
+                existing.Kick(newer.NodeIncarnation == Guid.Empty
+                    ? "the account's claim was invalidated"
+                    : "the account logged in on another world worker");
                 return;
             }
         }

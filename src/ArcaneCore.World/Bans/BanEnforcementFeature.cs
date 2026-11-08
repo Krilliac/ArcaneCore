@@ -73,7 +73,7 @@ public sealed class BanEnforcementFeature(IServiceProvider services, ILogger<Ban
         }
 
         logger.LogInformation("Disconnecting account {AccountId}: status is now {Status}", change.AccountId, change.EffectiveStatus);
-        session.Kick();
+        session.Kick(change.EffectiveStatus == AccountStatus.Banned ? "account banned" : "account suspended");
         if (_options.RevokeSessionKeyOnBan)
         {
             TrackRevocation(change.AccountId);
@@ -95,7 +95,7 @@ public sealed class BanEnforcementFeature(IServiceProvider services, ILogger<Ban
             if (session.RemoteAddress == ip && session.AccountId != change.ActorAccountId)
             {
                 logger.LogInformation("Disconnecting account {AccountId}: address {Ip} is banned", session.AccountId, change.Ip);
-                session.Kick();
+                session.Kick($"address {change.Ip} banned");
                 if (_options.RevokeSessionKeyOnBan)
                 {
                     TrackRevocation(session.AccountId);

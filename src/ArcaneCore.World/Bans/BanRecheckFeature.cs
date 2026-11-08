@@ -115,11 +115,17 @@ public sealed class BanRecheckFeature(IServiceProvider services, ILogger<BanRech
 
         foreach (WorldSession session in sessions)
         {
-            if (bannedAccounts.Contains(session.AccountId) || nonActive.Contains(session.AccountId)
-                || (session.RemoteAddress is { } address && bannedIps.Contains(address)))
+            string? reason = bannedAccounts.Contains(session.AccountId)
+                ? "account banned"
+                : nonActive.Contains(session.AccountId)
+                    ? "account status is no longer active"
+                    : session.RemoteAddress is { } address && bannedIps.Contains(address)
+                        ? $"address {address} banned"
+                        : null;
+            if (reason is not null)
             {
                 logger.LogInformation("Re-check: disconnecting banned account {AccountId}", session.AccountId);
-                session.Kick();
+                session.Kick(reason);
             }
         }
 

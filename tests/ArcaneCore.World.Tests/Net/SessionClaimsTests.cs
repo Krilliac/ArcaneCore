@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Security.Cryptography;
 using ArcaneCore.Cryptography;
 using ArcaneCore.Game.Maps;
@@ -116,6 +117,9 @@ public sealed class SessionClaimsTests
 
         // And a superseded session cannot begin a character login even if called directly.
         Assert.False(session1.TryBeginLogin());
+
+        // The replaced session (SessionRegistry.Register's own double-login path) carries a recorded reason.
+        Assert.Equal("superseded by a newer login of the account", session1.KickReason);
     }
 
     [Fact]
@@ -173,6 +177,9 @@ public sealed class SessionClaimsTests
         Assert.False(sessionA.IsCurrentSession);
         await gatewayA.WaitForWorldAsync(() => gatewayA.World.OnlinePlayerCount == 0, "gateway A player removed after cross-gateway supersession");
 
+        // SessionRegistry.OnClaimSuperseded recorded why: a real NodeIncarnation (not the Invalidate() tombstone) means another node logged in.
+        Assert.Equal("the account logged in on another world worker", sessionA.KickReason);
+
         // When sessionA finishes closing and calls Unregister on gateway A, gateway B's generation-2 claim remains intact.
         gatewayA.Registry.Unregister(sessionA);
         Assert.Equal(new AccountSessionClaim(account.Id, 2, gatewayB.Registry.NodeIncarnation), sharedClaims.GetActive(account.Id));
@@ -199,6 +206,9 @@ public sealed class SessionClaimsTests
         Assert.False(claims.IsCurrent(session));
 
         await host.WaitForWorldAsync(() => host.World.OnlinePlayerCount == 0, "invalidated session kicked from world");
+
+        // SessionRegistry.OnClaimSuperseded recorded why: the Invalidate() tombstone (NodeIncarnation Guid.Empty), not a newer login.
+        Assert.Equal("the account's claim was invalidated", session.KickReason);
     }
 
     [Fact]
@@ -218,5 +228,74 @@ public sealed class SessionClaimsTests
         Assert.Equal(0, console.SessionGeneration);
         Assert.Null(console.SessionClaim);
         Assert.True(console.IsCurrentSession);
+    }
+
+    /// <summary>
+    /// SessionRegistry.Register's own race guard: a claim store that issues generations in strict order can still have its
+    /// AddOrUpdate callers run out of order (two Register calls for the same account racing on the same node, or a claim
+    /// store shared across nodes where this node observes the newer claim only after a stale one it issued earlier). The
+    /// registering session that lost the race is kicked with its own superseded reason, not the one it displaced.
+    /// <see cref="ScriptedClaimStore"/> reproduces the ordering deterministically by handing out an out-of-order generation
+    /// on the second <see cref="IAccountSessionClaimStore.Claim"/> call, standing in for that race.
+    /// </summary>
+    [Fact]
+    public void Register_LosingTheClaimRace_KicksTheRegisteringSessionWithItsOwnSupersededReason()
+    {
+        var nodeId = Guid.NewGuid();
+        var store = new ScriptedClaimStore(winnerGeneration: 5, loserGeneration: 3);
+        using var registry = new SessionRegistry(store, nodeId);
+        using ServiceProvider services = new ServiceCollection().BuildServiceProvider();
+        var saveQueue = new ArcaneCore.World.Persistence.CharacterSaveQueue(
+            services.GetRequiredService<IServiceScopeFactory>(),
+            NullLogger<ArcaneCore.World.Persistence.CharacterSaveQueue>.Instance);
+        using var world = new WorldRuntime(new WorldRuntimeOptions { AutosaveIntervalMs = 0 }, saveQueue, NullLogger<WorldRuntime>.Instance);
+        var opcodes = new ArcaneCore.World.Handlers.OpcodeTable();
+        var options = new WorldSessionOptions();
+
+        WorldSession winner = NewBareSession(services, opcodes, world, registry, options, accountId: 77);
+        WorldSession loser = NewBareSession(services, opcodes, world, registry, options, accountId: 77);
+
+        registry.Register(winner); // Claim() #1: generation 5
+        registry.Register(loser);  // Claim() #2: generation 3, already stale against the generation-5 entry just added
+
+        Assert.Same(winner, registry.Find(77));
+        Assert.Null(winner.KickReason);
+        Assert.Equal("superseded by a newer session of the account", loser.KickReason);
+    }
+
+    private static WorldSession NewBareSession(
+        IServiceProvider services, ArcaneCore.World.Handlers.OpcodeTable opcodes, WorldRuntime world, SessionRegistry registry, WorldSessionOptions options, int accountId)
+    {
+        var session = new WorldSession(Stream.Null, "127.0.0.1:0", services, opcodes, world, registry, options, NullLogger.Instance);
+        typeof(WorldSession).GetProperty(nameof(WorldSession.AccountId))!.SetValue(session, accountId);
+        return session;
+    }
+
+    /// <summary>Hands out the two pre-scripted generations in order; everything else is unused by <see cref="Register_LosingTheClaimRace_KicksTheRegisteringSessionWithItsOwnSupersededReason"/>.</summary>
+    private sealed class ScriptedClaimStore(long winnerGeneration, long loserGeneration) : IAccountSessionClaimStore
+    {
+        private int _calls;
+
+        public AccountSessionClaim Claim(int accountId, Guid nodeIncarnation)
+        {
+            long generation = _calls++ == 0 ? winnerGeneration : loserGeneration;
+            return new AccountSessionClaim(accountId, generation, nodeIncarnation);
+        }
+
+        public bool TryRelease(AccountSessionClaim claim) => true;
+
+        public AccountSessionClaim? GetActive(int accountId) => null;
+
+        public long GetGeneration(int accountId) => 0;
+
+        public long Invalidate(int accountId) => throw new NotSupportedException("not exercised by this test");
+
+        public IDisposable SubscribeRevocations(Action<AccountSessionClaim> onSupersededOrInvalidated) => NoopSubscription.Instance;
+
+        private sealed class NoopSubscription : IDisposable
+        {
+            public static readonly NoopSubscription Instance = new();
+            public void Dispose() { }
+        }
     }
 }
