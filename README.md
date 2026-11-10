@@ -298,8 +298,8 @@ python3 tools/codegen/gen_wow_tables.py --vmangos <vmangos/core> --wow-messages 
 
 ### Choose a .NET SDK for local builds
 
-ArcaneCore supports a stable .NET 10 build and an opt-in .NET 11 build (RC or
-GA SDK). Use `./scripts/build-net10.sh [Debug|Release]` or
+ArcaneCore supports stable .NET 10 and .NET 11 builds. Use
+`./scripts/build-net10.sh [Debug|Release]` or
 `./scripts/build-net11.sh [Debug|Release]`. Separate NuGet lock files are
 selected automatically. The target framework is defined centrally in
 `Directory.Build.props` and overridden by the scripts at build time; individual

@@ -1,7 +1,7 @@
 name: .NET
 
-# A quick Release build of the whole solution on the CI SDK (warnings are errors via Directory.Build.props). The tests run in ci.yml's
-# matrix, which starts the MariaDB and PostgreSQL services they need, so they are not repeated here.
+# The quick release-build gate checks both supported frameworks independently using stable SDKs.
+# Integration tests and release/deploy jobs retain their upstream .NET 11 settings.
 on:
   push:
     branches: ["main"]
@@ -19,21 +19,26 @@ permissions:
 jobs:
   build:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    name: Build .NET ${{ matrix.sdk }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - sdk: 10
+            dotnet_version: "10.0.x"
+          - sdk: 11
+            dotnet_version: "11.0.x"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - name: Setup .NET
+      - name: Setup .NET ${{ matrix.sdk }}
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
-          dotnet-version: "11.0.x"
-          dotnet-quality: "preview"
+          dotnet-version: ${{ matrix.dotnet_version }}
 
-      - name: Restore dependencies
-        run: dotnet restore ArcaneCore.slnx --locked-mode
-
-      - name: Build
-        run: dotnet build ArcaneCore.slnx -c Release --no-restore
+      - name: Build and verify .NET ${{ matrix.sdk }} NuGet locks
+        run: ./scripts/build-net${{ matrix.sdk }}.sh Release

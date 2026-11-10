@@ -18,7 +18,8 @@
   At most 2 full gates (no -Filter, no -BuildOnly) run at once: queued ones wait here (other node-ci.ps1 processes on this host) and on
   the node itself (two flock slots), and say so. Filtered and -BuildOnly runs queue separately (NODE_CI_MAX_FILTERED, default 6).
   One-time node setup (mariadb-server, postgresql-16, root/arcane and arcane/arcane logins) was done 2026-10-10. /opt/dotnet holds the
-  10.0.401 and 11.0.100-rc.2 SDKs; the repository's global.json pins stable 10, so the run uses 10. If the services are not running, this
+  SDK installations used by the node; check `dotnet --list-sdks` there before running. Projects default to net10.0
+  via Directory.Build.props. If the services are not running, this
   script starts them.
   Time budgets: the gate stops each test assembly of a main-stage target after 20 minutes (a hard stop that names the slow tests),
   fails a target whose dotnet run took over 20 minutes in all (wall clock) and a test class that adds up to over 15 minutes (see the

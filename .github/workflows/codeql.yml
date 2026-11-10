@@ -33,7 +33,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # build-mode none: the C# extractor reads the sources without a build, so the preview .NET 11 SDK is not needed here and the
+        # build-mode none: the C# extractor reads the sources without a build, so a .NET SDK installation is not needed here and the
         # analysis does not repeat CI's build. tools/terrain/vmap-oracle (the only C++) is a one-file offline tool and is left out.
         language: [csharp, python, actions]
 

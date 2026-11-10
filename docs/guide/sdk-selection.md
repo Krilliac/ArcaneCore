@@ -36,8 +36,9 @@ Each script supports `[Debug|Release] [--update-locks] [--serial]`. For example,
 updating dependencies, and inspect the lock-file changes before committing.
 
 **SDK selection:** `scripts/sdk/net10/global.json` selects a stable .NET 10 SDK;
-`scripts/sdk/net11/global.json` selects the original .NET 11 RC 2 SDK or a
-later .NET 11 SDK, including the stable `11.0.100` release (once installed).
+`scripts/sdk/net11/global.json` selects the stable .NET 11 SDK (`11.0.100`
+or a newer installed 11.0.x SDK). Prerelease SDKs are excluded. The .NET 11
+build selects released C# 15; .NET 10 continues using C# 14.
 The build scripts start the `dotnet` CLI in these selector directories and pass
 an absolute solution path and `ArcaneTargetFramework` to restore/build. The target is
 resolved in `Directory.Build.props` and never written to any project file. The `GmCommands` hot-module template also
@@ -73,9 +74,9 @@ using NuGet, then checks them with `--locked-mode`. Commit changes only after
 checking that they reflect intentional dependency updates. Subsequent .NET 10
 runs preserve the existing behavior and refresh those locks as necessary.
 
-For .NET 11, `--locked-mode` may fail if the original .NET 11 RC dependencies no
-longer match the current `.csproj` definitions or the stable SDK changes the
-resolved graph. In that case inspect the diff, and use
+For .NET 11, `--locked-mode` may fail if the original .NET 11 dependency
+snapshots no longer match the current `.csproj` definitions or the stable SDK
+changes the resolved graph. In that case inspect the diff, and use
 `./scripts/build-net11.sh Release --update-locks` to regenerate only the .NET 11
 snapshots. This does not guarantee source compilation on .NET 11: it simply makes
 SDK, framework, and NuGet graph selection explicit.
@@ -85,10 +86,11 @@ repository's global.json). Running `dotnet --version` from the repository root
 shows the default .NET 10 SDK, **not** the .NET 11 SDK selected by the opt-in
 script. On Windows, the build scripts require Bash (for example Git Bash).
 
-The .NET 11 selector retains the original RC 2 minimum, allowing developers
-with an existing RC SDK to keep working while newer .NET 11 SDKs can also be
-used. .NET 11 reached general availability on November 10, 2026. Developers
-should prefer the stable .NET 11 SDK when available.
+The .NET 11 selector now requires stable SDK `11.0.100` or later within the
+11.0 SDK series, following the existing `latestFeature` roll-forward policy.
+.NET 11 reached general availability on November 10, 2026. The .NET 10
+selector remains independent, so a machine with only .NET 10 can still use
+`./scripts/build-net10.sh` without installing .NET 11.
 
 If a build reports `MSB3026` file-copy retries or `MSB4018` with a file-in-use
 `IOException`, first ensure no other `dotnet build`, IDE build, or running server is

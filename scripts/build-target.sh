@@ -74,8 +74,9 @@ solution="$repo_root/ArcaneCore.slnx"
 # Directory.Build.props maps this repository-specific property to TargetFramework.
 msbuild_properties=("-p:ArcaneTargetFramework=$framework")
 if [[ "$sdk_major" == 11 ]]; then
-    # The original .NET 11 project used preview language features in its RC era.
-    msbuild_properties+=("-p:LangVersion=preview")
+    # The stable .NET 11 SDK ships released C# 15. Keep the repository-wide
+    # C# 14 default for .NET 10 and select C# 15 only for net11.0.
+    msbuild_properties+=("-p:LangVersion=15.0")
 fi
 
 # Preserve older local net10 locks when applying these scripts over an earlier

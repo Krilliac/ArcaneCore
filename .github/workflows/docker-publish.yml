@@ -37,7 +37,9 @@ on:
       - "Directory.Packages.props"
       - ".editorconfig"
       - "**/*.csproj"
-      - "**/packages.lock.json"
+      - "**/packages.net10.lock.json"
+      - "**/packages.net11.lock.json"
+      - "Directory.Build.targets"
       - ".github/workflows/docker-publish.yml"
   workflow_dispatch:
 
