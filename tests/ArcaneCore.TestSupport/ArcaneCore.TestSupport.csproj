@@ -5,7 +5,6 @@
        xunit.assert only (no test SDK, no runner). Types are public; fixtures that touch Game internals use the InternalsVisibleTo
        entry in ArcaneCore.Game.csproj. -->
   <PropertyGroup>
-    <TargetFramework>net11.0</TargetFramework>
     <RootNamespace>ArcaneCore.TestSupport</RootNamespace>
     <IsPackable>false</IsPackable>
     <IsTestProject>false</IsTestProject>

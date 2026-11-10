@@ -12,7 +12,7 @@
 # ArcaneCore - Vanilla WoW 1.12.1 server
 
 **ArcaneCore** is an open source World of Warcraft **1.12.1 (client build 5875)** server emulator, written from scratch in
-**C# / .NET 11**. It stores game data in [MariaDB](https://mariadb.org/), MySQL, PostgreSQL or SQLite through EF Core.
+**C# / .NET 10 LTS** (with an optional .NET 11 target after general availability). It stores game data in [MariaDB](https://mariadb.org/), MySQL, PostgreSQL or SQLite through EF Core.
 
 If you liked the original incarnation of World of Warcraft and want to run it yourself, this is the project for you. It provides a
 logon (realm) server that manages accounts and the realm list, and a world server that serves the game, the way the 1.12 retail
@@ -63,7 +63,8 @@ It prints assertion results as JSON and returns a failing exit code if a stage f
 
 - **Run a download or a Docker image**: nothing but the operating system and a database server. The archives are self-contained (no
   .NET install) and the images carry their runtime. SQLite needs no server at all.
-- **Build from source**: the .NET SDK named in [`global.json`](global.json) (.NET 11).
+- **Build from source**: a stable .NET 10 SDK (the repository chooses the latest installed 10.0 feature band). See
+  [SDK selection and upgrading to .NET 11](docs/guide/sdk-selection.md) for the one-time NuGet lock refresh and optional .NET 11 targeting.
 - **Database**: MariaDB (primary, and what the compose files use), MySQL, PostgreSQL 16 or SQLite.
 - **Client**: a WoW 1.12.1 (build 5875) client. Client data (DBC files, extracted maps, vmaps, mmaps) and world content dumps are not
   part of this repository and may not be added to it; you supply them ([Client data](#client-data)).
@@ -126,6 +127,18 @@ docker pull ghcr.io/krilliac/arcanecore-tools:edge-release
 tag `v*` is the Release image and `<tag>-debug` its Debug twin. Running them: [Docker guide](docs/guide/docker.md).
 
 ## Build from source
+
+**Choose your SDK explicitly** (recommended when both .NET 10 and .NET 11 are installed):
+
+```bash
+./scripts/build-net10.sh Release  # .NET 10 LTS
+./scripts/build-net11.sh Release  # .NET 11
+```
+
+These scripts keep the `.csproj` files unchanged and select separate NuGet lock files.
+See [SDK selection and upstream merge guidance](docs/guide/sdk-selection.md).
+
+Plain `dotnet` commands use the SDK available in your shell and the default `net10.0` target.
 
 ```bash
 dotnet build ArcaneCore.slnx -c Release
@@ -282,3 +295,17 @@ gtker/wow_messages checkouts, which the script cross-checks and fails on any dis
 ```bash
 python3 tools/codegen/gen_wow_tables.py --vmangos <vmangos/core> --wow-messages <wow_messages>
 ```
+
+### Choose a .NET SDK for local builds
+
+ArcaneCore supports a stable .NET 10 build and an opt-in .NET 11 build (RC or
+GA SDK). Use `./scripts/build-net10.sh [Debug|Release]` or
+`./scripts/build-net11.sh [Debug|Release]`. Separate NuGet lock files are
+selected automatically. The target framework is defined centrally in
+`Directory.Build.props` and overridden by the scripts at build time; individual
+`.csproj` files do not need to be modified when switching versions. The scripts
+use a repository-specific `ArcaneTargetFramework` property to avoid MSBuild's
+solution-level `TargetFramework` parallel-build conflict. For investigating
+file-lock errors, add `--serial` to either build script. See
+[SDK selection](docs/guide/sdk-selection.md) for details and lock-file updates.
+

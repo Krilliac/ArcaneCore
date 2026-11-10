@@ -1,4 +1,8 @@
 <Project>
-  <!-- Intentionally empty: stops the repo-root Directory.Build.props (warnings as errors, analyzers)
-       from applying to the spike, which is copied and edited by run-spike.ps1. -->
+  <!-- This project intentionally opts out of the repository-wide warnings and analyzer settings.
+       Its default target is set here instead of in HotCodeSpike.csproj, so an explicit
+       -p:TargetFramework=net11.0 can select .NET 11 without changing tracked project files. -->
+  <PropertyGroup Condition="'$(TargetFramework)' == ''">
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
 </Project>

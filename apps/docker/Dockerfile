@@ -3,26 +3,23 @@
 # world, realm here) plus a tools target for the content importer and database upgrade.
 #   docker build -f apps/docker/Dockerfile --target world -t arcanecore/world .
 #
-# Base images: the SDK tag must satisfy global.json (11.0.100-rc.2.26504.105, rollForward latestFeature) and the runtime tag must
-# run net11.0 (Directory.Build.props). Both are pinned by manifest-list digest (multi-arch) so a re-pushed tag cannot change the
-# build; Dependabot (.github/dependabot.yml, docker ecosystem) proposes tag and digest bumps together. When global.json moves to a
-# new SDK, move these tags with it: .github/workflows/docker-smoke.yml builds every target so a mismatch fails CI.
+# Base images use stable .NET 10 SDK 10.0.403 and runtime 10.0.14 to match global.json and net10.0.
+# The old .NET 11 RC image digests do not apply to these images. Verify and pin their multi-arch digests
+# before deploying where immutable base-image inputs are required; CI smoke-builds all targets.
 
 # --platform=$BUILDPLATFORM: the build stage always runs natively on the builder. The published output is framework-dependent (no
 # RuntimeIdentifier, no ReadyToRun), so it is architecture-neutral and a linux/arm64 image (docker-publish.yml) needs no emulation
 # of the compile; only the small runtime stages below are per-platform. The apphost the publish also writes is never used (the
 # entrypoints are `dotnet X.dll`).
 # CONFIGURATION: Release by default; pass --build-arg CONFIGURATION=Debug for a Debug image (docs/guide/docker.md, "Debug or Release").
-FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:11.0.100-rc.2@sha256:e2438fd800a09d2d761aefe4edd30675c8f1db8958e4423c0844cc9a0240e60f AS build
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0.403 AS build
 ARG CONFIGURATION=Release
 WORKDIR /src
 # .editorconfig: the in-image build enforces the same code-style rules as CI (EnforceCodeStyleInBuild, warnings are errors).
 COPY global.json Directory.Build.props Directory.Packages.props ArcaneCore.slnx .editorconfig ./
 COPY src/ src/
 COPY tools/ tools/
-# analyzers/: the safety analyzer baseline (Directory.Build.props AdditionalFiles); without it every baselined finding fails the build.
-COPY analyzers/ analyzers/
-# Locked mode: the restore must match the packages.lock.json committed beside each project (exact versions and content hashes),
+# Locked mode: the restore must match the packages.net10.lock.json committed beside each project (exact versions and content hashes),
 # so the image cannot build against a package graph CI never saw.
 RUN dotnet restore src/ArcaneCore.World/ArcaneCore.World.csproj --locked-mode && dotnet restore src/ArcaneCore.Playerbots/ArcaneCore.Playerbots.csproj --locked-mode \
  && dotnet restore src/ArcaneCore.Realm/ArcaneCore.Realm.csproj --locked-mode \
@@ -39,7 +36,7 @@ RUN dotnet publish src/ArcaneCore.World/ArcaneCore.World.csproj -c $CONFIGURATIO
  && dotnet publish tools/ArcaneCore.AccountTool/ArcaneCore.AccountTool.csproj -c $CONFIGURATION --no-restore -o /out/account
 
 # Shared runtime skeleton (AzerothCore "skeleton"/"runtime"): non-root user, data and log directories.
-FROM mcr.microsoft.com/dotnet/runtime:11.0.0-rc.2@sha256:c2fe4a619dab039d442e63ca56ed3ab1c10d0a0a59b778741d002bbb53c6c637 AS runtime
+FROM mcr.microsoft.com/dotnet/runtime:10.0.14 AS runtime
 ARG USER_ID=1000
 ARG GROUP_ID=1000
 # No DOTNET_gcServer here: an environment setting overrides runtimeconfig.json, and the World ships Server GC on purpose

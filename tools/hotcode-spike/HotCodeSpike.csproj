@@ -6,7 +6,7 @@
   <PropertyGroup>
     <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net11.0</TargetFramework>
+
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>

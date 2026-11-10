@@ -13,12 +13,12 @@
 # Usage: tools/ops/deploy/publish-binaries.sh <rid> <Debug|Release> <out-dir>      (run from the repository root; used by
 # .github/workflows/release-binaries.yml).
 #
-# Supply chain: every restore is locked (--locked-mode against the committed packages.lock.json, Directory.Build.props), like CI and the
+# Supply chain: every restore is locked (--locked-mode against the committed packages.net10.lock.json, Directory.Build.props), like CI and the
 # Dockerfile, and NuGet audit stays on. The published executables declare the four release rids in RuntimeIdentifiers, so their
-# packages.lock.json records the runtime-specific targets, and map -p:ReleaseRid=<rid> to RuntimeIdentifier + SelfContained (not -r,
+# packages.net10.lock.json records the runtime-specific targets, and map -p:ReleaseRid=<rid> to RuntimeIdentifier + SelfContained (not -r,
 # which would also reach the libraries, whose lock files have no rid targets). A rid added here needs the same RuntimeIdentifiers entry
 # in those projects and a refreshed lock file (docs/guide/contributing.md). The publish steps then run with --no-restore. The runtime
-# and apphost packs the SDK downloads for a self-contained publish are not part of packages.lock.json.
+# and apphost packs the SDK downloads for a self-contained publish are not part of packages.net10.lock.json.
 #
 # Check afterwards: each daemon and tool is started with --help. That proves the self-contained host starts and the main assembly loads;
 # it does NOT prove the daemon runs, binds its port, loads the Playerbots pack or reaches a database (the pack's presence is only a file

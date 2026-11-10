@@ -204,7 +204,7 @@ has no ArcaneCore hook at all and gets the runtime's own output. The log file pa
 
 **Trying it on Windows.** Start a daemon from a console window (not redirected) with `--Diagnostics:CrashDialog=true`, or
 `Diagnostics.CrashDialog = true` in its `.conf`. No command crashes a server on purpose, so the probe in the Kernel test assembly does
-it: from `tests/ArcaneCore.Kernel.Tests/bin/Release/net11.0` in a console window, run
+it: from `tests/ArcaneCore.Kernel.Tests/bin/Release/net10.0` in a console window, run
 `dotnet ArcaneCore.Kernel.Tests.dll --diagnostics-probe unhandled-dialog-live`. It installs the hooks with the crash dialog on and
 `OnUnhandled` `Exit`, throws on a thread named `probe-thrower`, shows the box, and exits 70 when it is closed. Run with redirected
 output (as `CrashProcessTests` does) it opens nothing and exits 70.

@@ -108,15 +108,19 @@ same two stages with the same script.
 
 ### Package lock files
 
-Every project has a committed `packages.lock.json` beside its `.csproj` (`Directory.Build.props` sets `RestorePackagesWithLockFile`):
-the exact version and content hash of every direct and transitive package. CI (`ci.yml`, `dotnet.yml`), node CI
+Every project has two committed lock files beside its `.csproj`: `packages.net10.lock.json` and
+`packages.net11.lock.json`. `Directory.Build.props` enables locked packages, and `Directory.Build.targets` selects
+the file matching the effective `TargetFramework` through `NuGetLockFilePath`.
+Each file records exact versions and content hashes of direct and transitive packages. CI (`ci.yml`, `dotnet.yml`), node CI
 (`tools/ops/ci/node-ci.ps1`), the local full gate (`tools/ops/ci/full-suite-gate.ps1`), the image build
 (`apps/docker/Dockerfile`) and the deploy build (`tools/ops/deploy/build-integrated.sh`) restore with `--locked-mode`, so a restore
 whose package graph differs from the lock files fails (NU1004) instead of quietly resolving something new. A test
 (`PackageLockFileTests`) checks that every project has one and that every scripted restore is locked.
 
 When you add, remove or bump a `PackageReference` (or a project reference that brings packages with it), refresh the lock files with
-the repository SDK and commit every changed `packages.lock.json` in the same commit as the `.csproj` change:
+the repository SDK and commit every changed `packages.net10.lock.json` in the same commit as the `.csproj` change.
+For .NET 11 dependency changes, use the stable .NET 11 SDK and refresh the corresponding
+`packages.net11.lock.json` files separately. Do not overwrite one framework's locks with the other:
 
 ```powershell
 & "$env:USERPROFILE\.dotnet\dotnet.exe" restore ArcaneCore.slnx --force-evaluate
@@ -131,7 +135,10 @@ references) and the projects under `tests/ThirdParty` (reached through the Game,
 references); each tool with a lock file that is outside the solution and referenced by nothing in it needs its own line, and `PackageLockFileTests` checks
 that the recipe lists exactly those. A change in a library such as `ArcaneCore.Data` rewrites the lock file of every project that
 references it, so expect several files to change. The last line repeats CI's check. A new project gets its lock file from its
-first restore; commit it with the project. Dependabot's NuGet pull requests update the lock files themselves.
+first restore; commit the per-framework snapshots with the project. A new checkout migrated from
+unversioned .NET 10 lock files can run `bash scripts/migrate-nuget-lock-files.sh` first;
+`bash scripts/build-net10.sh` invokes this migration automatically. Dependabot's NuGet pull requests
+should update the affected framework lock files.
 `tools/hotcode-spike` opts out of the repository props (its own `Directory.Build.props`) and has no lock file.
 Package versions live in `Directory.Packages.props` (central package management): a `PackageReference` carries no `Version`, and a bump is one line there. `tools/hotcode-spike`, `tests/hotmodule-fixtures`, `tests/ThirdParty` and the `tools/ops/diag` probes set `ManagePackageVersionsCentrally` to false in their own `.csproj`; the probes keep their versions inline.
 

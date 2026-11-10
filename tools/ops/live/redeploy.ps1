@@ -101,15 +101,15 @@ switch ($thePlan.Action) {
 }
 
 foreach ($proj in 'ArcaneCore.Realm', 'ArcaneCore.World') {
-    $built = Join-Path $Src "src\$proj\bin\Debug\net11.0\$proj.exe"
+    $built = Join-Path $Src "src\$proj\bin\Debug\net10.0\$proj.exe"
     if (-not (Test-Path -LiteralPath $built)) { throw "$built not found: build $Src (Debug) first" }
 }
 
 # The Playerbots pack is not a project reference of the World (it references the World), so building only ArcaneCore.World leaves the
 # copy beside the world executable as it was (CopyPackBesideWorldHost runs only when ArcaneCore.Playerbots builds). Deploying that copy
 # silently ships old bot code: the 2026-10-17 live sweep ran an 11:46 pack under an 18:50 World. Refuse before anything is stopped.
-$packBeside = Join-Path $Src 'src\ArcaneCore.World\bin\Debug\net11.0\ArcaneCore.Playerbots.dll'
-$packBuilt = Join-Path $Src 'src\ArcaneCore.Playerbots\bin\Debug\net11.0\ArcaneCore.Playerbots.dll'
+$packBeside = Join-Path $Src 'src\ArcaneCore.World\bin\Debug\net10.0\ArcaneCore.Playerbots.dll'
+$packBuilt = Join-Path $Src 'src\ArcaneCore.Playerbots\bin\Debug\net10.0\ArcaneCore.Playerbots.dll'
 $packSources = @(Get-ChildItem -Path (Join-Path $Src 'src\ArcaneCore.Playerbots') -Recurse -File -Include *.cs, *.csproj, *.json -ErrorAction SilentlyContinue |
     Where-Object { $_.FullName -notmatch '\\(bin|obj)\\' } | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1)
 if (-not (Test-Path -LiteralPath $packBuilt) -or -not (Test-Path -LiteralPath $packBeside)) {
@@ -205,7 +205,7 @@ if ($WorldDbSwap) {
 }
 
 foreach ($proj in 'ArcaneCore.Realm', 'ArcaneCore.World') {
-    robocopy (Join-Path $Src "src\$proj\bin\Debug\net11.0") (Join-Path $LiveHome 'bin') /E /R:2 /W:2 /NFL /NDL /NJH /NJS | Out-Null
+    robocopy (Join-Path $Src "src\$proj\bin\Debug\net10.0") (Join-Path $LiveHome 'bin') /E /R:2 /W:2 /NFL /NDL /NJH /NJS | Out-Null
     if ($LASTEXITCODE -ge 8) { throw "robocopy $proj failed rc $LASTEXITCODE" }
     "copied $proj (rc $LASTEXITCODE)"
 }

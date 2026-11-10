@@ -60,7 +60,7 @@ $repo = (Resolve-Path (Join-Path $PSScriptRoot '..' '..' '..')).Path
 $mutateScript = Join-Path $PSScriptRoot 'mutate.ps1'
 $reportScript = Join-Path $PSScriptRoot 'mutate-report.ps1'
 
-# The repo pins a .NET 11 preview SDK (global.json) that lives in the user's own dotnet root.
+# The repo pins stable .NET 10 (global.json); user-local SDK installs are also supported.
 $userDotnet = if ($env:USERPROFILE) { Join-Path $env:USERPROFILE '.dotnet' } elseif ($HOME) { Join-Path $HOME '.dotnet' } else { '' }
 if ($userDotnet -and (Test-Path (Join-Path $userDotnet 'dotnet.exe'))) { $env:DOTNET_ROOT = $userDotnet; $env:PATH = "$userDotnet;$env:PATH" }
 

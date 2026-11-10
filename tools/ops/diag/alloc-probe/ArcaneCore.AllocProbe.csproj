@@ -3,7 +3,7 @@
   <!-- Operator probe: names what a running daemon allocates on the large object heap, over EventPipe, without pausing it (Program.cs).
        Not in ArcaneCore.slnx: it is built on demand with dotnet run, so the server build never restores TraceEvent.
        TraceEvent is fetched with PackageDownload (that package alone) and referenced by path: its PackageReference would pull a
-       netstandard1.x shim graph (System.Reflection.TypeExtensions and friends) the net11.0 runtime already provides. -->
+       netstandard1.x shim graph (System.Reflection.TypeExtensions and friends) the net10.0 runtime already provides. -->
   <PropertyGroup>
     <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
     <OutputType>Exe</OutputType>

@@ -457,7 +457,7 @@ Dependency decisions. Each one is the smallest change that let World stop seeing
      `tests/ArcaneCore.World.Tests/BuiltInPacks.cs`, and `MockWorldPacks.EnsureRegistered` in the mock client.
 8. **Packages.** The pack adds no package the host lacks, because the default context resolves through World's
    `deps.json`. So `System.Numerics.Tensors`, which only the pack's in-process chat model uses, stays a World package
-   reference. The pack has its own committed `packages.lock.json`. World's lock file is unchanged; the dependents' lock
+   reference. The pack has its own committed `packages.net10.lock.json`. World's lock file is unchanged; the dependents' lock
    files gained the new project.
 9. **Discovery goes through `CodeAssemblies`.** `WorldCodeAssemblies` (in World) is the startup set: World plus the
    registered built-in packs. The set is fixed at its first read, and a registration after that throws.

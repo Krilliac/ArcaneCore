@@ -413,7 +413,7 @@ public sealed class QualityScriptTests
     {
         using var temp = new TempDirectory("arcane-quality-");
         string commented = Path.Combine(temp.Path, "Commented.csproj");
-        File.WriteAllText(commented, "<Project Sdk=\"Microsoft.NET.Sdk\"><!-- <TargetFramework>net11.0</TargetFramework> --></Project>");
+        File.WriteAllText(commented, "<Project Sdk=\"Microsoft.NET.Sdk\"><!-- <TargetFramework>net10.0</TargetFramework> --></Project>");
         (int code, string output) = RunScript("mutate.ps1", "-Project", commented, "-TestProject", commented, "-Files", "**/X.cs");
         Assert.Equal(2, code);
         Assert.Contains("has no <TargetFramework> of its own", output);
@@ -494,7 +494,7 @@ public sealed class QualityScriptTests
         JsonElement r = Eval($$"""
             $root = '{{temp.Path.Replace("'", "''")}}'
             New-Item -ItemType Directory -Force "$root/src/ArcaneCore.World/Handlers", "$root/tests/ArcaneCore.World.Tests/Handlers" | Out-Null
-            Set-Content "$root/src/ArcaneCore.World/ArcaneCore.World.csproj" '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net11.0</TargetFramework></PropertyGroup></Project>'
+            Set-Content "$root/src/ArcaneCore.World/ArcaneCore.World.csproj" '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>'
             Set-Content "$root/tests/ArcaneCore.World.Tests/ArcaneCore.World.Tests.csproj" '<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><PackageReference Include="Microsoft.NET.Test.Sdk" /><ProjectReference Include="..\..\src\ArcaneCore.World\ArcaneCore.World.csproj" /></ItemGroup></Project>'
             Set-Content "$root/src/ArcaneCore.World/WorldHost.cs" ("class WorldHost {`n" + (@(1..10 | ForEach-Object { "    int f$_ = $_;" }) -join "`n") + "`n}")
             Set-Content "$root/src/ArcaneCore.World/A.cs" "class A {}"

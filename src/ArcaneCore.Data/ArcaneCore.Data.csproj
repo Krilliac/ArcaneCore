@@ -1,7 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net11.0</TargetFramework>
     <RootNamespace>ArcaneCore.Data</RootNamespace>
   </PropertyGroup>
 
@@ -20,7 +19,7 @@
     <!-- EF Core Sqlite 9.0.0 brings Microsoft.Data.Sqlite.Core 9.0.0, whose pool can lend one native handle to two live
          connections (dotnet/efcore#39008: "database is locked" on Open, shared transactions). Fixed in 10.0.13. -->
     <PackageReference Include="Microsoft.Data.Sqlite.Core" />
-    <!-- Microsoft.Extensions.{DependencyInjection.Abstractions,Logging.Abstractions,Options} are part of Microsoft.NETCore.App in .NET 11 (NU1510). -->
+    <!-- Microsoft.Extensions.{DependencyInjection.Abstractions,Logging.Abstractions,Options} are included in .NET 11 shared framework (NU1510); .NET 10 gets them from NuGet dependencies. -->
     <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />
   </ItemGroup>
 
