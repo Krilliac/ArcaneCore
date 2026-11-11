@@ -1540,7 +1540,8 @@ public sealed class CharacterSaveQueueTests
         kit.Queue.Start();
         Assert.True(await BecomesTrueAsync(() => @lock.Attempts >= 1 && kit.Queue.Pending == 0, seconds: 5));
         kit.Queue.Enqueue(State(1, 22));
-        Assert.True(await BecomesTrueAsync(() => @lock.Attempts >= 2 && kit.Queue.Pending == 0, seconds: 5));
+        bool newerSaveAttempted = await BecomesTrueAsync(() => @lock.Attempts >= 2 && kit.Queue.Pending == 0, seconds: 5);
+        Assert.True(newerSaveAttempted, $"newer save was not attempted: attempts={@lock.Attempts}, pending={kit.Queue.Pending}");
 
         @lock.Release();
         await kit.Queue.FlushCharacterAsync(1).WaitAsync(TimeSpan.FromSeconds(10));

@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using System.Xml.Linq;
 using ArcaneCore.TestSupport;
 using Xunit;
 
@@ -33,8 +34,14 @@ public sealed partial class TargetFrameworkHygieneTests
     public void EveryCsprojInheritsItsTargetFrameworkFromBuildProps()
     {
         string root = RepositorySource.RequireRoot();
-        string? central = Declared(File.ReadAllText(Path.Combine(root, "Directory.Build.props")));
-        Assert.Equal("net10.0", central);
+        // The default is conditional: the first TargetFramework tag selects
+        // ArcaneTargetFramework, while the fallback supplies net10.0.
+        // A regex that only matches an attribute-free tag incorrectly returns null.
+        XDocument buildProps = XDocument.Load(Path.Combine(root, "Directory.Build.props"));
+        XElement? defaultFramework = buildProps.Descendants("TargetFramework")
+            .SingleOrDefault(element => (string?)element.Attribute("Condition") == "'$(TargetFramework)' == ''");
+        Assert.NotNull(defaultFramework);
+        Assert.Equal("net10.0", defaultFramework.Value);
         Assert.Equal("net10.0", Declared(File.ReadAllText(Path.Combine(root, "tools/hotcode-spike/Directory.Build.props"))));
 
         char sep = Path.DirectorySeparatorChar;

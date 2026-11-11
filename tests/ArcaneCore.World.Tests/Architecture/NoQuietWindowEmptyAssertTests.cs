@@ -22,6 +22,12 @@ public sealed partial class NoQuietWindowEmptyAssertTests
     [GeneratedRegex(@"\bvar\s+(\w+)\s*=\s*await\s+(?:[\w.?!]+\s*\.\s*)?Collect\w*\s*\([^;]*;(?:(?!\bvar\s+\1\b)[^;]*;){0,6}?\s*Assert\s*\.\s*Empty\s*\(\s*\1\s*\)", RegexOptions.CultureInvariant)]
     private static partial Regex QuietEmptyAssertTwoStep();
 
+    // Locate possible two-step assertions with a simple, bounded-cost expression first.
+    // Running the backreference-heavy two-step regex over entire large test files can
+    // exhaust its generated backtracking stack in CI.
+    [GeneratedRegex(@"\bvar\s+\w+\s*=\s*await\s+(?:[\w.?!]+\s*\.\s*)?Collect\w*\s*\(", RegexOptions.CultureInvariant)]
+    private static partial Regex CollectAssignment();
+
     // The fixed-window silence helper (it passed or failed on timing) was removed; neither a call nor a redefinition may return.
     [GeneratedRegex(@"\bAssertSilentAsync\b", RegexOptions.CultureInvariant)]
     private static partial Regex FixedWindowSilenceHelper();
@@ -44,12 +50,26 @@ public sealed partial class NoQuietWindowEmptyAssertTests
             string text = File.ReadAllText(file);
             // This file names the removed helper in its own pattern and theory data.
             bool self = relative.EndsWith("Architecture/NoQuietWindowEmptyAssertTests.cs", StringComparison.Ordinal);
-            Regex[] patterns = self ? [QuietEmptyAssert(), QuietEmptyAssertTwoStep()] : [QuietEmptyAssert(), QuietEmptyAssertTwoStep(), FixedWindowSilenceHelper()];
+            Regex[] patterns = self ? [QuietEmptyAssert()] : [QuietEmptyAssert(), FixedWindowSilenceHelper()];
             foreach (Regex pattern in patterns)
             {
                 foreach (Match match in pattern.Matches(text))
                 {
                     int line = 1 + text.AsSpan(0, match.Index).Count('\n');
+                    offenders.Add($"tests/{relative}:{line}");
+                }
+            }
+
+            // Evaluate the expensive backreference pattern only on a bounded region
+            // following each possible assignment, not on a multi-megabyte source file.
+            foreach (Match start in CollectAssignment().Matches(text))
+            {
+                const int MaxTwoStepWindow = 8192;
+                string window = text.Substring(start.Index, Math.Min(MaxTwoStepWindow, text.Length - start.Index));
+                Match match = QuietEmptyAssertTwoStep().Match(window);
+                if (match.Success && match.Index == 0)
+                {
+                    int line = 1 + text.AsSpan(0, start.Index).Count('\n');
                     offenders.Add($"tests/{relative}:{line}");
                 }
             }

@@ -16,7 +16,9 @@ FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0.403 AS build
 ARG CONFIGURATION=Release
 WORKDIR /src
 # .editorconfig: the in-image build enforces the same code-style rules as CI (EnforceCodeStyleInBuild, warnings are errors).
-COPY global.json Directory.Build.props Directory.Packages.props ArcaneCore.slnx .editorconfig ./
+# The root global.json was removed for dual-SDK builds. The Docker images are intentionally net10.0.
+# Include Directory.Build.targets so NuGet selects packages.net10.lock.json rather than an unversioned lock.
+COPY Directory.Build.props Directory.Build.targets Directory.Packages.props ArcaneCore.slnx .editorconfig ./
 COPY src/ src/
 COPY tools/ tools/
 # Locked mode: the restore must match the packages.net10.lock.json committed beside each project (exact versions and content hashes),

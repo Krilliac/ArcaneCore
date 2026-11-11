@@ -110,8 +110,16 @@ function Get-QualityTargetFramework {
     param([AllowEmptyString()] [AllowNull()] [string]$Xml)
     if (-not $Xml) { return $null }
     $live = [regex]::Replace($Xml, '<!--.*?-->', '', [System.Text.RegularExpressions.RegexOptions]::Singleline)
-    $m = [regex]::Match($live, '<TargetFrameworks?>\s*([^<]*?)\s*</TargetFrameworks?>')
-    if ($m.Success) { $m.Groups[1].Value } else { $null }
+    # The central build now uses conditional TargetFramework elements. Prefer the
+    # concrete fallback (net10.0) to the property expression ($(ArcaneTargetFramework)).
+    # Retain support for a computed value when no literal framework is declared.
+    $matches = [regex]::Matches($live, '<TargetFrameworks?\b[^>]*>\s*([^<]*?)\s*</TargetFrameworks?>')
+    foreach ($m in $matches) {
+        $value = $m.Groups[1].Value.Trim()
+        if ($value -match '^net(?:standard|coreapp)?\d+(?:\.\d+)+$') { return $value }
+    }
+    if ($matches.Count -gt 0) { return $matches[0].Groups[1].Value.Trim() }
+    return $null
 }
 
 function Test-QualityJitOutput {
