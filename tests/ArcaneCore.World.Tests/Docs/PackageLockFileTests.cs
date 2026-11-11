@@ -4,8 +4,9 @@ using Xunit;
 namespace ArcaneCore.World.Tests.Docs;
 
 /// <summary>
-/// Supply chain: every project restores against a committed packages.lock.json and every scripted restore (CI, node CI, the local
-/// full gate, the Dockerfile and the deploy build) runs in locked mode, so a package graph that differs from the lock files fails
+/// Supply chain: every project restores against its target-framework-specific packages.net10.lock.json or packages.net11.lock.json.
+/// Every scripted restore (CI, node CI, the local full gate, the Dockerfile and the deploy build) runs in locked mode,
+/// so a package graph that differs from the lock files fails
 /// the restore (OpenSSF Scorecard Pinned-Dependencies, "nugetCommand not pinned by hash"). docs/guide/contributing.md says how to
 /// update the lock files.
 /// </summary>
@@ -18,21 +19,54 @@ public sealed class PackageLockFileTests
     }
 
     [Fact]
-    public void EveryProjectUnderTheRepoProps_HasALockFileBesideIt()
+    public void DirectoryBuildTargets_SelectsTheCorrectFrameworkLockFile()
+    {
+        string targets = RepoRoot.ReadText("Directory.Build.targets");
+        Assert.Contains("'$(TargetFramework)' == 'net10.0'", targets, StringComparison.Ordinal);
+        Assert.Contains("packages.net10.lock.json", targets, StringComparison.Ordinal);
+        Assert.Contains("'$(TargetFramework)' == 'net11.0'", targets, StringComparison.Ordinal);
+        Assert.Contains("packages.net11.lock.json", targets, StringComparison.Ordinal);
+        Assert.Contains("$(MSBuildProjectDirectory)", targets, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EveryProjectUnderTheRepoProps_HasBothFrameworkLockFilesBesideIt()
     {
         string root = RepoRoot.Find();
-        string[] projects = RepoPropsProjects(root);
+        const string AnalyzerProject = "src/ArcaneCore.Analyzers/ArcaneCore.Analyzers.csproj";
+        string analyzerLock = Path.Combine(root, "src/ArcaneCore.Analyzers/packages.lock.json");
+        Assert.True(File.Exists(analyzerLock), "the netstandard2.0 Roslyn analyzer needs its own packages.lock.json");
 
-        // The solution alone has more than twenty projects; a handful means the walk is not looking where the projects are.
+        string[] projects = [.. RepoPropsProjects(root).Where(p => Relative(root, p) != AnalyzerProject)];
+
+        // All ordinary projects need per-framework locks. The analyzer is netstandard2.0.
         Assert.True(projects.Length >= 20, "expected the repo's projects, found " + projects.Length);
-        string[] missing = [.. projects.Where(p => !File.Exists(Path.Combine(Path.GetDirectoryName(p)!, "packages.lock.json")))
+        foreach (string fileName in new[] { "packages.net10.lock.json", "packages.net11.lock.json" })
+        {
+            string[] missing = [.. projects.Where(p => !File.Exists(Path.Combine(Path.GetDirectoryName(p)!, fileName)))
+                .Select(p => Path.GetRelativePath(root, p).Replace('\\', '/'))];
+            Assert.True(missing.Length == 0, "projects without " + fileName + " (run dotnet restore and commit it):\n" + string.Join("\n", missing));
+        }
+
+        string[] legacy = [.. projects.Where(p => File.Exists(Path.Combine(Path.GetDirectoryName(p)!, "packages.lock.json")))
             .Select(p => Path.GetRelativePath(root, p).Replace('\\', '/'))];
-        Assert.True(missing.Length == 0, "projects without packages.lock.json (run dotnet restore and commit it):\n" + string.Join("\n", missing));
+        Assert.True(legacy.Length == 0, "unversioned packages.lock.json remain (run scripts/migrate-nuget-lock-files.sh):\n" + string.Join("\n", legacy));
+    }
+
+    [Fact]
+    public void QuickBuildWorkflow_UsesBothFrameworkBuildScripts()
+    {
+        string workflow = RepoRoot.ReadText(".github/workflows/dotnet.yml");
+        Assert.Contains("10.0.x", workflow, StringComparison.Ordinal);
+        Assert.Contains("11.0.x", workflow, StringComparison.Ordinal);
+        Assert.Contains("build-net${{ matrix.sdk }}.sh Release", workflow, StringComparison.Ordinal);
+
+        string sharedBuild = RepoRoot.ReadText("scripts/build-target.sh");
+        Assert.Contains("--locked-mode", sharedBuild, StringComparison.Ordinal);
     }
 
     [Theory]
     [InlineData(".github/workflows/ci.yml")]
-    [InlineData(".github/workflows/dotnet.yml")]
     [InlineData("apps/docker/Dockerfile")]
     [InlineData("tools/ops/ci/node-ci.ps1")]
     [InlineData("tools/ops/ci/full-suite-gate.ps1")]
@@ -109,7 +143,8 @@ public sealed class PackageLockFileTests
     public void TheContributingGuide_SaysHowToUpdateTheLockFiles()
     {
         string guide = RepoRoot.ReadText("docs/guide/contributing.md");
-        Assert.Contains("packages.lock.json", guide, StringComparison.Ordinal);
+        Assert.Contains("packages.net10.lock.json", guide, StringComparison.Ordinal);
+        Assert.Contains("packages.net11.lock.json", guide, StringComparison.Ordinal);
         Assert.Contains("restore ArcaneCore.slnx --force-evaluate", guide, StringComparison.Ordinal);
     }
 

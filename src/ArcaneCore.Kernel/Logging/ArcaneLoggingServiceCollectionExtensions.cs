@@ -1,9 +1,13 @@
+#if NET11_0
 extern alias LoggingPkg;
+#endif
 
 using ArcaneCore.Kernel.Configuration.Validation;
 using ArcaneCore.Kernel.Logging;
+#if NET11_0
 using LoggingPkg::Microsoft.Extensions.DependencyInjection;
 using LoggingPkg::Microsoft.Extensions.Logging;
+#endif
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;

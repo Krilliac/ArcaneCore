@@ -28,6 +28,15 @@ public sealed class MpqCodecTests
     {
         // Every zlib stream ends with the big-endian Adler-32 of its data (RFC 1950). .NET's compressor is the oracle.
         byte[] data = Pseudo(length, 7);
+        if (length == 0)
+        {
+            // RFC 1950 defines Adler-32(empty) as the initial value, 1.
+            // Some runtime versions produce no zlib bytes for a zero-length write,
+            // so there is no stream trailer for the helper to extract.
+            Assert.Equal(1u, MpqChecksum.Adler32(MpqChecksum.ZlibSeed, data));
+            return;
+        }
+
         Assert.Equal(TrailerOf(data), MpqChecksum.Adler32(MpqChecksum.ZlibSeed, data));
     }
 

@@ -1,16 +1,20 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net11.0</TargetFramework>
     <RootNamespace>ArcaneCore.Kernel</RootNamespace>
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Microsoft.Extensions.{Hosting.Abstractions,Logging.Abstractions,Options} are part of Microsoft.NETCore.App in .NET 11 (NU1510). -->
-    <!-- Logging provider (Logging/): ILoggingBuilder, ProviderAlias and options binding. Both are already in the daemons'
-         graph through Microsoft.Extensions.Hosting; no third-party logging package is used. Aliased so Microsoft.Extensions.Logging 9.0.0
-         does not collide (CS0433) with ProviderAliasAttribute in .NET 11's built-in Microsoft.Extensions.Logging.Abstractions. -->
-    <PackageReference Include="Microsoft.Extensions.Logging" Aliases="LoggingPkg" />
+    <!-- .NET 11 embeds several Microsoft.Extensions abstractions in the base shared framework.
+         .NET 10 still needs Hosting and Logging abstractions as NuGet references.
+         Keep these direct references conditional so the eventual .NET 11 build avoids NU1510. -->
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Condition="'$(TargetFramework)' == 'net10.0'" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Condition="'$(TargetFramework)' == 'net10.0'" />
+    <!-- .NET 11's built-in ProviderAliasAttribute conflicts with the version in Logging 9.x,
+         so retain the existing named assembly alias for .NET 11 only. On .NET 10,
+         keep Logging globally visible so ProviderAliasAttribute resolves correctly. -->
+    <PackageReference Include="Microsoft.Extensions.Logging" Condition="'$(TargetFramework)' == 'net10.0'" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Aliases="LoggingPkg" Condition="'$(TargetFramework)' == 'net11.0'" />
     <!-- Binds the Diagnostics section in UseArcaneDiagnostics; already in both daemons' graphs through Microsoft.Extensions.Hosting. -->
     <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />
     <!-- The .conf provider (Configuration/Conf): ConfigurationProvider and the file watcher. Both are already in the daemons' graph through Microsoft.Extensions.Hosting. -->

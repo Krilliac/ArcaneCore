@@ -257,7 +257,7 @@ public sealed class RedeployPlanTests(ITestOutputHelper output)
 
         // The module changes and is rebuilt after the source change.
         File.WriteAllText(Path.Combine(repo, "mods", "Hello", "Hello.cs"), "// v2");
-        string dll = Path.Combine(repo, "mods", "Hello", "bin", "Debug", "net11.0", "Hello.dll");
+        string dll = Path.Combine(repo, "mods", "Hello", "bin", "Debug", "net10.0", "Hello.dll");
         Directory.CreateDirectory(Path.GetDirectoryName(dll)!);
         File.WriteAllText(dll, "module v2 bytes");
         File.SetLastWriteTimeUtc(dll, DateTime.UtcNow.AddMinutes(1));

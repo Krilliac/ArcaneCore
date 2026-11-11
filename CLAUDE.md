@@ -152,7 +152,7 @@ dotnet run --project tools/ArcaneCore.MockClient -c Release --no-build -- self-t
 - **Check counts, not exit codes.** Read the passed/failed/skipped totals per suite and compare them with the base branch. A
   killed run, a filter that matched 0 tests, or a build that never ran can all exit 0.
 - MariaDB/PostgreSQL provider tests run only on hosted CI. Locally, only SQLite runs. Say so when a store change was only exercised on SQLite.
-- A package change refreshes every affected `packages.lock.json` in the same commit ([contributing](docs/guide/contributing.md)).
+- A package change refreshes every affected `packages.net10.lock.json` / `packages.net11.lock.json` in the same commit ([contributing](docs/guide/contributing.md)).
 
 ## SQL update files
 

@@ -1,0 +1,11 @@
+<Project>
+
+  <!-- Evaluate after each .csproj so its resolved TargetFramework (including an
+       ArcaneTargetFramework build-time selection) selects the matching NuGet snapshot.
+       .NET 10 and .NET 11 must never overwrite each other's lock files. -->
+  <PropertyGroup>
+    <NuGetLockFilePath Condition="'$(TargetFramework)' == 'net10.0'">$(MSBuildProjectDirectory)/packages.net10.lock.json</NuGetLockFilePath>
+    <NuGetLockFilePath Condition="'$(TargetFramework)' == 'net11.0'">$(MSBuildProjectDirectory)/packages.net11.lock.json</NuGetLockFilePath>
+  </PropertyGroup>
+
+</Project>

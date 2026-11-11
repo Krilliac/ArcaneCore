@@ -86,7 +86,7 @@ if ($TestFilter) {
 $log = Join-Path $out 'stryker.log'
 "mutate.ps1: stryker in $(Split-Path $testProjectPath -Parent), project $(Split-Path $projectPath -Leaf), globs: $($globs -join ', '), concurrency $Concurrency"
 "mutate.ps1: output $out"
-# Stryker does not restore: without project.assets.json its analysis finds no project. The repo's packages.lock.json files are honoured.
+# Stryker does not restore: without project.assets.json its analysis finds no project. The repo's packages.net10.lock.json files are honoured.
 & dotnet restore $testProjectPath --locked-mode 2>&1 | Tee-Object -FilePath (Join-Path $out 'restore.log') | Out-Null
 if ($LASTEXITCODE -ne 0) { Stop-Mutate "dotnet restore --locked-mode of $TestProject failed (log: $(Join-Path $out 'restore.log'))." }
 # Stryker's output goes to a file, not a pipe: the vstest.console processes it starts can outlive it holding the pipe open, and a pipe

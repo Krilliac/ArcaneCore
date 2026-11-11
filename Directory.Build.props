@@ -2,12 +2,14 @@
 
   <!-- Repo-wide build settings (nullable enabled, warnings-as-errors; docs/guide/contributing.md). -->
   <PropertyGroup>
-    <!-- .NET 11 (net11.0) runtime + C# 15 (LangVersion preview). EF Core/Extensions packages
-         stay on 9.0.0 because the Pomelo MySQL/MariaDB provider (primary engine)
-         has no .NET 11 release yet; EF 9 is runtime-compatible with net11.0. -->
-    <TargetFramework>net11.0</TargetFramework>
-    <LangVersion>preview</LangVersion>
-    <SuppressNETCoreSdkPreviewMessage>true</SuppressNETCoreSdkPreviewMessage>
+    <!-- Keep the TargetFramework local to each project evaluation, never pass it as a
+         global solution property. A global -p:TargetFramework can trigger duplicate
+         project-reference builds and output-file collisions (dotnet/msbuild#8142).
+         ArcaneTargetFramework flows to project references without changing .csproj files.
+         EF Core/Extensions packages remain on 9.x because the Pomelo MySQL/MariaDB provider uses EF 9. -->
+    <TargetFramework Condition="'$(ArcaneTargetFramework)' != ''">$(ArcaneTargetFramework)</TargetFramework>
+    <TargetFramework Condition="'$(TargetFramework)' == ''">net10.0</TargetFramework>
+    <LangVersion>14.0</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
@@ -30,12 +32,14 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <CopyDocumentationFileToOutputDirectory>false</CopyDocumentationFileToOutputDirectory>
     <NoWarn>$(NoWarn);CS1591;CS1573;CS0419</NoWarn>
-    <!-- Supply chain: every project restores against its committed packages.lock.json (exact versions plus content hashes of the
-         whole transitive graph). CI (ci.yml, dotnet.yml), the Dockerfile, node CI (tools/ops/ci/node-ci.ps1), the local full gate
-         (tools/ops/ci/full-suite-gate.ps1) and the deploy build (tools/ops/deploy/build-integrated.sh) restore with locked mode, so a
-         package graph that differs from the lock file fails the restore instead of silently resolving something new. Updating a
-         package: docs/guide/contributing.md. -->
+    <!-- Supply chain: every project restores against a committed, target-framework-specific packages.net10.lock.json or
+         packages.net11.lock.json (exact versions and content hashes of the full transitive graph). CI (ci.yml, dotnet.yml),
+         the Dockerfile, node CI (tools/ops/ci/node-ci.ps1), the local full gate (tools/ops/ci/full-suite-gate.ps1),
+         and the deploy build (tools/ops/deploy/build-integrated.sh) restore in locked mode. Package updates:
+         docs/guide/contributing.md. -->
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <!-- The NuGetLockFilePath selection lives in Directory.Build.targets, evaluated after
+         the target is resolved from ArcaneTargetFramework (or the net10.0 default). -->
   </PropertyGroup>
 
   <!-- Test processes only: let a database be created through a reserved schema placeholder (src/ArcaneCore.Data/Schema/ReservedSchemaGaps.cs).
