@@ -18,15 +18,53 @@ public sealed partial class NoQuietWindowEmptyAssertTests
     [GeneratedRegex(@"Assert\s*\.\s*Empty\s*\(\s*await\s+(?:[\w.?!]+\s*\.\s*)?Collect\w*\s*\(", RegexOptions.CultureInvariant)]
     private static partial Regex QuietEmptyAssert();
 
-    // The two-step form: var p = await x.Collect...(..); (up to six statements later) Assert.Empty(p).
-    [GeneratedRegex(@"\bvar\s+(\w+)\s*=\s*await\s+(?:[\w.?!]+\s*\.\s*)?Collect\w*\s*\([^;]*;(?:(?!\bvar\s+\1\b)[^;]*;){0,6}?\s*Assert\s*\.\s*Empty\s*\(\s*\1\s*\)", RegexOptions.CultureInvariant)]
-    private static partial Regex QuietEmptyAssertTwoStep();
-
-    // Locate possible two-step assertions with a simple, bounded-cost expression first.
-    // Running the backreference-heavy two-step regex over entire large test files can
-    // exhaust its generated backtracking stack in CI.
-    [GeneratedRegex(@"\bvar\s+\w+\s*=\s*await\s+(?:[\w.?!]+\s*\.\s*)?Collect\w*\s*\(", RegexOptions.CultureInvariant)]
+    // The two-step form: var p = await x.Collect...(..); (up to six statements later) Assert.Empty(p). Scanned by
+    // FindTwoStepQuietEmptyAsserts with three anchored, backreference-free expressions instead of one backreference regex: the
+    // single-regex form exhausted the .NET 10 source-generated backtracking stack on large test files (CI 2026-11-11:
+    // ArgumentOutOfRangeException from Array.Resize in StackPush after almost five minutes), and its cost grew with file size.
+    [GeneratedRegex(@"\bvar\s+(?<name>\w+)\s*=\s*await\s+(?:[\w.?!]+\s*\.\s*)?Collect\w*\s*\(", RegexOptions.CultureInvariant)]
     private static partial Regex CollectAssignment();
+
+    // At a statement start: optional whitespace, then Assert.Empty(name). Used with Match(text, start); \G anchors it there.
+    [GeneratedRegex(@"\G\s*Assert\s*\.\s*Empty\s*\(\s*(?<name>\w+)\s*\)", RegexOptions.CultureInvariant)]
+    private static partial Regex EmptyAssertAtStatement();
+
+    // At a statement start with no leading whitespace: a redeclaration of a variable (the regex form's (?!\bvar\s+\1\b) guard).
+    [GeneratedRegex(@"\G\bvar\s+(?<name>\w+)\b", RegexOptions.CultureInvariant)]
+    private static partial Regex RedeclarationAtStatement();
+
+    /// <summary>
+    /// Returns the index of each <c>var name = await [receiver.]Collect*(...);</c> assignment followed, within the next seven statements
+    /// (the assignment's own statement end, then up to six more), by a statement that is <c>Assert.Empty(name)</c>. A statement that starts
+    /// directly with <c>var name</c> ends the search for that assignment. Linear in the text scanned after each assignment.
+    /// </summary>
+    internal static IEnumerable<int> FindTwoStepQuietEmptyAsserts(string text)
+    {
+        const int MaxFollowingStatements = 6;
+        foreach (Match assignment in CollectAssignment().Matches(text))
+        {
+            string name = assignment.Groups["name"].Value;
+            int statementStart = text.IndexOf(';', assignment.Index + assignment.Length);
+            for (int following = 0; statementStart >= 0 && following <= MaxFollowingStatements; following++)
+            {
+                statementStart++; // past the ';'
+                Match empty = EmptyAssertAtStatement().Match(text, statementStart);
+                if (empty.Success && empty.Groups["name"].Value == name)
+                {
+                    yield return assignment.Index;
+                    break;
+                }
+
+                Match redeclared = RedeclarationAtStatement().Match(text, statementStart);
+                if (following == MaxFollowingStatements || (redeclared.Success && redeclared.Groups["name"].Value == name))
+                {
+                    break;
+                }
+
+                statementStart = text.IndexOf(';', statementStart);
+            }
+        }
+    }
 
     // The fixed-window silence helper (it passed or failed on timing) was removed; neither a call nor a redefinition may return.
     [GeneratedRegex(@"\bAssertSilentAsync\b", RegexOptions.CultureInvariant)]
@@ -60,18 +98,10 @@ public sealed partial class NoQuietWindowEmptyAssertTests
                 }
             }
 
-            // Evaluate the expensive backreference pattern only on a bounded region
-            // following each possible assignment, not on a multi-megabyte source file.
-            foreach (Match start in CollectAssignment().Matches(text))
+            foreach (int index in FindTwoStepQuietEmptyAsserts(text))
             {
-                const int MaxTwoStepWindow = 8192;
-                string window = text.Substring(start.Index, Math.Min(MaxTwoStepWindow, text.Length - start.Index));
-                Match match = QuietEmptyAssertTwoStep().Match(window);
-                if (match.Success && match.Index == 0)
-                {
-                    int line = 1 + text.AsSpan(0, start.Index).Count('\n');
-                    offenders.Add($"tests/{relative}:{line}");
-                }
+                int line = 1 + text.AsSpan(0, index).Count('\n');
+                offenders.Add($"tests/{relative}:{line}");
             }
         }
 
@@ -103,7 +133,7 @@ public sealed partial class NoQuietWindowEmptyAssertTests
     [InlineData("var p = await c.CollectAsync(Quiet);\n        Assert." + "Equal(1, p.Count);\n        Assert." + "Empty(q);", false)]
     [InlineData("var p = await store.GetMailsAsync(1);\n        Assert." + "Empty(p);", false)]
     public void TheTwoStepPatternMatchesTheForbiddenShapeOnly(string text, bool expected)
-        => Assert.Equal(expected, QuietEmptyAssertTwoStep().IsMatch(text));
+        => Assert.Equal(expected, FindTwoStepQuietEmptyAsserts(text).Any());
 
     [Theory]
     [InlineData("await client.AssertSilent" + "Async(window);", true)]

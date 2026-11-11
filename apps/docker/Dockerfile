@@ -21,6 +21,8 @@ WORKDIR /src
 COPY Directory.Build.props Directory.Build.targets Directory.Packages.props ArcaneCore.slnx .editorconfig ./
 COPY src/ src/
 COPY tools/ tools/
+# analyzers/: the safety analyzer baseline (Directory.Build.props AdditionalFiles); without it every baselined finding fails the build.
+COPY analyzers/ analyzers/
 # Locked mode: the restore must match the packages.net10.lock.json committed beside each project (exact versions and content hashes),
 # so the image cannot build against a package graph CI never saw.
 RUN dotnet restore src/ArcaneCore.World/ArcaneCore.World.csproj --locked-mode && dotnet restore src/ArcaneCore.Playerbots/ArcaneCore.Playerbots.csproj --locked-mode \
