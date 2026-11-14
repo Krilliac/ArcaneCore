@@ -459,6 +459,32 @@ public sealed class OpsScriptTests : IDisposable
         }
     }
 
+    /// <summary>
+    /// A WorkDir that is not an existing directory (a nonexistent path, or a drive-relative one such as Bash leaves after eating the backslashes of
+    /// 'D:\a\b') must be refused before any slot is taken: the command must not run in the gate's inherited cwd and report 0.
+    /// </summary>
+    [OpsFact(Needs.Windows | Needs.Pwsh)]
+    public void RunInSlot_ANonexistentWorkDir_IsRefused_AndTheCommandNeverRuns() => AssertWorkDirRefused(Path.Combine(_temp, "no-such-dir"));
+
+    [OpsFact(Needs.Windows | Needs.Pwsh)]
+    public void RunInSlot_ADriveRelativeWorkDir_IsRefused_AndTheCommandNeverRuns() => AssertWorkDirRefused(Path.GetPathRoot(_temp)![..2] + "somewhere");
+
+    private void AssertWorkDirRefused(string workDir)
+    {
+        string root = SlotRoot();
+        string created = Path.Combine(_temp, "must-not-exist.txt");
+        string command = $"Write-Output ran-marker; Set-Content -LiteralPath '{created.Replace("'", "''", StringComparison.Ordinal)}' -Value x";
+        string[] args = ["-Lane", "t", "-WorkDir", workDir, "-Command", command, "-Slots", "1", "-MinAvailableMB", "1", "-LanesRoot", root];
+
+        (int exit, string output) = Pwsh(Script("tools/ops/ci/run-in-slot.ps1"), args);
+
+        Assert.True(exit != 0, $"exit {exit}: {output}");
+        Assert.DoesNotContain("ran-marker", output, StringComparison.Ordinal);
+        Assert.False(File.Exists(created), "the command ran although WorkDir is invalid");
+        Assert.Contains("WorkDir", output, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(Path.Combine(root, "slot-locks")) && Directory.GetFiles(Path.Combine(root, "slot-locks")).Length > 0, "a slot was taken for a refused WorkDir");
+    }
+
     [OpsFact(Needs.Windows | Needs.Pwsh)]
     public void RunInSlot_TheRelease_LeavesASlotFileThatNowBelongsToAnotherRun()
     {

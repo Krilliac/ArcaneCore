@@ -20,7 +20,10 @@
 # - Exit code: 124 on timeout; else the last native command's code if non-zero (also when the command then threw); else 1 if the command threw
 #   or its last statement failed ($? false, incl. -ErrorAction SilentlyContinue that hit an error); else 0. A statement-terminating error
 #   stops the rest of a `;` chain. Limit: a function that only calls Write-Error (non-terminating) and ends the command still gives 0.
-#   A WorkDir longer than 247 characters is refused (exit 1) before a slot is taken: native commands cannot start in a longer cwd. Prints the log path and the log's last 60 lines.
+#   A WorkDir longer than 247 characters is refused (exit 1) before a slot is taken: native commands cannot start in a longer cwd.
+#   So is a WorkDir that is not fully qualified (drive-relative 'D:foo', relative, or what Bash leaves after eating backslashes) or not an existing directory:
+#   the command must never run in the gate's inherited cwd and report success. The child also fails closed (stderr, exit 1, command not run) if Set-Location fails.
+#   Prints the log path and the log's last 60 lines.
 param(
     [Parameter(Mandatory)] [string]$Lane,
     [Parameter(Mandatory)] [string]$WorkDir,
@@ -34,6 +37,8 @@ param(
     [string]$LanesRoot
 )
 $ErrorActionPreference = 'Stop'
+if (-not [IO.Path]::IsPathFullyQualified($WorkDir)) { [Console]::Error.WriteLine("[$Lane] refusing WorkDir '$WorkDir': not a fully qualified path (a drive-relative or relative path would run the command in the wrong tree; did a shell eat the backslashes?)."); exit 1 }
+if (-not (Test-Path -LiteralPath $WorkDir -PathType Container)) { [Console]::Error.WriteLine("[$Lane] refusing WorkDir '$WorkDir': it is not an existing directory."); exit 1 }
 if ($WorkDir.Length -gt 247) { [Console]::Error.WriteLine("[$Lane] refusing WorkDir of $($WorkDir.Length) characters (max 247): native commands cannot start when the child's cwd is over 260 characters, and the gate would pass silently."); exit 1 }
 . (Join-Path $PSScriptRoot '..\OpsEnv.ps1')
 if (-not $LanesRoot) { $LanesRoot = Get-OpsRequiredEnv 'ARCANECORE_LANES_ROOT' 'the root that holds lane worktrees, slot-locks and slot-logs' 'LanesRoot' }
@@ -96,7 +101,7 @@ $log = Join-Path $logs "$Lane-$n.log"
 "[$Lane] holding $(Split-Path $held -Leaf) after ${waited}s; log $log"
 $rc = 1
 try {
-    $setup = "Set-Location -LiteralPath $(ConvertTo-PsSingleQuoted $WorkDir)`n`$env:DOTNET_ROOT=$(ConvertTo-PsSingleQuoted $dotnetRoot)`n`$env:PATH=`"`$env:DOTNET_ROOT;`$env:PATH`"`n"
+    $setup = "try { Set-Location -LiteralPath $(ConvertTo-PsSingleQuoted $WorkDir) -ErrorAction Stop } catch { [Console]::Error.WriteLine((`$_ | Out-String)); exit 1 }`n`$env:DOTNET_ROOT=$(ConvertTo-PsSingleQuoted $dotnetRoot)`n`$env:PATH=`"`$env:DOTNET_ROOT;`$env:PATH`"`n"
     if ($terrainDir) { $setup += "`$env:ARCANECORE_TEST_TERRAIN_DIR=$(ConvertTo-PsSingleQuoted $terrainDir)`n" }
     if ($dbcDir) { $setup += "`$env:ARCANECORE_TEST_DBC_DIR=$(ConvertTo-PsSingleQuoted $dbcDir)`n" }
     if ($clientDir) { $setup += "`$env:ARCANECORE_TEST_CLIENT_DIR=$(ConvertTo-PsSingleQuoted $clientDir)`n" }
@@ -116,7 +121,7 @@ try {
     # program's stderr) into fatal ones and change what existing dotnet/bash commands do. Terminating errors are still caught.
     $script = "$setup`$global:LASTEXITCODE = 0`n`$__slotOk = `$true`ntry {`n$Command`n`$__slotOk = `$?`n} catch {`n[Console]::Error.WriteLine((`$_ | Out-String))`nif (`$LASTEXITCODE -ne 0) { exit `$LASTEXITCODE }`nexit 1`n}`nif (`$LASTEXITCODE -ne 0) { exit `$LASTEXITCODE }`nif (-not `$__slotOk) { exit 1 }`nexit 0"
     $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
-    $p = Start-Process pwsh -ArgumentList '-NoProfile', '-NonInteractive', '-EncodedCommand', $enc -PassThru -NoNewWindow -RedirectStandardOutput $log -RedirectStandardError "$log.err"
+    $p = Start-Process pwsh -ArgumentList '-NoProfile', '-NonInteractive', '-EncodedCommand', $enc -PassThru -NoNewWindow -WorkingDirectory $WorkDir -RedirectStandardOutput $log -RedirectStandardError "$log.err"
     try { $p.PriorityClass = 'BelowNormal' } catch { }
     if (-not $p.WaitForExit($TimeoutMin * 60 * 1000)) {
         & taskkill.exe /T /F /PID $p.Id | Out-Null
