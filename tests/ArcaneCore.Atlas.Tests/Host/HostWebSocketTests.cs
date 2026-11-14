@@ -12,7 +12,10 @@ namespace ArcaneCore.Atlas.Tests.Host;
 /// <summary>A scripted browser tab: opens <c>/api/ws</c>, sends JSON text frames and reads what the host pushes.</summary>
 internal sealed class UiClient : IAsyncDisposable
 {
-    private static readonly TimeSpan Patience = TimeSpan.FromSeconds(10);
+    // An upper bound only, for what must happen (connect, send, the next frame, the close); a check that something does NOT arrive
+    // passes its own window (NothingArrivesAsync). 10 s was not enough for a localhost connect on a machine paging under parallel
+    // builds, so the bound is generous: a passing test never waits for it.
+    private static readonly TimeSpan Patience = TimeSpan.FromSeconds(30);
 
     private readonly ClientWebSocket _socket = new();
 
