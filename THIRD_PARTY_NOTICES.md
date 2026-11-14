@@ -52,13 +52,13 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## DotRecast (test and visualizer oracle only)
+## DotRecast (test oracle and Atlas tool)
 
 - Repository: https://github.com/ikpil/DotRecast
 - Commit: `6fce4ac0d59f4d4efdf9de0a9e5beae5784bca12`
 - License: Zlib; the unmodified license text is at [tests/ThirdParty/DotRecast/LICENSE.txt](tests/ThirdParty/DotRecast/LICENSE.txt).
-- Imported files: the 61 C# files under `src/DotRecast.Core/` and 65 C# files under `src/DotRecast.Detour/`, copied without source edits to the corresponding `tests/ThirdParty/DotRecast/` projects. The project files are ArcaneCore's test-only wrappers.
-- Purpose: independent Detour format/path query cross-check in `ArcaneCore.Game.Tests`, `tools/ArcaneCore.Atlas` (`Reference/Navmesh/` and `Diff/NavDiff.cs`), and `tests/ArcaneCore.Atlas.Tests`. Production server projects under `src/` do not reference these assemblies.
+- Imported files: the 61 C# files under `src/DotRecast.Core/`, 65 C# files under `src/DotRecast.Detour/` and 58 C# files under `src/DotRecast.Recast/`, copied without source edits to the corresponding `tests/ThirdParty/DotRecast/` projects. The project files are ArcaneCore's own wrappers.
+- Purpose: independent Detour format/path query cross-check in `ArcaneCore.Game.Tests`, `tools/ArcaneCore.Atlas` (`Reference/Navmesh/` and `Diff/NavDiff.cs`), and `tests/ArcaneCore.Atlas.Tests`; and, since 2026-11-14, navigation mesh generation in `tools/ArcaneCore.Atlas` (`Extract/MmapTileBuilder.cs`, the `extract.mmaps` command), which uses the Recast build steps and Detour's tile builder. Production server projects under `src/` do not reference these assemblies.
 
 ## WowWorldMessages vanilla test oracle
 
