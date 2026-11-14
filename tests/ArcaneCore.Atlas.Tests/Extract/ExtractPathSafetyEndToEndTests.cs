@@ -5,6 +5,7 @@ using ArcaneCore.Atlas.Core.Commands;
 using ArcaneCore.Atlas.Extract;
 using ArcaneCore.Atlas.Reference.Client.Terrain;
 using ArcaneCore.Atlas.Reference.Dbc;
+using ArcaneCore.Atlas.Reference.Mpq;
 using ArcaneCore.Atlas.Tests.Reference.Client.Models;
 using ArcaneCore.Atlas.Tests.Reference.Client.Terrain;
 using ArcaneCore.Atlas.Tests.Reference.Mpq;
@@ -220,6 +221,41 @@ public sealed class ExtractPathSafetyEndToEndTests
             Assert.True(result.Ok, result.ErrorMessage);
             Assert.Equal(2, result.Data!["written"]!.GetValue<int>());
             Assert.Equal(new[] { "0004832.map", "0004833.map" }, Directory.GetFiles(storage).Select(Path.GetFileName).Order(StringComparer.Ordinal).ToArray());
+        }
+        finally
+        {
+            DeleteDirectoryLink(link);
+        }
+    }
+
+    /// <summary>
+    /// A link at the child folder leads to ordinary storage: the command writes into the folder the link leads to, by its real path,
+    /// and reports that folder as <c>out</c>, as extract.mmaps does; nothing is written beside the link.
+    /// </summary>
+    [Theory]
+    [InlineData("extract.maps", "maps")]
+    [InlineData("extract.vmaps", "vmaps")]
+    public async Task Command_ChildFolderLinkedToOrdinaryStorage_WritesIntoAndReportsTheRealFolder(string command, string child)
+    {
+        using var scratch = new TestDirectory();
+        using var client = new TestDirectory();
+        string storage = Path.Combine(scratch.Path, "storage");
+        Directory.CreateDirectory(storage);
+        string root = Path.Combine(scratch.Path, "out");
+        Directory.CreateDirectory(root);
+        string link = Path.Combine(root, child);
+        MakeDirectoryLink(link, storage);
+        try
+        {
+            CommandResult result = await Invoke(command, root, client.Path);
+
+            Assert.True(result.Ok, result.ErrorMessage);
+            Assert.Equal(ClientOutputPath.ResolveLinks(storage), result.Data!["out"]!.GetValue<string>(), ignoreCase: OperatingSystem.IsWindows());
+            string[] written = [.. Directory.GetFiles(storage).Select(f => Path.GetFileName(f)!).Order(StringComparer.Ordinal)];
+            Assert.Equal(
+                command == "extract.maps" ? new[] { "0004832.map", "0004833.map" } : new[] { "000.vmtree", "000_31_48.vmtile", "000_31_49.vmtile", "036.vmtree", "Cube.m2", "Cube.m2.vmo", "Wall.wmo.vmo" },
+                written);
+            Assert.Equal(new[] { child }, Directory.GetFileSystemEntries(root).Select(Path.GetFileName).ToArray());
         }
         finally
         {

@@ -180,9 +180,10 @@ internal static class ExtractCommands
                 VmapExtractReport report;
                 try
                 {
-                    // The extractor writes into output/vmaps; that path is created, checked to lead to the folder judged, and held.
-                    using IDisposable hold = ClientOutputPath.HoldDirectory(name, Path.Combine(output, VmapExtractor.VmapsFolder), vmapsDirectory);
-                    report = new VmapExtractor(files, maps).Extract(output, only, threads, cancellationToken);
+                    // The extractor writes into the real folder judged for output/vmaps (so a link there is not traversed again for each
+                    // file, and 'out' names that folder, as extract.mmaps does); it is created, checked, and held until the run ends.
+                    using IDisposable hold = ClientOutputPath.HoldDirectory(name, vmapsDirectory, vmapsDirectory);
+                    report = new VmapExtractor(files, maps).Extract(output, only, threads, cancellationToken, vmapsDirectory);
                 }
                 catch (Exception e) when (e is IOException or UnauthorizedAccessException)
                 {
@@ -285,9 +286,10 @@ internal static class ExtractCommands
                 MapExtractReport report;
                 try
                 {
-                    // The extractor writes into output/maps; that path is created, checked to lead to the folder judged, and held.
-                    using IDisposable hold = ClientOutputPath.HoldDirectory(name, Path.Combine(output, MapExtractor.MapsFolder), mapsDirectory);
-                    report = new MapExtractor(files, maps, areas).Extract(output, only, overwrite, threads, cancellationToken);
+                    // The extractor writes into the real folder judged for output/maps (so a link there is not traversed again for each
+                    // file, and 'out' names that folder, as extract.mmaps does); it is created, checked, and held until the run ends.
+                    using IDisposable hold = ClientOutputPath.HoldDirectory(name, mapsDirectory, mapsDirectory);
+                    report = new MapExtractor(files, maps, areas).Extract(output, only, overwrite, threads, cancellationToken, mapsDirectory);
                 }
                 catch (Exception e) when (e is IOException or UnauthorizedAccessException)
                 {

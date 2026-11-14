@@ -304,15 +304,3 @@ public sealed class MmapResumeTests(MmapWorld world) : IClassFixture<MmapWorld>
         Assert.False(File.Exists(Path.Combine(mmaps, "0005030.mmtile")));
     }
 }
-
-/// <summary>A fact that is skipped, with its reason, off Windows: the case needs the file system or a file lock that Windows has.</summary>
-internal sealed class WindowsFactAttribute : FactAttribute
-{
-    public WindowsFactAttribute()
-    {
-        if (!OperatingSystem.IsWindows())
-        {
-            Skip = "Windows only: it needs a case-insensitive file system, a file held open against deletion, or mklink /J.";
-        }
-    }
-}

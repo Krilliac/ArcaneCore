@@ -75,7 +75,8 @@ public sealed class MmapExtractor
     /// from all its tiles, so the tile fits a full build. A map whose tiles on disk were built against other parameters
     /// (origin, tile size or tile count) is refused with an <see cref="ArgumentException"/> and nothing of it is written or
     /// deleted, whatever <paramref name="overwrite"/> says: the tiles beside the new tile would stay in the wrong slot, so
-    /// that map has to be built whole, without a tile.
+    /// that map has to be built whole, without a tile. A refused tile (that refusal, or a map without that tile) ends the whole
+    /// run with the exception: maps processed earlier in the same run keep the files written for them, but no report is returned.
     /// </param>
     public MmapExtractReport Extract(IReadOnlyCollection<uint>? onlyMaps, bool overwrite, bool quick, int threads, CancellationToken cancellationToken, (int X, int Y)? onlyTile = null)
     {

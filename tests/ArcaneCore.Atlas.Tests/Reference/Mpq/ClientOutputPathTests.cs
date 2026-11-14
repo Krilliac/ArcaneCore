@@ -143,18 +143,6 @@ internal static class DirectoryLinks
     }
 }
 
-/// <summary>A fact for Windows-only path forms; skipped, visibly, elsewhere.</summary>
-public sealed class WindowsFactAttribute : FactAttribute
-{
-    public WindowsFactAttribute()
-    {
-        if (!OperatingSystem.IsWindows())
-        {
-            Skip = "Windows path forms.";
-        }
-    }
-}
-
 /// <summary>A theory for Windows-only path forms; skipped, visibly, elsewhere.</summary>
 public sealed class WindowsTheoryAttribute : TheoryAttribute
 {

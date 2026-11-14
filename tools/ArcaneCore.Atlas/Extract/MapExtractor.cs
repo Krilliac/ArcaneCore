@@ -71,13 +71,17 @@ public sealed class MapExtractor
         _areas = areas ?? throw new ArgumentNullException(nameof(areas));
     }
 
-    /// <summary>Extracts into <c>&lt;outputRoot&gt;/maps</c>.</summary>
+    /// <summary>Extracts into <c>&lt;outputRoot&gt;/maps</c>, or into <paramref name="mapsDirectory"/> when one is given.</summary>
     /// <param name="outputRoot">The server data root (the folder the world server's <c>Maps:DataDirectory</c> names).</param>
     /// <param name="onlyMaps">Map ids to extract; null or empty extracts every map.</param>
     /// <param name="overwrite">Rewrite tiles whose file exists; otherwise they are kept and counted as existing.</param>
     /// <param name="threads">Tiles converted at once (at least 1).</param>
+    /// <param name="mapsDirectory">
+    /// Where the files go, and what the report names; null for <c>&lt;outputRoot&gt;/maps</c>. <c>extract.maps</c> passes the real
+    /// folder its check judged for that path, so a link there is not traversed again for every file.
+    /// </param>
     /// <exception cref="ArgumentException">A requested map id is not in Map.dbc.</exception>
-    public MapExtractReport Extract(string outputRoot, IReadOnlyCollection<uint>? onlyMaps, bool overwrite, int threads, CancellationToken cancellationToken)
+    public MapExtractReport Extract(string outputRoot, IReadOnlyCollection<uint>? onlyMaps, bool overwrite, int threads, CancellationToken cancellationToken, string? mapsDirectory = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(outputRoot);
         ArgumentOutOfRangeException.ThrowIfLessThan(threads, 1);
@@ -95,7 +99,7 @@ public sealed class MapExtractor
             selected.AddRange(_maps.Maps.OrderBy(m => m.Id));
         }
 
-        string mapsDirectory = Path.Combine(outputRoot, MapsFolder);
+        mapsDirectory ??= Path.Combine(outputRoot, MapsFolder);
         Directory.CreateDirectory(mapsDirectory);
 
         var reports = new List<MapExtractMapReport>(selected.Count);

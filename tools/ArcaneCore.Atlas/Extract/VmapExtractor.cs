@@ -80,12 +80,19 @@ public sealed class VmapExtractor
         _maps = maps ?? throw new ArgumentNullException(nameof(maps));
     }
 
-    /// <summary>Extracts into <c>&lt;outputRoot&gt;/vmaps</c>, replacing the files of the maps it writes.</summary>
+    /// <summary>
+    /// Extracts into <c>&lt;outputRoot&gt;/vmaps</c>, or into <paramref name="vmapsDirectory"/> when one is given, replacing the files
+    /// of the maps it writes.
+    /// </summary>
     /// <param name="outputRoot">The server data root.</param>
     /// <param name="onlyMaps">Map ids to extract; null or empty extracts every map.</param>
     /// <param name="threads">Model files built at once (at least 1).</param>
+    /// <param name="vmapsDirectory">
+    /// Where the files go, and what the report names; null for <c>&lt;outputRoot&gt;/vmaps</c>. <c>extract.vmaps</c> passes the real
+    /// folder its check judged for that path, so a link there is not traversed again for every file.
+    /// </param>
     /// <exception cref="ArgumentException">A requested map id is not in Map.dbc.</exception>
-    public VmapExtractReport Extract(string outputRoot, IReadOnlyCollection<uint>? onlyMaps, int threads, CancellationToken cancellationToken)
+    public VmapExtractReport Extract(string outputRoot, IReadOnlyCollection<uint>? onlyMaps, int threads, CancellationToken cancellationToken, string? vmapsDirectory = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(outputRoot);
         ArgumentOutOfRangeException.ThrowIfLessThan(threads, 1);
@@ -103,7 +110,7 @@ public sealed class VmapExtractor
             selected.AddRange(_maps.Maps.OrderBy(m => m.Id));
         }
 
-        string directory = Path.Combine(outputRoot, VmapsFolder);
+        string directory = vmapsDirectory ?? Path.Combine(outputRoot, VmapsFolder);
         Directory.CreateDirectory(directory);
 
         var library = new VmapModelLibrary(_files);
@@ -128,14 +135,83 @@ public sealed class VmapExtractor
             }
         }
 
-        // ref: vmangos@0e3ff01 src/game/vmap/TileAssembler.cpp:195-206 (every placed model name becomes a model file)
+        VmapModelFileResult written = WriteModelFiles(directory, modelFiles, model => library.Load(model).ToWorldModel().ToBytes(), threads, cancellationToken);
+        problems.AddRange(library.Problems);
+        problems.AddRange(written.Collisions);
+        problems.AddRange(written.Failures);
+        return new VmapExtractReport(directory, [.. reports.Select(r => r.Report)], written.Written, bytes + written.Bytes, problems);
+    }
+
+    /// <summary>What <see cref="WriteModelFiles"/> did.</summary>
+    /// <param name="Written">Model files written.</param>
+    /// <param name="Bytes">Bytes written.</param>
+    /// <param name="Collisions">One line per set of file names that differ only in case, in ordinal order of the name kept.</param>
+    /// <param name="Failures">One line per model file that was not written, in ordinal order.</param>
+    internal sealed record VmapModelFileResult(int Written, long Bytes, IReadOnlyList<string> Collisions, IReadOnlyList<string> Failures);
+
+    /// <summary>
+    /// Builds and writes the model files, <paramref name="threads"/> at once. File names that are equal ignoring case are one file
+    /// on a case-insensitive file system (and one staging file), so two tasks must never write them: of each such set only the
+    /// first name in ordinal order is built and written, and one problem names every spelling.
+    /// </summary>
+    /// <param name="directory">The vmaps folder.</param>
+    /// <param name="modelFiles">File name and model of every placed model; the names are distinct (ordinal).</param>
+    /// <param name="build">Makes a model file's bytes; called once per file written, on any thread.</param>
+    /// <param name="threads">Files built at once (at least 1).</param>
+    /// <param name="cancellationToken">Stops the run.</param>
+    /// <remarks>
+    /// Differs from the reference: vmangos@0e3ff01 keeps the names in a case-sensitive <c>std::set&lt;std::string&gt;</c>
+    /// (src/game/vmap/TileAssembler.h:97, filled at TileAssembler.cpp:103 and :375) and converts them one after another
+    /// (TileAssembler.cpp:196-206), and its raw extraction skips a model whose file already exists
+    /// (contrib/vmap_extractor/vmapextract/vmapexport.cpp:150, gameobject_extract.cpp:44). So on a case-insensitive file system it
+    /// writes one file, in turn, from whichever spelling was extracted first; on a case-sensitive one it writes a file per
+    /// spelling. This tool writes the first spelling in ordinal order on every file system: on a case-sensitive one the
+    /// placements of the other spellings then find no model file of their own name (the spawn records keep their names). Names
+    /// reach this step through FixNameCase, which gives every spelling of a name the same case, so the case does not arise from
+    /// client data today; the rule keeps the parallel writes safe whatever names arrive.
+    /// </remarks>
+    // ref: vmangos@0e3ff01 src/game/vmap/TileAssembler.cpp:195-206 (every placed model name becomes a model file)
+    internal static VmapModelFileResult WriteModelFiles(string directory, IEnumerable<KeyValuePair<string, VmapModelInfo>> modelFiles, Func<VmapModelInfo, byte[]> build, int threads, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(directory);
+        ArgumentNullException.ThrowIfNull(modelFiles);
+        ArgumentNullException.ThrowIfNull(build);
+        ArgumentOutOfRangeException.ThrowIfLessThan(threads, 1);
+
+        // Model file names are printable ASCII (IsPlainFileName), where OrdinalIgnoreCase is exactly the case-insensitive file
+        // systems' rule.
+        var files = new List<KeyValuePair<string, VmapModelInfo>>();
+        var spellings = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (KeyValuePair<string, VmapModelInfo> pair in modelFiles.OrderBy(p => p.Key, StringComparer.Ordinal))
+        {
+            if (spellings.TryGetValue(pair.Key, out List<string>? same))
+            {
+                same.Add(pair.Key);
+                continue;
+            }
+
+            spellings.Add(pair.Key, [pair.Key]);
+            files.Add(pair);
+        }
+
+        var collisions = new List<string>();
+        foreach (KeyValuePair<string, VmapModelInfo> pair in files)
+        {
+            List<string> same = spellings[pair.Key];
+            if (same.Count > 1)
+            {
+                string others = string.Join(", ", same.Skip(1).Select(n => $"'{n}'"));
+                collisions.Add($"model files '{pair.Key}' and {others} differ only in case, so they are one file on a case-insensitive file system; only '{pair.Key}' (from '{pair.Value.ClientPath}') was written, and on a case-sensitive file system the placements named {others} have no model file");
+            }
+        }
+
         long modelBytes = 0;
         var failed = new System.Collections.Concurrent.ConcurrentBag<string>();
-        Parallel.ForEach(modelFiles, new ParallelOptions { MaxDegreeOfParallelism = threads, CancellationToken = cancellationToken }, pair =>
+        Parallel.ForEach(files, new ParallelOptions { MaxDegreeOfParallelism = threads, CancellationToken = cancellationToken }, pair =>
         {
             try
             {
-                byte[] file = library.Load(pair.Value).ToWorldModel().ToBytes();
+                byte[] file = build(pair.Value);
                 ExtractOutput.WriteWhole(ExtractOutput.FileIn(directory, pair.Key), file);
                 Interlocked.Add(ref modelBytes, file.Length);
             }
@@ -145,9 +221,7 @@ public sealed class VmapExtractor
             }
         });
 
-        problems.AddRange(library.Problems);
-        problems.AddRange(failed.Order(StringComparer.Ordinal));
-        return new VmapExtractReport(directory, [.. reports.Select(r => r.Report)], modelFiles.Count - failed.Count, bytes + modelBytes, problems);
+        return new VmapModelFileResult(files.Count - failed.Count, modelBytes, collisions, [.. failed.Order(StringComparer.Ordinal)]);
     }
 
     private sealed record MapResult(VmapExtractMapReport Report, long Bytes, IReadOnlyList<(string File, VmapModelInfo Model)> ModelFiles);

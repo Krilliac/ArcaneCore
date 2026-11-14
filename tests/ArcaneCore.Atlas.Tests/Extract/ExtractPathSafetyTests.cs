@@ -226,7 +226,7 @@ public sealed class ExtractPathSafetyTests
     }
 
     /// <summary>A hard link needs no privilege on either platform: <c>mklink /H</c> on Windows, <c>ln</c> elsewhere.</summary>
-    private static void MakeHardLink(string link, string existing)
+    internal static void MakeHardLink(string link, string existing)
     {
         ProcessStartInfo info;
         if (OperatingSystem.IsWindows())
