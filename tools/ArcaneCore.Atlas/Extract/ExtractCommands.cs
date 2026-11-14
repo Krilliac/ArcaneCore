@@ -91,10 +91,11 @@ internal static class ExtractCommands
         bool overwrite = call.GetBool("overwrite", false) || tile is not null;
         bool quick = call.GetBool("quick", false);
         string[] protectedRoots = paths?.ClientRoot is { } root ? [root] : [];
-        string dataRoot = ClientOutputPath.CheckDirectory(name, requested, protectedRoots);
 
-        // The check on the data root resolves links only along it; a link at 'mmaps' would bypass it, so check the child too.
-        ClientOutputPath.CheckDirectory(name, Path.Combine(dataRoot, MmapExtractor.MmapsFolder), protectedRoots);
+        // Both checks return the real folder they judged (links, drive mappings and mount points resolved), and the run writes there.
+        // The child is judged too: a link at 'mmaps' leads somewhere the data root's check never looked.
+        string dataRoot = ClientOutputPath.CheckDirectory(name, requested, protectedRoots);
+        string mmapsDirectory = ClientOutputPath.CheckDirectory(name, Path.Combine(dataRoot, MmapExtractor.MmapsFolder), protectedRoots);
         if (!Directory.Exists(Path.Combine(dataRoot, MmapExtractor.MapsFolder)) && !Directory.Exists(Path.Combine(dataRoot, MmapExtractor.VmapsFolder)))
         {
             throw new CommandException(CommandException.BadArguments, $"{name}: '{dataRoot}' holds neither a maps nor a vmaps folder.");
@@ -106,7 +107,9 @@ internal static class ExtractCommands
                 MmapExtractReport report;
                 try
                 {
-                    report = new MmapExtractor(dataRoot).Extract(only, overwrite, quick, threads, cancellationToken, tile);
+                    // Created, checked to be the folder judged above, and held open (no rename or delete) until the run ends.
+                    using IDisposable hold = ClientOutputPath.HoldDirectory(name, mmapsDirectory, mmapsDirectory);
+                    report = new MmapExtractor(dataRoot, mmapsDirectory).Extract(only, overwrite, quick, threads, cancellationToken, tile);
                 }
                 catch (ArgumentException e)
                 {
@@ -169,13 +172,15 @@ internal static class ExtractCommands
     private static Task<JsonNode?> VmapsAsync(CommandInvocation call, CancellationToken cancellationToken)
     {
         string name = call.Definition.Name;
-        (IClientFileSource files, IMapDirectory maps, List<uint> only, int threads, string output) = Common(call, VmapExtractor.VmapsFolder);
+        (IClientFileSource files, IMapDirectory maps, List<uint> only, int threads, string output, string vmapsDirectory) = Common(call, VmapExtractor.VmapsFolder);
         return Task.Run<JsonNode?>(
             () =>
             {
                 VmapExtractReport report;
                 try
                 {
+                    // The extractor writes into output/vmaps; that path is created, checked to lead to the folder judged, and held.
+                    using IDisposable hold = ClientOutputPath.HoldDirectory(name, Path.Combine(output, VmapExtractor.VmapsFolder), vmapsDirectory);
                     report = new VmapExtractor(files, maps).Extract(output, only, threads, cancellationToken);
                 }
                 catch (Exception e) when (e is IOException or UnauthorizedAccessException)
@@ -218,8 +223,11 @@ internal static class ExtractCommands
             cancellationToken);
     }
 
-    /// <summary>The arguments both commands share, checked before anything is read or written.</summary>
-    private static (IClientFileSource Files, IMapDirectory Maps, List<uint> Only, int Threads, string Output) Common(CommandInvocation call, string childFolder)
+    /// <summary>
+    /// The arguments both commands share, checked before anything is read or written. <c>Output</c> is the real folder judged for
+    /// <c>out</c>; <c>Child</c> is the real folder judged for <c>Output/childFolder</c> (a different folder when that is a link).
+    /// </summary>
+    private static (IClientFileSource Files, IMapDirectory Maps, List<uint> Only, int Threads, string Output, string Child) Common(CommandInvocation call, string childFolder)
     {
         string name = call.Definition.Name;
         IClientFileSource files = call.Services.GetService(typeof(IClientFileSource)) as IClientFileSource
@@ -248,15 +256,15 @@ internal static class ExtractCommands
         string[] protectedRoots = paths?.ClientRoot is { } root ? [root] : [];
         string output = ClientOutputPath.CheckDirectory(name, call.GetString("out"), protectedRoots);
 
-        // The check on 'out' resolves links only along 'out'; a link at the child folder would bypass it, so check the child too.
-        ClientOutputPath.CheckDirectory(name, Path.Combine(output, childFolder), protectedRoots);
-        return (files, maps, only, threads, output);
+        // The check on 'out' judges 'out'; a link at the child folder leads somewhere it never looked, so the child is judged too.
+        string child = ClientOutputPath.CheckDirectory(name, Path.Combine(output, childFolder), protectedRoots);
+        return (files, maps, only, threads, output, child);
     }
 
     private static Task<JsonNode?> MapsAsync(CommandInvocation call, CancellationToken cancellationToken)
     {
         string name = call.Definition.Name;
-        (IClientFileSource files, IMapDirectory maps, List<uint> only, int threads, string output) = Common(call, MapExtractor.MapsFolder);
+        (IClientFileSource files, IMapDirectory maps, List<uint> only, int threads, string output, string mapsDirectory) = Common(call, MapExtractor.MapsFolder);
         bool overwrite = call.GetBool("overwrite", false);
 
         return Task.Run<JsonNode?>(
@@ -275,6 +283,8 @@ internal static class ExtractCommands
                 MapExtractReport report;
                 try
                 {
+                    // The extractor writes into output/maps; that path is created, checked to lead to the folder judged, and held.
+                    using IDisposable hold = ClientOutputPath.HoldDirectory(name, Path.Combine(output, MapExtractor.MapsFolder), mapsDirectory);
                     report = new MapExtractor(files, maps, areas).Extract(output, only, overwrite, threads, cancellationToken);
                 }
                 catch (Exception e) when (e is IOException or UnauthorizedAccessException)

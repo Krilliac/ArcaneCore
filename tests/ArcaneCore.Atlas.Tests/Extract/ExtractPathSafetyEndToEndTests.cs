@@ -227,6 +227,29 @@ public sealed class ExtractPathSafetyEndToEndTests
         }
     }
 
+    [WindowsFact]
+    public async Task Command_OutThroughASubstDrive_WritesToAndReportsTheFolderTheCheckJudged()
+    {
+        using var scratch = new TestDirectory();
+        using var client = new TestDirectory();
+        SessionDrive drive = SessionDrive.Subst(scratch.Path);
+        try
+        {
+            CommandResult result = await Invoke("extract.maps", $@"{drive.Letter}:\out", client.Path);
+
+            Assert.True(result.Ok, result.ErrorMessage);
+            string maps = Path.Combine(scratch.Path, "out", "maps");
+            Assert.Equal(maps, result.Data!["out"]!.GetValue<string>(), ignoreCase: true);
+            Assert.Equal(new[] { "0004832.map", "0004833.map" }, Directory.GetFiles(maps).Select(Path.GetFileName).Order(StringComparer.Ordinal).ToArray());
+        }
+        finally
+        {
+            drive.Dispose();
+        }
+
+        Assert.Null(drive.CleanupError);
+    }
+
     /// <summary>A directory link: a junction on Windows (needs no privilege), a symbolic link elsewhere.</summary>
     private static void MakeDirectoryLink(string link, string target)
     {
