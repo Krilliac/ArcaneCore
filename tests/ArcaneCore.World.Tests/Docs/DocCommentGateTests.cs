@@ -34,6 +34,8 @@ public sealed class DocCommentGateTests
         string props = RepoRoot.ReadText("Directory.Build.props");
         Assert.Contains("<GenerateDocumentationFile>true</GenerateDocumentationFile>", props, StringComparison.Ordinal);
         Assert.Contains("<CopyDocumentationFileToOutputDirectory>false</CopyDocumentationFileToOutputDirectory>", props, StringComparison.Ordinal);
+        // Publish would otherwise look for every doc file at its bin path, where the line above keeps it from ever being (MSB3030 on SDK 10.0.403).
+        Assert.Contains("<PublishDocumentationFiles>false</PublishDocumentationFiles>", props, StringComparison.Ordinal);
         Assert.Contains("<TreatWarningsAsErrors>true</TreatWarningsAsErrors>", props, StringComparison.Ordinal);
         MatchCollection noWarn = Regex.Matches(props, @"<NoWarn(\s[^>]*)?>([^<]*)</NoWarn>", RegexOptions.CultureInvariant);
         Match only = Assert.Single(noWarn);
