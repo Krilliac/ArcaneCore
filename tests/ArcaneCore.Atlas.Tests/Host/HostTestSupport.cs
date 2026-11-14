@@ -283,10 +283,18 @@ internal sealed class HostRig : IAsyncDisposable
         return new HostRig(directory, headless, renderer, maps, paths ?? new AtlasPaths(null, null), register, loggers);
     }
 
+    /// <summary>
+    /// The auth deadline of a rig started without options. The product's 5 s (<see cref="AtlasServerOptions.AuthTimeout"/>) is a
+    /// wall-clock limit between the upgrade and the auth message: under a loaded machine a test's auth arrived after it and the tab was
+    /// closed with 4401 before its hello. Here it only bounds a hung test, as WorldTestHost.TestPreAuthTimeout does for the world; the
+    /// deadline itself is tested with its own short value (HostWebSocketTests.NoAuthMessageWithinTheTimeout_ClosesWith4401).
+    /// </summary>
+    public static readonly TimeSpan TestAuthTimeout = TimeSpan.FromMinutes(2);
+
     public static async Task<HostRig> StartAsync(AtlasServerOptions? options = null, IWebAssets? assets = null, bool renderer = true, bool maps = true, AtlasPaths? paths = null, Action<AtlasContext>? register = null, ILoggerFactory? loggers = null)
     {
         HostRig rig = Create(headless: false, renderer, maps, paths, register, loggers);
-        AtlasServerOptions chosen = (options ?? new AtlasServerOptions()) with { Assets = assets ?? options?.Assets ?? new FakeAssets() };
+        AtlasServerOptions chosen = (options ?? new AtlasServerOptions { AuthTimeout = TestAuthTimeout }) with { Assets = assets ?? options?.Assets ?? new FakeAssets() };
         // A fixed port from the loopback test range (not bind(0): the kernel's ephemeral range is small and shared on busy CI nodes); a port taken meanwhile is retried on the next one.
         for (int attempt = 1; ; attempt++)
         {
