@@ -89,7 +89,10 @@ public sealed class PlayerbotBrainStallTests
     [Fact]
     public async Task RefusedGrindPlan_BacksThePlannerOff_AndTheBotExplores()
     {
-        await using QuestWorld quest = await QuestWorld.StartAsync(new QuestInteractionFixture());
+        // The backoff runs on world time (NowMs). On the real clock a slow runner let more than the 4 s backoff pass in wall time between
+        // the six thinks, so the planner was legitimately allowed a second refused plan. On the manual clock each think is exactly
+        // 500 ms of world time (3 s in all, inside the first backoff) however long the runner takes.
+        await using QuestWorld quest = await QuestWorld.StartAsync(new QuestInteractionFixture(), manualClock: true);
         var brain = new PlayerbotBrain(quest.Bot, new PlayerbotOptions { Enabled = true, ThinkIntervalMs = 500, Risk = { Enabled = false } });
         var pathfinder = new RefuseFarEastPathfinder();
         try
@@ -127,7 +130,7 @@ public sealed class PlayerbotBrainStallTests
                     PlayerbotMotion.ElapseForTests(player, 500);
                     return true;
                 });
-                await Task.Delay(50);
+                await quest.Host.World.AdvanceClockAsync(500);
             }
 
             float moved = await quest.Host.OnWorldAsync(() => Vector3.Distance(start, new Vector3(quest.Bot.Player!.X, quest.Bot.Player.Y, quest.Bot.Player.Z)));
