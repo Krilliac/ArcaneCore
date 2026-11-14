@@ -105,23 +105,23 @@ public static partial class ClientOutputPath
 
     // Device paths (backslash-backslash-dot or -question-mark prefixes), network shares, NTFS alternate data streams and 8.3 short names (which defeat the
     // string-prefix test against the protected folders) are refused outright.
-    private static void RefuseWindowsSpecials(string requested)
+    private static void RefuseWindowsSpecials(string requested, string command = "client.read")
     {
         if (requested.StartsWith(@"\\", StringComparison.Ordinal) || requested.StartsWith("//", StringComparison.Ordinal))
         {
-            throw Refuse($"'out' is a device or network path ('{requested}'); give a local drive path such as D:/folder/file.");
+            throw Refuse($"'out' is a device or network path ('{requested}'); give a local drive path such as D:/folder/file.", command);
         }
 
         if (requested.IndexOf(':', 2) >= 0)
         {
-            throw Refuse($"'out' contains a ':' after the drive letter (an NTFS stream or device name): '{requested}'.");
+            throw Refuse($"'out' contains a ':' after the drive letter (an NTFS stream or device name): '{requested}'.", command);
         }
 
         foreach (string part in requested.Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar]))
         {
             if (ShortName().IsMatch(part))
             {
-                throw Refuse($"'out' contains the 8.3 short name '{part}'; spell the folder out in full.");
+                throw Refuse($"'out' contains the 8.3 short name '{part}'; spell the folder out in full.", command);
             }
         }
     }
@@ -136,5 +136,55 @@ public static partial class ClientOutputPath
         return path.StartsWith(prefix, comparison);
     }
 
-    private static CommandException Refuse(string message) => new(CommandException.BadArguments, $"client.read: {message}");
+    /// <summary>
+    /// Validates <paramref name="requested"/> as the folder a command writes derived client data into and returns its full path.
+    /// The same rules as <see cref="Check"/>: absolute, outside every git working tree and outside the protected folders. The
+    /// folder may exist already; a file of that name may not.
+    /// </summary>
+    /// <param name="command">The command's name, for the refusal message.</param>
+    /// <param name="requested">The caller's <c>out</c> argument; must be absolute.</param>
+    /// <param name="protectedRoots">Folders the output must not be, or be inside of (for example the client root).</param>
+    /// <exception cref="CommandException">The path is relative, a file, inside a git working tree or a protected folder, or (on Windows) a device, network, stream or 8.3 short-name path.</exception>
+    public static string CheckDirectory(string command, string requested, IEnumerable<string> protectedRoots)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(command);
+        ArgumentNullException.ThrowIfNull(requested);
+        ArgumentNullException.ThrowIfNull(protectedRoots);
+        if (string.IsNullOrWhiteSpace(requested) || !Path.IsPathFullyQualified(requested))
+        {
+            throw Refuse($"'out' must be an absolute path; '{requested}' is not.", command);
+        }
+
+        if (OperatingSystem.IsWindows())
+        {
+            RefuseWindowsSpecials(requested, command);
+        }
+
+        string full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(requested));
+        if (File.Exists(full))
+        {
+            throw Refuse($"'out' names a file ('{full}'); give a folder.", command);
+        }
+
+        // A file inside the folder stands for the folder: the working-tree walk starts at a path's parent.
+        string real = ResolveLinks(full);
+        if (FindWorkingTree(Path.Combine(real, "file")) is { } tree)
+        {
+            throw Refuse($"'out' is inside the git working tree '{tree}'; client data must not be written into a repository.", command);
+        }
+
+        foreach (string root in protectedRoots)
+        {
+            string protectedReal = ResolveLinks(Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)));
+            StringComparison comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+            if (string.Equals(real, protectedReal, comparison) || IsInside(real, protectedReal))
+            {
+                throw Refuse($"'out' is inside '{protectedReal}', which is read-only for Atlas.", command);
+            }
+        }
+
+        return full;
+    }
+
+    private static CommandException Refuse(string message, string command = "client.read") => new(CommandException.BadArguments, $"{command}: {message}");
 }
