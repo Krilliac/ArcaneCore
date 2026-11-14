@@ -40,8 +40,8 @@ internal readonly record struct DriveTarget(DriveKind Kind, string? Path);
 /// On Windows the deepest existing part of the path is opened by handle (desired access 0, every share mode, backup semantics) and
 /// Windows is asked for its normalized final name, in volume GUID form and in DOS form. That resolves junctions, symbolic links,
 /// <c>subst</c> and <c>DefineDosDevice</c> letters (raw targets too), mount points and short names in one step. The DOS form must be a
-/// drive-letter path on a fixed, removable or RAM disk, and opening it again must reach the same volume serial number and file id
-/// (a drive letter defined differently in this session than in the mount manager fails that). The rest of the path, which does not
+/// drive-letter path on a fixed, removable or RAM disk, and opening it again must reach the same volume serial number, file id and
+/// volume GUID path (a drive letter defined differently in this session than in the mount manager fails that). The rest of the path, which does not
 /// exist yet, is appended as typed. The canonical path is returned and is the path the caller writes to.
 /// </para>
 /// <para>
@@ -59,17 +59,31 @@ internal readonly record struct DriveTarget(DriveKind Kind, string? Path);
 /// </para>
 /// <para>
 /// A link part-way along the path leads to a folder that is on neither the typed nor the final path, and that folder's own ancestors
-/// are walked too: on Windows every existing prefix of the typed path is resolved by handle and the rest of the path joined on, on
-/// Unix the folder holding each link passed is walked.
+/// are walked too. On Unix the folder holding each link passed is walked, whatever the links lead through. On Windows every existing
+/// prefix of the typed path is resolved by handle (its resolved name opened again and required to be the same file on the same
+/// volume, with a volume GUID name) and the rest of the path joined on; a handle resolves a whole chain of links at once, so only the
+/// folders where each typed prefix finally leads are walked, not the folders the chain passes through on the way (see the residual
+/// list).
 /// </para>
 /// <para>
-/// Not covered (residual): a change made after the check (narrowed by <see cref="HoldDirectory(string, string, string)"/>), a link or
-/// mount elsewhere that points at the output (it cannot be enumerated), file-system filter redirection (bind links, ProjFS,
+/// Not covered (residual):
+/// a change made after the check: <see cref="HoldDirectory(string, string, string)"/> narrows it for the extract commands on Windows
+/// only; client.read and every command on Unix hold nothing between the check and the write;
+/// on Windows, a link whose target is itself a link inside a repository (<c>D:\x\link1</c> to <c>E:\repo\sub\j</c>, and
+/// <c>E:\repo\sub\j</c> to <c>F:\plain</c>; or a <c>subst</c> or <c>DefineDosDevice</c> letter for <c>E:\repo\sub\j</c>): opening the
+/// prefix leads straight to <c>F:\plain</c>, so <c>E:\repo\sub</c> is never walked (Unix splices each link's text and catches it);
+/// a hard link: the guard resolves symbolic links, junctions, drive mappings and mount points, never hard links, and accepts a file
+/// that is a hard link to one inside a repository or the client folder. What keeps that file unchanged is the writers: none opens
+/// an existing output file for writing (client.read without overwrite creates its file new; with overwrite, and in the extractors,
+/// a staging file is created new and renamed over the output, which replaces the directory entry), so a hard link at the output is
+/// replaced, not written through. A writer that opened an existing output file for writing would reopen this;
+/// a link or mount elsewhere that points at the output (it cannot be enumerated), file-system filter redirection (bind links, ProjFS,
 /// container layers), a protected folder reached over a loopback share, a repository without any marker (<c>GIT_DIR</c>,
 /// <c>core.worktree</c>) or created after the check, Linux bind mounts and other mount aliases, the other mount paths of a volume a
-/// link part-way along the path leads to (only the final volume's are walked), volumes unknown to the mount manager (refused), and on
-/// Unix a protected folder named by a spelling the file system equates beyond NFC and Unicode case folding (compatibility forms such
-/// as fullwidth letters, or a case table of its own); comparing identity (device and inode) instead of spelling would close that.
+/// link part-way along the path leads to (only the final volume's are walked), volumes unknown to the mount manager (refused); and on
+/// Unix a protected folder named by a spelling the file system equates that the fold does not: simple lower-casing (U+0130 as a
+/// plain <c>i</c>), compatibility forms (NFKC: fullwidth letters and the like) or a case table of its own; comparing identity
+/// (device and inode) instead of spelling would close that.
 /// Stateless and thread-safe.
 /// </para>
 /// </remarks>
@@ -239,6 +253,12 @@ public static partial class ClientOutputPath
             if (!target.IsDirectory || now is null || !string.Equals(now, expectedCanonical, StringComparison.OrdinalIgnoreCase))
             {
                 throw Changed(command, writePath, now ?? "a location Windows cannot name", expectedCanonical);
+            }
+
+            // SameEntry below compares the volume GUID paths too; two missing ones would compare equal and check nothing.
+            if (target.GuidPath is null || !VolumeGuidRoot().IsMatch(target.GuidPath))
+            {
+                throw Refuse($"'{writePath}' cannot be held: Windows cannot name the volume of the folder it leads to ({target.NameFailure ?? "not a volume GUID path"}); refusing.", command);
             }
 
             // A link at writePath itself is held too (it cannot be deleted or renamed while open); then the path must still reach
@@ -478,13 +498,17 @@ public static partial class ClientOutputPath
 
     // Case folding and Unicode normalisation without ICU: the build runs in invariant globalization mode, where string.Normalize
     // returns its input unchanged. Two steps:
-    // 1. Default-ignorable code points are dropped, and the non-ASCII characters whose NFC form, case folding or upper case is ASCII
-    //    are replaced by it (AsciiEquivalent lists them all; checked against the Unicode 15 data by enumerating every code point).
+    // 1. Default-ignorable code points are dropped, and the non-ASCII characters whose NFC form, full case folding or upper case is
+    //    ASCII, or is ASCII next to a modifier letter (U+0149, U+1E9A), are replaced by that form, upper-cased (AsciiEquivalent).
     // 2. ASCII is upper-cased, and every maximal run of other characters and combining marks (with the ASCII character a mark
-    //    combines with) becomes one '?'; '/' is never part of a run.
-    // So two spellings that NFC and case folding make equal fold equal: a difference between them is either one of the step-1
-    // characters or lies inside a run (a precomposed letter and its decomposed form are both one run). Many that they would not make
-    // equal fold equal too (two different non-ASCII names of the same shape), which only over-refuses.
+    //    combines with) becomes one '?'; '/' is never part of a run. U+0345 is not taken for a combining mark: it case-folds to the
+    //    letter U+03B9, so after an ASCII letter it must give the same '?' that letter does, not join the ASCII letter to its run.
+    // Intended result: two spellings that NFC and full case folding make equal fold equal, because a difference between them is one
+    // of the step-1 characters or lies inside a run (a precomposed letter and its decomposed form are both one run). The table and
+    // the U+0345 exception come from a review against the Unicode 16.0.0 tables (2026-11-14), not from enumerating every code point
+    // here. Not covered: simple lower-casing (U+0130 lower-cases to a plain 'i' there, but fully folds to i U+0307, which the tests
+    // keep), compatibility forms (NFKC), and file systems with case tables of their own. Many spellings that NFC and case folding
+    // would not make equal fold equal too (two different non-ASCII names of the same shape), which only over-refuses.
     private static string Fold(string text)
     {
         var runes = new List<Rune>(text.Length);
@@ -539,9 +563,13 @@ public static partial class ClientOutputPath
     }
 
     // Every non-ASCII code point whose NFC form, Unicode case folding or upper case is all ASCII, upper-cased: KELVIN SIGN, LONG S,
-    // DOTLESS I (its upper case is I), SHARP S and CAPITAL SHARP S, the Latin ligatures, GREEK QUESTION MARK and GREEK VARIA.
+    // DOTLESS I (its upper case is I), SHARP S and CAPITAL SHARP S, the Latin ligatures, GREEK QUESTION MARK and GREEK VARIA. Also the
+    // two whose full case folding is ASCII next to a modifier letter (category Lm, not a mark, so it does not join the ASCII letter's
+    // run): N PRECEDED BY APOSTROPHE (U+02BC n) and A WITH RIGHT HALF RING (a U+02BE).
     private static string? AsciiEquivalent(int value) => value switch
     {
+        0x0149 => "ʼN",
+        0x1E9A => "Aʾ",
         0x212A => "K",
         0x017F => "S",
         0x0131 => "I",
@@ -565,8 +593,10 @@ public static partial class ClientOutputPath
             or 0xFEFF or 0xFFA0 or (>= 0xFFF0 and <= 0xFFF8) or (>= 0x1BCA0 and <= 0x1BCA3) or (>= 0x1D173 and <= 0x1D17A)
             or (>= 0xE0000 and <= 0xE0FFF);
 
+    // U+0345 COMBINING GREEK YPOGEGRAMMENI is a mark that case-folds to the letter U+03B9, so it is treated as a letter (see Fold).
     private static bool IsCombiningMark(Rune rune)
-        => Rune.GetUnicodeCategory(rune) is UnicodeCategory.NonSpacingMark or UnicodeCategory.SpacingCombiningMark or UnicodeCategory.EnclosingMark;
+        => rune.Value != 0x0345
+            && Rune.GetUnicodeCategory(rune) is UnicodeCategory.NonSpacingMark or UnicodeCategory.SpacingCombiningMark or UnicodeCategory.EnclosingMark;
 
     // The checks every form of the request goes through before anything looks at the file system. shortNameRule is false only for
     // a path that is already canonical (see CheckChildDirectory).
@@ -835,29 +865,43 @@ public static partial class ClientOutputPath
                 throw Unopenable(command, "'out'", prefix, opened.Failure);
             }
 
-            string? dos;
-            string? guid;
-            string? failure;
-            using (opened.Entry)
+            string resolved;
+            string guid;
+            using (OpenedEntry entry = opened.Entry!)
             {
-                dos = opened.Entry!.DosPath;
-                guid = opened.Entry.GuidPath;
-                failure = opened.Entry.NameFailure;
+                string? dos = entry.DosPath;
+                if (dos is null || !DosDriveFinal().IsMatch(dos))
+                {
+                    throw Refuse($"cannot check 'out': '{prefix}' leads to '{dos ?? entry.NameFailure ?? "a location Windows cannot name"}', which is not a local drive-letter path; refusing rather than guessing where it leads.", command);
+                }
+
+                // As for the final folder: without its volume GUID name the folder could only be compared by name, which a drive
+                // letter or mount point can spell differently.
+                if (entry.GuidPath is not { } named || !VolumeGuidRoot().IsMatch(named))
+                {
+                    throw Refuse($"cannot check 'out': Windows cannot name the volume of '{prefix}' ({entry.NameFailure ?? "not a volume GUID path"}); refusing rather than guessing.", command);
+                }
+
+                guid = named;
+                resolved = dos[4..];
+                RefuseRewrittenCanonical(command, "'out'", resolved);
+
+                // The resolved name comes from the mount manager but is walked through this session's drive letters: open it again,
+                // while the prefix is still open, and require the same file on the same volume (as CanonicalizeWindows does).
+                OpenResult again = platform.Open(resolved, OpenMode.Follow);
+                using (again.Entry)
+                {
+                    if (again.Outcome != OpenOutcome.Opened || !SameEntry(again.Entry!, entry))
+                    {
+                        string reached = again.Outcome == OpenOutcome.Opened ? $"another file id or volume ('{again.Entry!.GuidPath ?? "no volume name"}')" : again.Failure ?? "nothing";
+                        throw Refuse($"'out' passes through '{prefix}', which resolves to '{resolved}', but in this session that path opens something else ({reached}): a drive letter is defined differently here than in the mount manager; refusing.", command);
+                    }
+                }
             }
 
-            if (dos is null || !DosDriveFinal().IsMatch(dos))
-            {
-                throw Refuse($"cannot check 'out': '{prefix}' leads to '{dos ?? failure ?? "a location Windows cannot name"}', which is not a local drive-letter path; refusing rather than guessing where it leads.", command);
-            }
-
-            string resolved = dos[4..];
-            RefuseRewrittenCanonical(command, "'out'", resolved);
             string tail = string.Join(Path.DirectorySeparatorChar, parts[i..]);
             AddAndWalk(command, JoinWindows(resolved, tail), startAtSelf, platform, paths, StringComparison.OrdinalIgnoreCase);
-            if (guid is not null && VolumeGuidRoot().IsMatch(guid))
-            {
-                volumePaths.Add(JoinWindows(guid, tail));
-            }
+            volumePaths.Add(JoinWindows(guid, tail));
         }
     }
 

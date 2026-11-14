@@ -130,6 +130,12 @@ public sealed class ClientOutputPathUnixTests
     [InlineData("/data/Ḱ/x", "/data/Ḱ", true)]
     [InlineData("/data/İx", "/data/i̇x", true)]
     [InlineData("/mnt/c/Games-x/WoW", "/mnt/c/Gameſ", false)]
+
+    // Full case folding that gives ASCII next to a modifier letter (U+0149 to U+02BC n, U+1E9A to a U+02BE), and U+0345, a
+    // combining mark that case-folds to the letter U+03B9.
+    [InlineData("/data/ŉx", "/data/ʼnx", true)]
+    [InlineData("/data/ẚx/y", "/data/aʾx", true)]
+    [InlineData("/data/aͅx", "/data/aιx", true)]
     public void N10_TheProtectedFolderComparison_IgnoresCaseAndUnicodeNormalisation(string path, string folder, bool inside)
     {
         Assert.Equal(inside, ClientOutputPath.UnixInsideOrEqual(path, folder));

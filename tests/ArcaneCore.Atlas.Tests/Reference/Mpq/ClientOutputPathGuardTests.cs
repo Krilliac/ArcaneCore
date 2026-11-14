@@ -237,6 +237,59 @@ public sealed class ClientOutputPathGuardTests : IDisposable
         Assert.Contains("opens something else", Refused(Path.Combine(plain, "out"), platform).Message, StringComparison.Ordinal);
     }
 
+    /// <summary>A folder part-way along the typed path that Windows cannot name by volume GUID is refused, as the final folder is.</summary>
+    [WindowsFact]
+    public void D4_1_APrefixWithoutAVolumeGuidName_IsRefused_NotComparedByNameOnly()
+    {
+        string plain = Plain();
+        Directory.CreateDirectory(Path.Combine(plain, "sub"));
+        var platform = new FakeOutputPathPlatform
+        {
+            OpenOverride = (path, mode) => mode == OpenMode.Follow && string.Equals(path, plain, StringComparison.OrdinalIgnoreCase)
+                ? WithoutVolumeName(SystemOutputPathPlatform.Instance.Open(path, mode))
+                : null,
+        };
+
+        Assert.Contains("cannot name the volume", Refused(Path.Combine(plain, "sub", "out"), platform).Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A folder part-way along the typed path is resolved to a name, and that name is opened again: a drive letter defined differently
+    /// in this session than in the mount manager would send the repository walk of that name somewhere else.
+    /// </summary>
+    [WindowsFact]
+    public void D4_1_APrefixWhoseResolvedNameReopensSomethingElse_IsRefused()
+    {
+        string plain = Plain();
+        Directory.CreateDirectory(Path.Combine(plain, "sub"));
+        int opens = 0;
+        var platform = new FakeOutputPathPlatform
+        {
+            OpenOverride = (path, mode) =>
+            {
+                if (mode != OpenMode.Follow || !string.Equals(path, plain, StringComparison.OrdinalIgnoreCase) || Interlocked.Increment(ref opens) < 2)
+                {
+                    return null;
+                }
+
+                // The prefix itself opens normally; opening its resolved name again reaches another file id.
+                OpenResult real = SystemOutputPathPlatform.Instance.Open(path, mode);
+                using OpenedEntry entry = real.Entry!;
+                FileIdentity other = entry.Identity with { IdLow = entry.Identity.IdLow ^ 1 };
+                return new OpenResult(OpenOutcome.Opened, new OpenedEntry(null, entry.IsDirectory, other, entry.GuidPath, entry.DosPath, null), null);
+            },
+        };
+
+        Assert.Contains("opens something else", Refused(Path.Combine(plain, "sub", "out"), platform).Message, StringComparison.Ordinal);
+    }
+
+    // The same open entry without its volume GUID name (as Windows answers for a volume it cannot name); the real handle is closed.
+    private static OpenResult WithoutVolumeName(OpenResult real)
+    {
+        using OpenedEntry entry = real.Entry!;
+        return new OpenResult(OpenOutcome.Opened, new OpenedEntry(null, entry.IsDirectory, entry.Identity, null, entry.DosPath, "volume GUID name: Windows error 1 (test)"), null);
+    }
+
     // The same open entry with its volume GUID path moved to another (made-up) volume; the real handle is closed.
     private static OpenResult OnAnotherVolume(OpenResult real)
     {
@@ -491,6 +544,25 @@ public sealed class ClientOutputPathGuardTests : IDisposable
         CommandException e = Assert.Throws<CommandException>(() => ClientOutputPath.HoldDirectory(Command, child, expected, platform).Dispose());
 
         Assert.Contains("changed after the check", e.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>Two opens that both lack a volume GUID name do not count as the same folder: the volume check would compare nothing.</summary>
+    [WindowsFact]
+    public void D7_HoldDirectory_AFolderWithoutAVolumeGuidName_IsRefused()
+    {
+        string child = Path.Combine(Plain("out"), "maps");
+        string expected = ClientOutputPath.CheckDirectory(Command, child, []);
+        Directory.CreateDirectory(child);
+        var platform = new FakeOutputPathPlatform
+        {
+            OpenOverride = (path, mode) => mode is OpenMode.Follow or OpenMode.Hold && string.Equals(path, child, StringComparison.OrdinalIgnoreCase)
+                ? WithoutVolumeName(SystemOutputPathPlatform.Instance.Open(path, OpenMode.Follow))
+                : null,
+        };
+
+        CommandException e = Assert.Throws<CommandException>(() => ClientOutputPath.HoldDirectory(Command, child, expected, platform).Dispose());
+
+        Assert.Contains("cannot name the volume", e.Message, StringComparison.Ordinal);
     }
 
     /// <summary>
