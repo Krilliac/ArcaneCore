@@ -114,7 +114,7 @@ public sealed class MmapExtractor
             BinaryPrimitives.WriteSingleLittleEndian(parameters.AsSpan(12), MmapTerrain.GridSize);
             BinaryPrimitives.WriteSingleLittleEndian(parameters.AsSpan(16), MmapTerrain.GridSize);
             BinaryPrimitives.WriteInt32LittleEndian(parameters.AsSpan(20), mapTiles.Count);
-            bytes += WriteWhole(Path.Combine(mmapsDirectory, NavMeshFormat.ParamsFileName(mapId)), parameters);
+            bytes += ExtractOutput.WriteWhole(Path.Combine(mmapsDirectory, NavMeshFormat.ParamsFileName(mapId)), parameters);
 
             // ref: vmangos@0e3ff01 contrib/mmap/src/MapBuilder.cpp:319-370 (buildSingleTile)
             IEnumerable<uint> building = mapTiles;
@@ -172,7 +172,7 @@ public sealed class MmapExtractor
                         return;
                     }
 
-                    Interlocked.Add(ref tileBytes, WriteWhole(target, result.File));
+                    Interlocked.Add(ref tileBytes, ExtractOutput.WriteWhole(target, result.File));
                     Interlocked.Add(ref polygons, result.Polygons);
                     Interlocked.Increment(ref written);
                 }
@@ -345,13 +345,5 @@ public sealed class MmapExtractor
             && BinaryPrimitives.ReadUInt32LittleEndian(header) == NavMeshFormat.MmapMagic
             && BinaryPrimitives.ReadUInt32LittleEndian(header[4..]) == NavMeshFormat.DetourVersion
             && BinaryPrimitives.ReadUInt32LittleEndian(header[8..]) == NavMeshFormat.MmapVersion;
-    }
-
-    private static long WriteWhole(string target, byte[] bytes)
-    {
-        string staging = target + ".part";
-        File.WriteAllBytes(staging, bytes);
-        File.Move(staging, target, overwrite: true);
-        return bytes.Length;
     }
 }

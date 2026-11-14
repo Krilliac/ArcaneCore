@@ -159,7 +159,7 @@ public sealed class MapExtractor
                 }
 
                 byte[] encoded = MapTileEncoder.Encode(AdtFile.Parse(bytes), _areas);
-                WriteWhole(target, encoded);
+                ExtractOutput.WriteWhole(target, encoded);
                 Interlocked.Increment(ref written);
                 Interlocked.Add(ref totalBytes, encoded.Length);
             }
@@ -171,13 +171,5 @@ public sealed class MapExtractor
 
         failures.AddRange(failed.OrderBy(f => f.TileX).ThenBy(f => f.TileY));
         return new MapExtractMapReport(map.Id, map.Directory, HasWdt: true, tiles.Count, written, existing, absent, failed.Count, totalBytes);
-    }
-
-    /// <summary>Writes the whole file beside its name first, so a stopped run never leaves a cut-off tile under the real name.</summary>
-    private static void WriteWhole(string target, byte[] bytes)
-    {
-        string staging = target + ".part";
-        File.WriteAllBytes(staging, bytes);
-        File.Move(staging, target, overwrite: true);
     }
 }

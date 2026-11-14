@@ -22,7 +22,7 @@ public sealed record VmapExtractMapReport(uint Id, string Directory, bool HasWdt
 /// <param name="Maps">Per map, in map id order.</param>
 /// <param name="ModelFiles">Model files written.</param>
 /// <param name="Bytes">Bytes written.</param>
-/// <param name="Problems">Client files that were refused and name collisions, with the reason.</param>
+/// <param name="Problems">Client files that were refused, name collisions and dropped placements, with the reason.</param>
 public sealed record VmapExtractReport(string VmapsDirectory, IReadOnlyList<VmapExtractMapReport> Maps, int ModelFiles, long Bytes, IReadOnlyList<string> Problems);
 
 /// <summary>
@@ -43,7 +43,8 @@ public sealed record VmapExtractReport(string VmapsDirectory, IReadOnlyList<Vmap
 /// WMO doodads go through sines and cosines, whose last bit depends on the math library; when two folders hold a WMO of
 /// the same plain name the reference keeps the first in its archive listing, this the first in path order (each case
 /// is reported); the game object model list (<c>temp_gameobject_models</c>) is not written, because nothing in ArcaneCore
-/// reads it; and a client file that fails the readers' checks is reported and left out.
+/// reads it; placements whose model name is not a plain file name are dropped and reported, where the reference would
+/// write them through the path; and a client file that fails the readers' checks is reported and left out.
 /// </para>
 /// </remarks>
 public sealed class VmapExtractor
@@ -100,13 +101,14 @@ public sealed class VmapExtractor
         var library = new VmapModelLibrary(_files);
         var ids = new Dictionary<(uint ClientId, ushort DoodadId), uint>();
         var problems = new List<string>();
+        var droppedNames = new HashSet<string>(StringComparer.Ordinal);
         var reports = new List<MapResult>(selected.Count);
         var modelFiles = new SortedDictionary<string, VmapModelInfo>(StringComparer.Ordinal);
         long bytes = 0;
         foreach (ClientMap map in selected)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            MapResult result = ExtractMap(map, directory, library, ids, problems, cancellationToken);
+            MapResult result = ExtractMap(map, directory, library, ids, problems, droppedNames, cancellationToken);
             reports.Add(result);
             bytes += result.Bytes;
             foreach ((string file, VmapModelInfo model) in result.ModelFiles)
@@ -123,7 +125,7 @@ public sealed class VmapExtractor
             try
             {
                 byte[] file = library.Load(pair.Value).ToWorldModel().ToBytes();
-                WriteWhole(Path.Combine(directory, pair.Key), file);
+                ExtractOutput.WriteWhole(ExtractOutput.FileIn(directory, pair.Key), file);
                 Interlocked.Add(ref modelBytes, file.Length);
             }
             catch (Exception e) when (e is InvalidDataException or IOException or NotSupportedException or UnauthorizedAccessException)
@@ -142,7 +144,7 @@ public sealed class VmapExtractor
     /// <summary>One placement as the reference's placement list holds it; positions and bounds are vmap internal coordinates.</summary>
     private sealed record Placement(uint Tile, uint Flags, ushort AdtId, uint Id, Vector3 Position, Vector3 Rotation, float Scale, Vector3 BoundLow, Vector3 BoundHigh, string Name, VmapModelInfo Model);
 
-    private MapResult ExtractMap(ClientMap map, string directory, VmapModelLibrary library, Dictionary<(uint, ushort), uint> ids, List<string> problems, CancellationToken cancellationToken)
+    private MapResult ExtractMap(ClientMap map, string directory, VmapModelLibrary library, Dictionary<(uint, ushort), uint> ids, List<string> problems, HashSet<string> droppedNames, CancellationToken cancellationToken)
     {
         // ref: vmangos@0e3ff01 contrib/vmap_extractor/vmapextract/vmapexport.cpp:245-283 (ParsMapFiles: the WDT, then every <Map>_<x>_<y>.adt for x, y in 0..63)
         string wdtPath = ClientMapPaths.WdtPath(map.Directory);
@@ -198,6 +200,26 @@ public sealed class VmapExtractor
                 }
             }
         }
+
+        // Model names come from client data and become file names, so a placement whose name is not a plain file name is
+        // dropped before anything (tree, tile files, model files, spawn count) is built from it. One problem per distinct name per run.
+        placements.RemoveAll(p =>
+        {
+            if (VMapFormat.IsSafeModelName(p.Name) && ExtractOutput.IsPlainFileName(VMapFormat.ModelFileName(p.Name)))
+            {
+                return false;
+            }
+
+            // Shown and de-duplicated without the stored terminating NUL, so one model reached through an ADT and through a WMO doodad is reported once.
+            int nul = p.Name.IndexOf('\0', StringComparison.Ordinal);
+            string shown = nul >= 0 ? p.Name[..nul] : p.Name;
+            if (droppedNames.Add(shown))
+            {
+                problems.Add($"model name '{shown}' is not a plain file name; its placements were dropped");
+            }
+
+            return true;
+        });
 
         if (placements.Count == 0)
         {
@@ -423,7 +445,7 @@ public sealed class VmapExtractor
                 }
             }
 
-            bytes += WriteWhole(Path.Combine(directory, VMapFormat.TreeFileName(map.Id)), stream.ToArray());
+            bytes += ExtractOutput.WriteWhole(Path.Combine(directory, VMapFormat.TreeFileName(map.Id)), stream.ToArray());
         }
 
         // ref: vmangos@0e3ff01 src/game/vmap/TileAssembler.cpp:154-188 (one file per tile: magic, count, spawns with their slots)
@@ -467,7 +489,7 @@ public sealed class VmapExtractor
 
             // The file is named from the two numbers of the ADT's own name, in that order.
             string name = $"{map.Id:D3}_{tile >> 16:D2}_{tile & 0xFFFF:D2}.vmtile";
-            bytes += WriteWhole(Path.Combine(directory, name), stream.ToArray());
+            bytes += ExtractOutput.WriteWhole(Path.Combine(directory, name), stream.ToArray());
             tileFiles++;
         }
 
@@ -527,12 +549,4 @@ public sealed class VmapExtractor
 
     // Placement fields are stored as 32-bit floats; the readers widen them without loss.
     private static Vector3 ToVector(WorldPoint p) => new((float)p.X, (float)p.Y, (float)p.Z);
-
-    private static long WriteWhole(string target, byte[] bytes)
-    {
-        string staging = target + ".part";
-        File.WriteAllBytes(staging, bytes);
-        File.Move(staging, target, overwrite: true);
-        return bytes.Length;
-    }
 }

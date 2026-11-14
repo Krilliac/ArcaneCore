@@ -28,7 +28,11 @@ persistent cache and TTL were **not** built, on purpose (section 8).
 
 The output folder must be an absolute path outside every git working tree and outside the client folder; the commands
 refuse anything else. Never write extracted data into the checkout: the hygiene test rejects it and the repository is
-public.
+public. The same check runs on the child folder the command writes (`maps`, `vmaps`, `mmaps`), so a link there that
+lands in a working tree or the client folder is refused. Model names from the client become file names only when they are
+plain file names; a placement with any other name is dropped and reported as a problem. Staged `.part` files are created
+fresh (an existing entry, including a link, is deleted first) and removed when a write fails. A link swapped in after the
+check (time of check versus time of use) is not covered.
 
 ## 2. Commits
 

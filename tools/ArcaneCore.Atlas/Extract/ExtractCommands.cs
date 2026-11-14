@@ -92,6 +92,9 @@ internal static class ExtractCommands
         bool quick = call.GetBool("quick", false);
         string[] protectedRoots = paths?.ClientRoot is { } root ? [root] : [];
         string dataRoot = ClientOutputPath.CheckDirectory(name, requested, protectedRoots);
+
+        // The check on the data root resolves links only along it; a link at 'mmaps' would bypass it, so check the child too.
+        ClientOutputPath.CheckDirectory(name, Path.Combine(dataRoot, MmapExtractor.MmapsFolder), protectedRoots);
         if (!Directory.Exists(Path.Combine(dataRoot, MmapExtractor.MapsFolder)) && !Directory.Exists(Path.Combine(dataRoot, MmapExtractor.VmapsFolder)))
         {
             throw new CommandException(CommandException.BadArguments, $"{name}: '{dataRoot}' holds neither a maps nor a vmaps folder.");
@@ -160,7 +163,7 @@ internal static class ExtractCommands
     private static Task<JsonNode?> VmapsAsync(CommandInvocation call, CancellationToken cancellationToken)
     {
         string name = call.Definition.Name;
-        (IClientFileSource files, IMapDirectory maps, List<uint> only, int threads, string output) = Common(call);
+        (IClientFileSource files, IMapDirectory maps, List<uint> only, int threads, string output) = Common(call, VmapExtractor.VmapsFolder);
         return Task.Run<JsonNode?>(
             () =>
             {
@@ -206,7 +209,7 @@ internal static class ExtractCommands
     }
 
     /// <summary>The arguments both commands share, checked before anything is read or written.</summary>
-    private static (IClientFileSource Files, IMapDirectory Maps, List<uint> Only, int Threads, string Output) Common(CommandInvocation call)
+    private static (IClientFileSource Files, IMapDirectory Maps, List<uint> Only, int Threads, string Output) Common(CommandInvocation call, string childFolder)
     {
         string name = call.Definition.Name;
         IClientFileSource files = call.Services.GetService(typeof(IClientFileSource)) as IClientFileSource
@@ -234,13 +237,16 @@ internal static class ExtractCommands
         int threads = Threads(call);
         string[] protectedRoots = paths?.ClientRoot is { } root ? [root] : [];
         string output = ClientOutputPath.CheckDirectory(name, call.GetString("out"), protectedRoots);
+
+        // The check on 'out' resolves links only along 'out'; a link at the child folder would bypass it, so check the child too.
+        ClientOutputPath.CheckDirectory(name, Path.Combine(output, childFolder), protectedRoots);
         return (files, maps, only, threads, output);
     }
 
     private static Task<JsonNode?> MapsAsync(CommandInvocation call, CancellationToken cancellationToken)
     {
         string name = call.Definition.Name;
-        (IClientFileSource files, IMapDirectory maps, List<uint> only, int threads, string output) = Common(call);
+        (IClientFileSource files, IMapDirectory maps, List<uint> only, int threads, string output) = Common(call, MapExtractor.MapsFolder);
         bool overwrite = call.GetBool("overwrite", false);
 
         return Task.Run<JsonNode?>(
