@@ -141,8 +141,12 @@ public sealed class ClientOutputPathUnixTests
     [InlineData("/data/áͅx/y", "/data/áͅx", true)]
     [InlineData("/data/áͅx", "/data/áͅx", true)]
 
-    // An ASCII character, U+0345 or an iota, then a mark: one name whether the file system normalises before or after it folds.
-    // U+20DD (Me) and U+093E (Mc) have combining class 0, so NFC does not move U+0345 behind them.
+    // An ASCII character, U+0345 or an iota, then a mark. U+20DD (Me) and U+093E (Mc) have combining class 0, so NFC does not move
+    // U+0345 behind them: those two pairs are one name whether the file system normalises before or after it folds. The U+0301
+    // pairs below them, and the two precomposed iotas against U+0345 U+0301 after them, are one name only on a file system that
+    // folds first (ext4/f2fs casefold): normalising first makes a U+0345 U+0301 into a-acute U+03B9. The rows after those are one
+    // name under either order (the iota-run row because U+0345 cannot move past the iota that starts U+03AF; the rest are canonically
+    // equivalent).
     [InlineData("/data/a\u03B9\u20DD/x", "/data/a\u0345\u20DD", true)]
     [InlineData("/data/a\u03B9\u093E/x", "/data/a\u0345\u093E", true)]
     [InlineData("/data/a\u03B9\u0301x", "/data/a\u0345\u0301x", true)]
@@ -154,12 +158,36 @@ public sealed class ClientOutputPathUnixTests
     // Against a precomposed iota with that mark (U+03AF iota with tonos, U+038A capital iota with tonos).
     [InlineData("/data/a\u03AF/x", "/data/a\u0345\u0301", true)]
     [InlineData("/data/1\u03AFx", "/data/1\u0345\u0301x", true)]
+
+    // An iota between the ASCII character and the precomposed iota: the precomposed one is looked for past the iota run too.
+    [InlineData("/data/a\u0345\u03AFx", "/data/a\u03B9\u03B9\u0301x", true)]
+
+    // Canonically equivalent pairs that folded equal before the iota rule too (both sides 'A?X' then): they guard only the
+    // IsIotaWithMark half of it.
     [InlineData("/data/a\u038Ax", "/data/a\u0399\u0301x", true)]
     [InlineData("/data/a\u03AFx", "/data/a\u1FBE\u0301x", true)]
+
+    // One member of each IsIotaWithMark range against its decomposed form, so the list is pinned.
+    [InlineData("/data/a\u0390x", "/data/a\u03B9\u0308\u0301x", true)]
+    [InlineData("/data/a\u03AAx", "/data/a\u0399\u0308x", true)]
+    [InlineData("/data/a\u03CAx", "/data/a\u03B9\u0308x", true)]
+    [InlineData("/data/a\u1F30x", "/data/a\u03B9\u0313x", true)]
+    [InlineData("/data/a\u1F76x", "/data/a\u03B9\u0300x", true)]
+    [InlineData("/data/a\u1FD3x", "/data/a\u03B9\u0308\u0301x", true)]
+    [InlineData("/data/a\u1FDBx", "/data/a\u0399\u0301x", true)]
 
     // Must stay apart, so the rule cannot pass by refusing everything.
     [InlineData("/data/abc/x", "/data/abd", false)]
     [InlineData("/data/a\u0345x", "/data/b\u0345x", false)]
+
+    // Linux vfat always, and exFAT by default, ignore trailing dots in a lookup: "WoW." opens "WoW". Trailing spaces are dropped too.
+    [InlineData("/mnt/usb/WoW./x", "/mnt/usb/WoW", true)]
+    [InlineData("/mnt/usb/WoW.../x", "/mnt/usb/WoW", true)]
+    [InlineData("/mnt/usb/WoW ./x", "/mnt/usb/WoW", true)]
+    [InlineData("/mnt/usb/WoW/x", "/mnt/usb/WoW.", true)]
+    [InlineData("/mnt/usb/WoW/x", "/mnt/usb/WoW. .", true)]
+    [InlineData("/mnt/usb/WoWx/y", "/mnt/usb/WoW", false)]
+    [InlineData("/mnt/usb/Wo.W/x", "/mnt/usb/WoW", false)]
     public void N10_TheProtectedFolderComparison_IgnoresCaseAndUnicodeNormalisation(string path, string folder, bool inside)
     {
         Assert.Equal(inside, ClientOutputPath.UnixInsideOrEqual(path, folder));

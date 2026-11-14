@@ -96,6 +96,17 @@ public sealed class MmapResumeTests(MmapWorld world) : IClassFixture<MmapWorld>
     }
 
     [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Constructor_WithoutAnMmapsFolder_Throws(string? mmapsDirectory)
+    {
+        ArgumentException e = Assert.ThrowsAny<ArgumentException>(() => new MmapExtractor(world.DataRoot, mmapsDirectory!));
+
+        Assert.Equal("mmapsDirectory", e.ParamName);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public void OneTile_AgainstChangedParameters_IsRefused_AndWritesAndDeletesNothing(bool overwrite)

@@ -83,9 +83,12 @@ internal readonly record struct DriveTarget(DriveKind Kind, string? Path);
 /// <c>core.worktree</c>) or created after the check, Linux bind mounts and other mount aliases, the other mount paths of a volume a
 /// link part-way along the path leads to (only the final volume's are walked), volumes unknown to the mount manager (refused); and on
 /// Unix a protected folder named by a spelling the file system equates that the fold does not: simple lower-casing (U+0130 as a
-/// plain <c>i</c>), compatibility forms (NFKC: fullwidth letters and the like) or a case table of its own (the U+0345 and iota
-/// sequences are handled, checked as far as written at <see cref="Fold"/>); comparing identity (device and inode) instead of
-/// spelling would close that.
+/// plain <c>i</c>), compatibility forms (NFKC: fullwidth letters and the like), a case table of its own, an 8.3 short name (on
+/// Linux vfat, and unverified on NTFS through ntfs-3g or WSL <c>/mnt/c</c>, a short-name alias such as <c>WORLDO~1</c> of a
+/// protected folder is not detected; the Windows path refuses typed short names and resolves by handle), or a reserved character
+/// mapped to a private-use code point (WSL DrvFs, CIFS mapposix; unverified). The U+0345 and iota sequences are handled, checked as
+/// far as written at <see cref="Fold"/>, and so are trailing dots and spaces (vfat, exFAT). Comparing identity (device and inode)
+/// instead of spelling would close the rest.
 /// Stateless and thread-safe.
 /// </para>
 /// </remarks>
@@ -481,9 +484,11 @@ public static partial class ClientOutputPath
     /// or normalising file system (WSL <c>/mnt/c</c>, casefold ext4, APFS, vfat, CIFS) opens more than one spelling of a name. Meant
     /// to make spellings that NFC normalisation and full Unicode case folding make equal compare equal, with the exceptions listed at
     /// <see cref="Fold"/> (and many spellings they would not make equal compare equal too, which over-refuses on a case-sensitive file
-    /// system, the safe side). Not covered: simple lower-casing (U+0130 as a plain <c>i</c>), compatibility forms (NFKC: fullwidth
-    /// letters and the like), and a case table of the file system's own. How far the U+0345 and iota sequences were checked is
-    /// written at <see cref="Fold"/>. Pure function.
+    /// system, the safe side). Trailing dots and spaces of a component are ignored, as vfat and exFAT do. Not covered: simple
+    /// lower-casing (U+0130 as a plain <c>i</c>), compatibility forms (NFKC: fullwidth letters and the like), a case table of the file
+    /// system's own, 8.3 short names (on Linux vfat a short-name alias such as <c>WORLDO~1</c> of a protected folder is not detected;
+    /// unverified: NTFS through ntfs-3g or WSL <c>/mnt/c</c>), and reserved characters mapped to private-use code points (WSL DrvFs,
+    /// CIFS mapposix; unverified). How far the U+0345 and iota sequences were checked is written at <see cref="Fold"/>. Pure function.
     /// </summary>
     internal static bool UnixInsideOrEqual(string path, string folder)
     {
@@ -501,9 +506,10 @@ public static partial class ClientOutputPath
     }
 
     // Case folding and Unicode normalisation without ICU: the build runs in invariant globalization mode, where string.Normalize
-    // returns its input unchanged. Two steps:
+    // returns its input unchanged. Steps:
     // 1. Default-ignorable code points are dropped, and the non-ASCII characters whose NFC form, full case folding or upper case is
     //    ASCII, or is ASCII next to a modifier letter (U+0149, U+1E9A), are replaced by that form, upper-cased (AsciiEquivalent).
+    //    Then each component loses its trailing dots and spaces, as vfat and exFAT do in a lookup (WithoutTrailingDotsAndSpaces).
     // 2. ASCII is upper-cased, and every maximal run of other characters and combining marks (with the ASCII character a mark
     //    combines with) becomes one '?'; '/' is never part of a run. U+0345 is not taken for a combining mark: it case-folds to the
     //    letter U+03B9. An ASCII character (X) joins the run when the rune after it, past any run of iotas (U+0345, U+03B9, U+0399,
@@ -519,9 +525,11 @@ public static partial class ClientOutputPath
     // precomposed iotas, no two spellings that NFC-then-fold, fold-then-NFD or per-code-point upper-casing make equal folded
     // apart. Longer sequences and other characters were not enumerated.
     // Not covered: simple lower-casing (U+0130 lower-cases to a plain 'i' there, but fully folds to i U+0307, which the tests keep);
-    // compatibility forms (NFKC); and file systems with case tables of their own.
+    // compatibility forms (NFKC); file systems with case tables of their own; 8.3 short names (Linux vfat matches a lookup against
+    // each entry's short name too, so WORLDO~1 opens "World of Warcraft"; unverified: NTFS short names through ntfs-3g or WSL
+    // /mnt/c); and reserved characters a file system maps to private-use code points (WSL DrvFs, CIFS mapposix; unverified).
     // Many spellings that NFC and case folding would not make equal fold equal too (two different non-ASCII names of the same
-    // shape), which only over-refuses.
+    // shape; "a." and "a" on ext4), which only over-refuses.
     private static string Fold(string text)
     {
         var runes = new List<Rune>(text.Length);
@@ -545,6 +553,7 @@ public static partial class ClientOutputPath
             runes.Add(rune);
         }
 
+        runes = WithoutTrailingDotsAndSpaces(runes);
         var folded = new StringBuilder(runes.Count);
         bool inRun = false;
         for (int i = 0; i < runes.Count; i++)
@@ -587,6 +596,45 @@ public static partial class ClientOutputPath
         return folded.ToString();
     }
 
+    // Linux vfat always, and exFAT unless mounted with keep_last_dots, ignore the dots at the end of a name in a lookup, so "WoW."
+    // opens "WoW". Each '/'-separated component loses its run of trailing U+002E and U+0020 (spaces too, the conservative choice).
+    // A component made only of dots and spaces (".", "..", "...") is kept as it is, so it never becomes empty or changes meaning.
+    // Runs after step 1 of Fold, so an ignorable after the dot does not keep it. Returns a new list; the input is not changed.
+    private static List<Rune> WithoutTrailingDotsAndSpaces(List<Rune> runes)
+    {
+        var kept = new List<Rune>(runes.Count);
+        int start = 0;
+        while (start <= runes.Count)
+        {
+            int end = start;
+            while (end < runes.Count && runes[end].Value != '/')
+            {
+                end++;
+            }
+
+            int last = end - 1;
+            while (last >= start && (runes[last].Value is 0x2E or 0x20))
+            {
+                last--;
+            }
+
+            int stop = last < start ? end : last + 1;
+            for (int i = start; i < stop; i++)
+            {
+                kept.Add(runes[i]);
+            }
+
+            if (end < runes.Count)
+            {
+                kept.Add(runes[end]);
+            }
+
+            start = end + 1;
+        }
+
+        return kept;
+    }
+
     // Every non-ASCII code point whose NFC form, Unicode case folding or upper case is all ASCII, upper-cased: KELVIN SIGN, LONG S,
     // DOTLESS I (its upper case is I), SHARP S and CAPITAL SHARP S, the Latin ligatures, GREEK QUESTION MARK and GREEK VARIA. Also the
     // two whose full case folding is ASCII next to a modifier letter (category Lm, not a mark, so it does not join the ASCII letter's
@@ -618,8 +666,9 @@ public static partial class ClientOutputPath
             or 0xFEFF or 0xFFA0 or (>= 0xFFF0 and <= 0xFFF8) or (>= 0x1BCA0 and <= 0x1BCA3) or (>= 0x1D173 and <= 0x1D17A)
             or (>= 0xE0000 and <= 0xE0FFF);
 
-    // Every code point whose canonical decomposition starts with U+03B9 or U+0399 (33 of them; checked against the Unicode 15.0
-    // tables of Python's unicodedata and the 16.0.0 tables in the 2026-11-14 review): an iota with a mark, written precomposed.
+    // An iota with a mark, written precomposed: the 33 code points whose canonical decomposition starts with U+03B9 or U+0399 and
+    // has more than one code point. A 34th, U+1FBE, decomposes to U+03B9 alone and is in Fold's skip set instead. Checked against the
+    // Unicode 15.0 tables of Python's unicodedata and the 16.0.0 tables in the 2026-11-14 reviews.
     private static bool IsIotaWithMark(int value)
         => value is 0x038A or 0x0390 or 0x03AA or 0x03AF or 0x03CA or (>= 0x1F30 and <= 0x1F3F) or 0x1F76 or 0x1F77
             or (>= 0x1FD0 and <= 0x1FD3) or (>= 0x1FD6 and <= 0x1FDB);
