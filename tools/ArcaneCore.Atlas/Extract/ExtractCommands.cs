@@ -12,7 +12,7 @@ internal static class ExtractCommands
     private const int MaxThreads = 64;
     private const int MaxReportedFailures = 200;
 
-    /// <summary>Adds <c>extract.maps</c> and <c>extract.vmaps</c>.</summary>
+    /// <summary>Adds <c>extract.maps</c>, <c>extract.vmaps</c> and <c>extract.mmaps</c>.</summary>
     public static void Register(CommandRegistry registry)
     {
         ArgumentNullException.ThrowIfNull(registry);
@@ -39,6 +39,122 @@ internal static class ExtractCommands
             ],
             VmapsAsync,
             CommandSurfaces.Headless | CommandSurfaces.Instance));
+
+        registry.Register(new CommandDefinition(
+            "extract.mmaps",
+            "Build the server's navigation meshes (mmaps/NNN.mmap and NNNXXYY.mmtile, mmap version 6 over Detour version 7) from the maps and vmaps of a server data root, with the reference generator's parameters and filters. Needs no client.",
+            [
+                new CommandArg("data", ArgType.String, "Absolute path of the server data root holding maps and vmaps; the files go into its mmaps folder. Default: the configured data directory. Refused inside a git working tree or the client folder."),
+                new CommandArg("maps", ArgType.StringList, "Map ids to build (for example 0,1). Empty builds every map that has data, except the unused maps 42 and 169."),
+                new CommandArg("tile", ArgType.StringList, "Build one tile only: the server's tile X and Y (for example 49,31). Needs exactly one map in 'maps'."),
+                new CommandArg("overwrite", ArgType.Boolean, "Rebuild tiles whose current file already exists. Off, such a tile is kept, so a stopped run can be continued.", Default: JsonValue.Create(false)),
+                new CommandArg("quick", ArgType.Boolean, "Skip removing the terrain inside models and the model triangles under the terrain: faster, with unusable polygons left under buildings.", Default: JsonValue.Create(false)),
+                new CommandArg("threads", ArgType.Integer, $"Tiles built at once (1 to {MaxThreads}). Default: the processor count.", Default: JsonValue.Create(0)),
+            ],
+            MmapsAsync,
+            CommandSurfaces.Headless | CommandSurfaces.Instance));
+    }
+
+    private static Task<JsonNode?> MmapsAsync(CommandInvocation call, CancellationToken cancellationToken)
+    {
+        string name = call.Definition.Name;
+        var paths = call.Services.GetService(typeof(AtlasPaths)) as AtlasPaths;
+        string? requested = call.OptionalString("data") ?? paths?.TerrainData;
+        if (string.IsNullOrWhiteSpace(requested))
+        {
+            throw new CommandException(CommandException.BadArguments, $"{name}: argument 'data' is required when no data directory is configured.");
+        }
+
+        var only = new List<uint>();
+        foreach (string text in call.GetStringList("maps"))
+        {
+            only.Add(uint.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out uint id)
+                ? id
+                : throw new CommandException(CommandException.BadArguments, $"{name}: argument 'maps' must list map ids; '{text}' is not one."));
+        }
+
+        (int X, int Y)? tile = null;
+        IReadOnlyList<string> tileArg = call.GetStringList("tile");
+        if (tileArg.Count != 0)
+        {
+            if (tileArg.Count != 2 || only.Count != 1
+                || !int.TryParse(tileArg[0], NumberStyles.None, CultureInfo.InvariantCulture, out int tileX)
+                || !int.TryParse(tileArg[1], NumberStyles.None, CultureInfo.InvariantCulture, out int tileY))
+            {
+                throw new CommandException(CommandException.BadArguments, $"{name}: argument 'tile' must be the tile's X and Y (for example 49,31) and needs exactly one map in 'maps'.");
+            }
+
+            tile = (tileX, tileY);
+        }
+
+        int threads = Threads(call);
+        bool overwrite = call.GetBool("overwrite", false) || tile is not null;
+        bool quick = call.GetBool("quick", false);
+        string[] protectedRoots = paths?.ClientRoot is { } root ? [root] : [];
+        string dataRoot = ClientOutputPath.CheckDirectory(name, requested, protectedRoots);
+        if (!Directory.Exists(Path.Combine(dataRoot, MmapExtractor.MapsFolder)) && !Directory.Exists(Path.Combine(dataRoot, MmapExtractor.VmapsFolder)))
+        {
+            throw new CommandException(CommandException.BadArguments, $"{name}: '{dataRoot}' holds neither a maps nor a vmaps folder.");
+        }
+
+        return Task.Run<JsonNode?>(
+            () =>
+            {
+                MmapExtractReport report;
+                try
+                {
+                    report = new MmapExtractor(dataRoot).Extract(only, overwrite, quick, threads, cancellationToken, tile);
+                }
+                catch (ArgumentException e)
+                {
+                    throw new CommandException(CommandException.BadArguments, $"{name}: {e.Message}", e);
+                }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                {
+                    throw new CommandException(CommandException.Failed, $"{name}: cannot write to '{dataRoot}': {e.Message}", e);
+                }
+
+                var list = new JsonArray();
+                foreach (MmapExtractMapReport map in report.Maps)
+                {
+                    list.Add(new JsonObject
+                    {
+                        ["id"] = map.Id,
+                        ["tiles"] = map.Tiles,
+                        ["written"] = map.Written,
+                        ["existing"] = map.Existing,
+                        ["empty"] = map.Empty,
+                        ["failed"] = map.Failed,
+                        ["polygons"] = map.Polygons,
+                    });
+                }
+
+                return new JsonObject
+                {
+                    ["out"] = report.MmapsDirectory,
+                    ["written"] = report.Maps.Sum(m => m.Written),
+                    ["existing"] = report.Maps.Sum(m => m.Existing),
+                    ["empty"] = report.Maps.Sum(m => m.Empty),
+                    ["failed"] = report.Maps.Sum(m => m.Failed),
+                    ["polygons"] = report.Maps.Sum(m => m.Polygons),
+                    ["bytes"] = report.Bytes,
+                    ["maps"] = list,
+                    ["problems"] = new JsonArray([.. report.Problems.Take(MaxReportedFailures).Select(p => (JsonNode?)JsonValue.Create(p))]),
+                    ["problemCount"] = report.Problems.Count,
+                };
+            },
+            cancellationToken);
+    }
+
+    private static int Threads(CommandInvocation call)
+    {
+        long threads = call.OptionalInt("threads") ?? 0;
+        if (threads is < 0 or > MaxThreads)
+        {
+            throw new CommandException(CommandException.BadArguments, $"{call.Definition.Name}: argument 'threads' must be between 1 and {MaxThreads}.");
+        }
+
+        return threads == 0 ? Math.Clamp(Environment.ProcessorCount, 1, MaxThreads) : (int)threads;
     }
 
     private static Task<JsonNode?> VmapsAsync(CommandInvocation call, CancellationToken cancellationToken)
@@ -115,20 +231,10 @@ internal static class ExtractCommands
             only.Add(id);
         }
 
-        long threads = call.OptionalInt("threads") ?? 0;
-        if (threads is < 0 or > MaxThreads)
-        {
-            throw new CommandException(CommandException.BadArguments, $"{name}: argument 'threads' must be between 1 and {MaxThreads}.");
-        }
-
-        if (threads == 0)
-        {
-            threads = Math.Clamp(Environment.ProcessorCount, 1, MaxThreads);
-        }
-
+        int threads = Threads(call);
         string[] protectedRoots = paths?.ClientRoot is { } root ? [root] : [];
         string output = ClientOutputPath.CheckDirectory(name, call.GetString("out"), protectedRoots);
-        return (files, maps, only, (int)threads, output);
+        return (files, maps, only, threads, output);
     }
 
     private static Task<JsonNode?> MapsAsync(CommandInvocation call, CancellationToken cancellationToken)
