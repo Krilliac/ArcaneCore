@@ -58,7 +58,12 @@ internal static class MmapTileBuilder
     /// <param name="Polygons">Polygons in the tile.</param>
     /// <param name="FailedSubTiles">Sub-tiles a Recast step failed on (they are left out of the tile).</param>
     /// <param name="Problem">Why no file was produced although there was geometry, or null.</param>
-    public readonly record struct Result(byte[]? File, int Polygons, int FailedSubTiles, string? Problem);
+    /// <param name="FirstFailure">The first failed sub-tile's exception type and message (or what Recast returned), or null when none failed.</param>
+    /// <param name="UnexpectedFailure">
+    /// True when a sub-tile failed with anything other than the plain <see cref="Exception"/> DotRecast throws when a step
+    /// gives up: that is a bug in the generator's own steps, not Recast refusing the geometry.
+    /// </param>
+    public readonly record struct Result(byte[]? File, int Polygons, int FailedSubTiles, string? Problem, string? FirstFailure = null, bool UnexpectedFailure = false);
 
     /// <summary>Builds the tile.</summary>
     /// <param name="mapId">The map (maps 0 and 1 use the continent parameters).</param>
@@ -106,6 +111,8 @@ internal static class MmapTileBuilder
         var polyMeshes = new List<RcPolyMesh>(TilesPerMap * TilesPerMap);
         var detailMeshes = new List<RcPolyMeshDetail>(TilesPerMap * TilesPerMap);
         int failed = 0;
+        string? firstFailure = null;
+        bool unexpected = false;
         for (int y = 0; y < TilesPerMap; y++)
         {
             for (int x = 0; x < TilesPerMap; x++)
@@ -157,6 +164,7 @@ internal static class MmapTileBuilder
                     if (detail is null)
                     {
                         failed++;
+                        firstFailure ??= "the detail mesh step returned nothing";
                         polyMeshes.Add(EmptyMesh(subMin, subMax, cs, ch, borderSize));
                         continue;
                     }
@@ -166,8 +174,11 @@ internal static class MmapTileBuilder
                 }
                 catch (Exception e) when (e is not OutOfMemoryException and not OperationCanceledException)
                 {
-                    // The reference prints the failed step and goes on without this sub-tile.
+                    // The reference prints the failed step and goes on without this sub-tile. DotRecast signals a step that gave up
+                    // with a plain Exception; any other type is a defect in this file's own filters and is reported as such.
                     failed++;
+                    firstFailure ??= $"{e.GetType().Name}: {e.Message}";
+                    unexpected |= e.GetType() != typeof(Exception);
                     polyMeshes.Add(EmptyMesh(subMin, subMax, cs, ch, borderSize));
                 }
             }
@@ -175,7 +186,7 @@ internal static class MmapTileBuilder
 
         if (detailMeshes.Count == 0)
         {
-            return new Result(null, 0, failed, null);
+            return new Result(null, 0, failed, null, firstFailure, unexpected);
         }
 
         // ref: vmangos@0e3ff01 contrib/mmap/src/TileWorker.cpp:705-751
@@ -183,7 +194,7 @@ internal static class MmapTileBuilder
         RcPolyMeshDetail mergedDetail = RcMeshDetails.MergePolyMeshDetails(context, [.. detailMeshes], detailMeshes.Count);
         if (merged is null || mergedDetail is null || merged.npolys == 0)
         {
-            return new Result(null, 0, failed, null);
+            return new Result(null, 0, failed, null, firstFailure, unexpected);
         }
 
         // ref: vmangos@0e3ff01 contrib/mmap/src/TileWorker.cpp:753-785 (polygon flags from the area)
@@ -209,7 +220,7 @@ internal static class MmapTileBuilder
 
         if (merged.nverts >= 0xffff)
         {
-            return new Result(null, 0, failed, $"too many vertices ({merged.nverts}).");
+            return new Result(null, 0, failed, $"too many vertices ({merged.nverts}).", firstFailure, unexpected);
         }
 
         // ref: vmangos@0e3ff01 contrib/mmap/src/TileWorker.cpp:787-822
@@ -242,10 +253,10 @@ internal static class MmapTileBuilder
         DtMeshData data = DtNavMeshBuilder.CreateNavMeshData(option);
         if (data is null)
         {
-            return new Result(null, 0, failed, "the Detour tile could not be created.");
+            return new Result(null, 0, failed, "the Detour tile could not be created.", firstFailure, unexpected);
         }
 
-        return new Result(Serialize(data, usesLiquids), data.header.polyCount, failed, null);
+        return new Result(Serialize(data, usesLiquids), data.header.polyCount, failed, null, firstFailure, unexpected);
     }
 
     /// <summary>

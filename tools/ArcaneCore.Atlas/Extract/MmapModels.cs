@@ -43,7 +43,7 @@ internal sealed class MmapModels
             return false;
         }
 
-        (VMapTree tree, List<(ModelSpawn Spawn, uint Slot)> spawns) = VMapTree.Parse(mapId, bytes);
+        (VMapTree tree, List<(ModelSpawn Spawn, uint Slot)> spawns) = MmapModelCache.Named(VMapFormat.TreeFileName(mapId), () => VMapTree.Parse(mapId, bytes));
         if (tree.IsTiled)
         {
             // The generator's tile X is the server's tile Y.
@@ -513,7 +513,20 @@ internal sealed class MmapModelCache
     public List<(ModelSpawn Spawn, uint Slot)>? Tile(uint mapId, int serverTileX, int serverTileY)
     {
         string path = Path.Combine(_directory, VMapFormat.TileFileName(mapId, serverTileX, serverTileY));
-        return File.Exists(path) ? VMapTree.ParseTile(File.ReadAllBytes(path)) : null;
+        return File.Exists(path) ? Named(Path.GetFileName(path), () => VMapTree.ParseTile(File.ReadAllBytes(path))) : null;
+    }
+
+    /// <summary>Runs a parse and, when the file is damaged, says which file it was.</summary>
+    internal static T Named<T>(string fileName, Func<T> parse)
+    {
+        try
+        {
+            return parse();
+        }
+        catch (InvalidDataException e)
+        {
+            throw new InvalidDataException($"vmaps/{fileName}: {e.Message}", e);
+        }
     }
 
     /// <summary>A model file by spawn name, or null when it is not there.</summary>
@@ -545,7 +558,7 @@ internal sealed class MmapModelCache
             return null;
         }
 
-        WorldModel model = WorldModel.Parse(File.ReadAllBytes(path));
+        WorldModel model = Named(Path.GetFileName(path), () => WorldModel.Parse(File.ReadAllBytes(path)));
         _models[name] = new WeakReference<WorldModel>(model);
         return model;
     }
