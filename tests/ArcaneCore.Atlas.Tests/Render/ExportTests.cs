@@ -26,11 +26,33 @@ internal sealed class TempDirectory : IDisposable
     {
         try
         {
+            RemoveLinks(Root);
             Directory.Delete(Root, recursive: true);
         }
         catch (IOException)
         {
             // Best effort: a scan holding a file open must not fail the test that already passed.
+        }
+    }
+
+    /// <summary>
+    /// Removes every directory link under <paramref name="directory"/> as a link, without entering it. On Windows the .NET 10
+    /// recursive delete asks the system to unmount each junction as if it were a volume mount point. Without elevation that is
+    /// refused, and the delete then throws <see cref="UnauthorizedAccessException"/> and leaves the parent directory behind,
+    /// although it did remove the junction. A non-recursive delete of the link itself has no such step, on any platform.
+    /// </summary>
+    private static void RemoveLinks(string directory)
+    {
+        foreach (DirectoryInfo child in new DirectoryInfo(directory).EnumerateDirectories())
+        {
+            if ((child.Attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                child.Delete();
+            }
+            else
+            {
+                RemoveLinks(child.FullName);
+            }
         }
     }
 }
