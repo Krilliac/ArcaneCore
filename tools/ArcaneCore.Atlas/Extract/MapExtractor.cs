@@ -71,7 +71,7 @@ public sealed class MapExtractor
         _areas = areas ?? throw new ArgumentNullException(nameof(areas));
     }
 
-    /// <summary>Extracts into <paramref name="mapsDirectory"/>, the maps folder of <paramref name="outputRoot"/>.</summary>
+    /// <summary>Extracts into <paramref name="mapsDirectory"/>, normally the maps folder of <paramref name="outputRoot"/> (that is not checked; only <paramref name="mapsDirectory"/> is written to).</summary>
     /// <param name="outputRoot">The server data root (the folder the world server's <c>Maps:DataDirectory</c> names).</param>
     /// <param name="onlyMaps">Map ids to extract; null or empty extracts every map.</param>
     /// <param name="overwrite">Rewrite tiles whose file exists; otherwise they are kept and counted as existing.</param>

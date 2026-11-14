@@ -57,12 +57,16 @@ public sealed class MmapExtractor
     internal Action<string>? TileWritten { get; set; }
 
     /// <param name="dataRoot">The server data root holding <c>maps</c> and <c>vmaps</c>.</param>
-    /// <param name="mmapsDirectory">Where the files go; null for <c>&lt;data root&gt;/mmaps</c>.</param>
-    public MmapExtractor(string dataRoot, string? mmapsDirectory = null)
+    /// <param name="mmapsDirectory">
+    /// Where the files go; required, as for the maps and vmaps extractors, so no caller writes through an unchecked
+    /// <c>&lt;data root&gt;/mmaps</c>. <c>extract.mmaps</c> passes the real folder its check judged for that path.
+    /// </param>
+    public MmapExtractor(string dataRoot, string mmapsDirectory)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(dataRoot);
+        ArgumentException.ThrowIfNullOrWhiteSpace(mmapsDirectory);
         _dataRoot = dataRoot;
-        _mmapsDirectory = mmapsDirectory ?? Path.Combine(dataRoot, MmapsFolder);
+        _mmapsDirectory = mmapsDirectory;
     }
 
     /// <summary>Builds the navigation meshes.</summary>

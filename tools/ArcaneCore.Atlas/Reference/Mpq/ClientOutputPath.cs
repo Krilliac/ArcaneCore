@@ -83,8 +83,8 @@ internal readonly record struct DriveTarget(DriveKind Kind, string? Path);
 /// <c>core.worktree</c>) or created after the check, Linux bind mounts and other mount aliases, the other mount paths of a volume a
 /// link part-way along the path leads to (only the final volume's are walked), volumes unknown to the mount manager (refused); and on
 /// Unix a protected folder named by a spelling the file system equates that the fold does not: simple lower-casing (U+0130 as a
-/// plain <c>i</c>), compatibility forms (NFKC: fullwidth letters and the like), a case table of its own, or folding U+0345 to
-/// U+03B9 before reordering the marks after an ASCII letter (see <see cref="Fold"/>); comparing identity
+/// plain <c>i</c>), compatibility forms (NFKC: fullwidth letters and the like), a case table of its own, or the U+0345 and iota
+/// sequences listed at <see cref="Fold"/> (they need the protected folder's own path to hold such a sequence); comparing identity
 /// (device and inode) instead of spelling would close that.
 /// Stateless and thread-safe.
 /// </para>
@@ -482,8 +482,8 @@ public static partial class ClientOutputPath
     /// to make spellings that NFC normalisation and full Unicode case folding make equal compare equal, with the exceptions listed at
     /// <see cref="Fold"/> (and many spellings they would not make equal compare equal too, which over-refuses on a case-sensitive file
     /// system, the safe side). Not covered: simple lower-casing (U+0130 as a plain <c>i</c>), compatibility forms (NFKC: fullwidth
-    /// letters and the like), a case table of the file system's own, and an ASCII letter followed by U+0345 and another mark against
-    /// the same letter, U+03B9 and that mark. Pure function.
+    /// letters and the like), a case table of the file system's own, and the U+0345 and iota sequences listed at <see cref="Fold"/>,
+    /// some of which standard NFC plus full case folding does make equal. Pure function.
     /// </summary>
     internal static bool UnixInsideOrEqual(string path, string folder)
     {
@@ -507,17 +507,23 @@ public static partial class ClientOutputPath
     // 2. ASCII is upper-cased, and every maximal run of other characters and combining marks (with the ASCII character a mark
     //    combines with) becomes one '?'; '/' is never part of a run. U+0345 is not taken for a combining mark: it case-folds to the
     //    letter U+03B9, so after an ASCII letter it gives the same '?' that letter does rather than join the ASCII letter to a run;
-    //    but whether an ASCII letter combines is decided by the first rune after any U+0345s, because NFC moves U+0345 (combining
-    //    class 240) behind the other marks of the letter.
+    //    but whether an ASCII character combines is decided by the first rune after any U+0345s, because NFC moves U+0345 (combining
+    //    class 240) behind the character's marks of combining class 1 to 239 (not behind a class-0 mark: see below).
     // Intended result: two spellings that NFC and full case folding make equal fold equal, because a difference between them is one
     // of the step-1 characters or lies inside a run (a precomposed letter and its decomposed form are both one run). The table and
     // the U+0345 rule come from reviews against the Unicode 16.0.0 tables (2026-11-14), not from enumerating every code point here;
-    // the cases the tests pin are a U+0345 against a U+03B9, and a U+0345 U+0301 against a-acute U+0345. Not covered: an ASCII
-    // letter, U+0345 and another mark against the same letter, U+03B9 and that mark (equal only to a file system that folds each
-    // code point before it reorders marks); simple lower-casing (U+0130 lower-cases to a plain 'i' there, but fully folds to
-    // i U+0307, which the tests keep); compatibility forms (NFKC); and file systems with case tables of their own. Many spellings
-    // that NFC and case folding would not make equal fold equal too (two different non-ASCII names of the same shape), which only
-    // over-refuses.
+    // the cases the tests pin are a U+0345 against a U+03B9, and a U+0345 U+0301 against a-acute U+0345.
+    // Not covered (X is any ASCII character but '/'; reaching any of these needs the protected folder's own path to hold the
+    // sequence; the KnownResidual tests pin them as they are):
+    // - X U+0345 M, where M is a mark of combining class 0 (U+20DD, U+093E), against X U+03B9 M. Standard NFC/NFD plus full case
+    //   folding makes them equal (casefold ext4/f2fs, APFS); here the first folds to '?' and the second to 'X?'.
+    // - On file systems that case-fold before they normalise, or never normalise (ext4/f2fs casefold, ZFS case-insensitive
+    //   without normalization): X U+0345 M, for any mark M, against X I M (I is U+03B9, U+0399 or U+1FBE), and against X followed
+    //   by a precomposed iota with a mark (U+03AF and the like). Same split: '?' against 'X?'.
+    // - Simple lower-casing (U+0130 lower-cases to a plain 'i' there, but fully folds to i U+0307, which the tests keep);
+    //   compatibility forms (NFKC); and file systems with case tables of their own.
+    // Many spellings that NFC and case folding would not make equal fold equal too (two different non-ASCII names of the same
+    // shape), which only over-refuses.
     private static string Fold(string text)
     {
         var runes = new List<Rune>(text.Length);
@@ -553,20 +559,24 @@ public static partial class ClientOutputPath
                 continue;
             }
 
-            // U+0345 is not a mark here (see IsCombiningMark), but NFC may reorder it behind another mark that does combine with
-            // this letter (a U+0345 U+0301 is a U+0301 U+0345), so the test looks past any U+0345 first.
-            int next = i + 1;
-            while (next < runes.Count && runes[next].Value == 0x0345)
+            if (rune.IsAscii)
             {
-                next++;
-            }
+                // U+0345 is not a mark here (see IsCombiningMark), but NFC may reorder it behind another mark that does combine with
+                // this character (a U+0345 U+0301 is a U+0301 U+0345), so the test looks past any U+0345 first (for a class-0 mark
+                // that over-joins: see the residual list above Fold). Only an ASCII
+                // character looks ahead, so a long run of U+0345 is walked once, not once per rune.
+                int next = i + 1;
+                while (next < runes.Count && runes[next].Value == 0x0345)
+                {
+                    next++;
+                }
 
-            bool combinesWithNext = next < runes.Count && IsCombiningMark(runes[next]);
-            if (rune.IsAscii && !combinesWithNext)
-            {
-                folded.Append(char.ToUpperInvariant((char)rune.Value));
-                inRun = false;
-                continue;
+                if (next >= runes.Count || !IsCombiningMark(runes[next]))
+                {
+                    folded.Append(char.ToUpperInvariant((char)rune.Value));
+                    inRun = false;
+                    continue;
+                }
             }
 
             if (!inRun)

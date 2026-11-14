@@ -547,6 +547,20 @@ public sealed class VmapExtractorTests
         Assert.ThrowsAny<OperationCanceledException>(() => fixture.Extractor().Extract(output.Path, null, threads: 1, cancelled.Token, Path.Combine(output.Path, VmapExtractor.VmapsFolder)));
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Extract_WithoutAVmapsFolder_Throws_AndWritesNothing(string? vmapsDirectory)
+    {
+        var fixture = new VmapFixture();
+        using var output = new TestDirectory();
+
+        Assert.ThrowsAny<ArgumentException>(() => fixture.Extractor().Extract(output.Path, null, threads: 1, CancellationToken.None, vmapsDirectory!));
+
+        Assert.Empty(Directory.EnumerateFileSystemEntries(output.Path));
+    }
+
     [Fact]
     public async Task Command_ExtractsVmaps_AndRefusesARepositoryFolder()
     {

@@ -81,7 +81,8 @@ public sealed class VmapExtractor
     }
 
     /// <summary>
-    /// Extracts into <paramref name="vmapsDirectory"/>, the vmaps folder of <paramref name="outputRoot"/>, replacing the files of
+    /// Extracts into <paramref name="vmapsDirectory"/>, normally the vmaps folder of <paramref name="outputRoot"/> (that is not checked;
+    /// only <paramref name="vmapsDirectory"/> is written to), replacing the files of
     /// the maps it writes.
     /// </summary>
     /// <param name="outputRoot">The server data root.</param>

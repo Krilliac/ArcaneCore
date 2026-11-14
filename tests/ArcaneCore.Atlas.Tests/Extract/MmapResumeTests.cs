@@ -56,10 +56,10 @@ public sealed class MmapResumeTests(MmapWorld world) : IClassFixture<MmapWorld>
 
         // Stop after the first tile is written: the new tile (50, 30) is built first, the old (49, 31) would be second.
         using var cancel = new CancellationTokenSource();
-        var interrupted = new MmapExtractor(copy.Path) { TileWritten = _ => cancel.Cancel() };
+        var interrupted = new MmapExtractor(copy.Path, Path.Combine(copy.Path, MmapExtractor.MmapsFolder)) { TileWritten = _ => cancel.Cancel() };
         Assert.ThrowsAny<OperationCanceledException>(() => interrupted.Extract([0], overwrite: false, quick: false, threads: 1, cancel.Token));
 
-        MmapExtractReport resumed = new MmapExtractor(copy.Path).Extract([0], overwrite: false, quick: false, threads: 1, CancellationToken.None);
+        MmapExtractReport resumed = new MmapExtractor(copy.Path, Path.Combine(copy.Path, MmapExtractor.MmapsFolder)).Extract([0], overwrite: false, quick: false, threads: 1, CancellationToken.None);
 
         // Only the tile the interrupted run wrote is kept; the old-origin tile was deleted and is built again.
         MmapExtractMapReport azeroth = Assert.Single(resumed.Maps);
@@ -88,7 +88,7 @@ public sealed class MmapResumeTests(MmapWorld world) : IClassFixture<MmapWorld>
         using TestDirectory copy = Copy();
         MoveTheOrigin(copy);
 
-        MmapExtractReport report = new MmapExtractor(copy.Path).Extract([0], overwrite: false, quick: false, threads: 2, CancellationToken.None);
+        MmapExtractReport report = new MmapExtractor(copy.Path, Path.Combine(copy.Path, MmapExtractor.MmapsFolder)).Extract([0], overwrite: false, quick: false, threads: 2, CancellationToken.None);
 
         string problem = Assert.Single(report.Problems);
         Assert.Contains("000.mmap differs", problem, StringComparison.Ordinal);
@@ -105,7 +105,7 @@ public sealed class MmapResumeTests(MmapWorld world) : IClassFixture<MmapWorld>
         MoveTheOrigin(copy);
         Dictionary<string, byte[]> before = MapFiles(mmaps);
 
-        ArgumentException e = Assert.Throws<ArgumentException>(() => new MmapExtractor(copy.Path).Extract([0], overwrite, quick: false, threads: 1, CancellationToken.None, onlyTile: (50, 30)));
+        ArgumentException e = Assert.Throws<ArgumentException>(() => new MmapExtractor(copy.Path, Path.Combine(copy.Path, MmapExtractor.MmapsFolder)).Extract([0], overwrite, quick: false, threads: 1, CancellationToken.None, onlyTile: (50, 30)));
 
         Assert.Contains("navmesh parameters changed since its tiles were built", e.Message, StringComparison.Ordinal);
         Assert.Contains("build the whole map without tile=", e.Message, StringComparison.Ordinal);
@@ -123,7 +123,7 @@ public sealed class MmapResumeTests(MmapWorld world) : IClassFixture<MmapWorld>
         byte[] tile = File.ReadAllBytes(Path.Combine(mmaps, OldTile));
         File.Delete(Path.Combine(mmaps, OldTile));
 
-        MmapExtractReport report = new MmapExtractor(copy.Path).Extract([0], overwrite: false, quick: false, threads: 1, CancellationToken.None, onlyTile: (49, 31));
+        MmapExtractReport report = new MmapExtractor(copy.Path, Path.Combine(copy.Path, MmapExtractor.MmapsFolder)).Extract([0], overwrite: false, quick: false, threads: 1, CancellationToken.None, onlyTile: (49, 31));
 
         Assert.Equal(1, Assert.Single(report.Maps).Written);
         Assert.Empty(report.Problems);
@@ -140,7 +140,7 @@ public sealed class MmapResumeTests(MmapWorld world) : IClassFixture<MmapWorld>
         MoveTheOrigin(copy);
         Dictionary<string, byte[]> before = MapFiles(mmaps);
 
-        Assert.Throws<ArgumentException>(() => new MmapExtractor(copy.Path).Extract([0], overwrite, quick: false, threads: 1, CancellationToken.None, onlyTile: (10, 10)));
+        Assert.Throws<ArgumentException>(() => new MmapExtractor(copy.Path, Path.Combine(copy.Path, MmapExtractor.MmapsFolder)).Extract([0], overwrite, quick: false, threads: 1, CancellationToken.None, onlyTile: (10, 10)));
 
         Dictionary<string, byte[]> after = MapFiles(mmaps);
         Assert.Equal(before.Keys.Order(StringComparer.Ordinal), after.Keys.Order(StringComparer.Ordinal));
@@ -160,7 +160,7 @@ public sealed class MmapResumeTests(MmapWorld world) : IClassFixture<MmapWorld>
         string planted = Path.Combine(mmaps, "0005030.mmtile");
         File.Copy(Path.Combine(mmaps, OldTile), planted);
 
-        MmapExtractReport report = new MmapExtractor(copy.Path).Extract([0], overwrite, quick: false, threads: 1, CancellationToken.None);
+        MmapExtractReport report = new MmapExtractor(copy.Path, Path.Combine(copy.Path, MmapExtractor.MmapsFolder)).Extract([0], overwrite, quick: false, threads: 1, CancellationToken.None);
 
         MmapExtractMapReport azeroth = Assert.Single(report.Maps);
         Assert.Equal(2, azeroth.Empty);
@@ -174,13 +174,13 @@ public sealed class MmapResumeTests(MmapWorld world) : IClassFixture<MmapWorld>
         using TestDirectory copy = Copy();
         string mmaps = Path.Combine(copy.Path, "mmaps");
         MoveTheOrigin(copy);
-        new MmapExtractor(copy.Path).Extract([0], overwrite: false, quick: false, threads: 1, CancellationToken.None);
+        new MmapExtractor(copy.Path, Path.Combine(copy.Path, MmapExtractor.MmapsFolder)).Extract([0], overwrite: false, quick: false, threads: 1, CancellationToken.None);
         string built = Path.Combine(mmaps, "0005030.mmtile");
         Assert.True(File.Exists(built));
 
         // The terrain file of the tile now stores no heights; the parameter file is the one on disk, so only the empty rule applies.
         File.WriteAllBytes(Path.Combine(copy.Path, "maps", "0005030.map"), MmapMapFile.Build(noHeights: true));
-        MmapExtractReport report = new MmapExtractor(copy.Path).Extract([0], overwrite: true, quick: false, threads: 1, CancellationToken.None);
+        MmapExtractReport report = new MmapExtractor(copy.Path, Path.Combine(copy.Path, MmapExtractor.MmapsFolder)).Extract([0], overwrite: true, quick: false, threads: 1, CancellationToken.None);
 
         Assert.Equal(2, Assert.Single(report.Maps).Empty);
         Assert.False(File.Exists(built));
@@ -195,7 +195,7 @@ public sealed class MmapResumeTests(MmapWorld world) : IClassFixture<MmapWorld>
         string map = Path.Combine(copy.Path, "maps", "0004931.map");
         File.WriteAllBytes(map, File.ReadAllBytes(map)[..50]);
 
-        MmapExtractReport report = new MmapExtractor(copy.Path).Extract([0], overwrite: true, quick: false, threads: 1, CancellationToken.None);
+        MmapExtractReport report = new MmapExtractor(copy.Path, Path.Combine(copy.Path, MmapExtractor.MmapsFolder)).Extract([0], overwrite: true, quick: false, threads: 1, CancellationToken.None);
 
         Assert.True(Assert.Single(report.Maps).Failed >= 1);
         Assert.False(File.Exists(Path.Combine(mmaps, OldTile)));
@@ -217,7 +217,7 @@ public sealed class MmapResumeTests(MmapWorld world) : IClassFixture<MmapWorld>
         string planted = Path.Combine(mmaps, emptyTile);
         File.WriteAllBytes(planted, [1, 2, 3]);
 
-        MmapExtractReport report = new MmapExtractor(copy.Path).Extract([0], overwrite: false, quick: false, threads: 1, CancellationToken.None);
+        MmapExtractReport report = new MmapExtractor(copy.Path, Path.Combine(copy.Path, MmapExtractor.MmapsFolder)).Extract([0], overwrite: false, quick: false, threads: 1, CancellationToken.None);
 
         Assert.Empty(report.Problems);
         Assert.False(File.Exists(planted));
@@ -231,7 +231,7 @@ public sealed class MmapResumeTests(MmapWorld world) : IClassFixture<MmapWorld>
         using TestDirectory copy = Copy();
         MoveTheOrigin(copy);
 
-        MmapExtractReport report = new MmapExtractor(copy.Path).Extract([0], overwrite: true, quick: false, threads: 1, CancellationToken.None);
+        MmapExtractReport report = new MmapExtractor(copy.Path, Path.Combine(copy.Path, MmapExtractor.MmapsFolder)).Extract([0], overwrite: true, quick: false, threads: 1, CancellationToken.None);
 
         Assert.Equal(2, Assert.Single(report.Maps).Written);
         string problem = Assert.Single(report.Problems);
@@ -257,7 +257,7 @@ public sealed class MmapResumeTests(MmapWorld world) : IClassFixture<MmapWorld>
         Directory.CreateDirectory(folder);
         File.WriteAllBytes(Path.Combine(folder, "inside.bin"), [5]);
 
-        MmapExtractReport report = new MmapExtractor(copy.Path).Extract([0], overwrite: false, quick: false, threads: 1, CancellationToken.None);
+        MmapExtractReport report = new MmapExtractor(copy.Path, Path.Combine(copy.Path, MmapExtractor.MmapsFolder)).Extract([0], overwrite: false, quick: false, threads: 1, CancellationToken.None);
 
         Assert.Contains("1 existing tile file(s) were deleted", Assert.Single(report.Problems), StringComparison.Ordinal);
         foreach (string name in fileLookAlikes)
@@ -277,7 +277,7 @@ public sealed class MmapResumeTests(MmapWorld world) : IClassFixture<MmapWorld>
         Assert.True(File.Exists(Path.Combine(mmaps, OldTile)), "The test needs a file system that ignores case (a default NTFS folder does).");
         MoveTheOrigin(copy);
 
-        MmapExtractReport report = new MmapExtractor(copy.Path).Extract([0], overwrite: false, quick: false, threads: 1, CancellationToken.None);
+        MmapExtractReport report = new MmapExtractor(copy.Path, Path.Combine(copy.Path, MmapExtractor.MmapsFolder)).Extract([0], overwrite: false, quick: false, threads: 1, CancellationToken.None);
 
         Assert.Contains("1 existing tile file(s) were deleted", Assert.Single(report.Problems), StringComparison.Ordinal);
         Assert.Equal(2, Assert.Single(report.Maps).Written);
@@ -294,7 +294,7 @@ public sealed class MmapResumeTests(MmapWorld world) : IClassFixture<MmapWorld>
         MmapExtractReport report;
         using (new FileStream(Path.Combine(mmaps, OldTile), FileMode.Open, FileAccess.Read, FileShare.None))
         {
-            report = new MmapExtractor(copy.Path).Extract([0], overwrite: false, quick: false, threads: 1, CancellationToken.None);
+            report = new MmapExtractor(copy.Path, Path.Combine(copy.Path, MmapExtractor.MmapsFolder)).Extract([0], overwrite: false, quick: false, threads: 1, CancellationToken.None);
         }
 
         MmapExtractMapReport map = Assert.Single(report.Maps);

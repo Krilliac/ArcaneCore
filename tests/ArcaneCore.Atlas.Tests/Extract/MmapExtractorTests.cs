@@ -66,7 +66,7 @@ public sealed class MmapWorld : IDisposable
 
         new MapExtractor(fixture.Files, fixture.Maps, ExtractFixtures.Areas((1, 0))).Extract(DataRoot, null, overwrite: false, threads: 2, CancellationToken.None, Path.Combine(DataRoot, MapExtractor.MapsFolder));
         new VmapExtractor(fixture.Files, fixture.Maps).Extract(DataRoot, null, threads: 2, CancellationToken.None, Path.Combine(DataRoot, VmapExtractor.VmapsFolder));
-        Report = new MmapExtractor(DataRoot).Extract(null, overwrite: false, quick: false, Environment.ProcessorCount, CancellationToken.None);
+        Report = new MmapExtractor(DataRoot, Path.Combine(DataRoot, MmapExtractor.MmapsFolder)).Extract(null, overwrite: false, quick: false, Environment.ProcessorCount, CancellationToken.None);
     }
 
     /// <summary>The data root holding maps, vmaps and mmaps.</summary>
@@ -252,7 +252,7 @@ public sealed class MmapExtractorTests(MmapWorld world) : IClassFixture<MmapWorl
             }
         }
 
-        var extractor = new MmapExtractor(copy.Path);
+        var extractor = new MmapExtractor(copy.Path, Path.Combine(copy.Path, MmapExtractor.MmapsFolder));
         string tile = Path.Combine(copy.Path, "mmaps", "0363131.mmtile");
         byte[] built = File.ReadAllBytes(tile);
         File.WriteAllBytes(Path.Combine(copy.Path, "mmaps", "0363232.mmtile"), [1, 2, 3]);

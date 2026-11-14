@@ -126,6 +126,20 @@ public sealed class MapExtractorTests
         Assert.Empty(Directory.EnumerateFiles(Path.Combine(output.Path, "maps")));
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Extract_WithoutAMapsFolder_Throws_AndWritesNothing(string? mapsDirectory)
+    {
+        var fixture = new TerrainFixture();
+        using var output = new TestDirectory();
+
+        Assert.ThrowsAny<ArgumentException>(() => Extractor(fixture).Extract(output.Path, null, overwrite: false, threads: 1, CancellationToken.None, mapsDirectory!));
+
+        Assert.Empty(Directory.EnumerateFileSystemEntries(output.Path));
+    }
+
     private static (CommandRegistry Registry, AtlasServices Services) Command(TerrainFixture? fixture, string? clientRoot = null)
     {
         var registry = new CommandRegistry();

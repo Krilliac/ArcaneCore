@@ -146,6 +146,24 @@ public sealed class ClientOutputPathUnixTests
     }
 
     /// <summary>
+    /// NOT desired behaviour: these pin gaps the fold is known to have today, listed as "Not covered" in the comment above
+    /// ClientOutputPath.Fold. Each pair names one folder on some normalising, case-insensitive file system, yet the comparison says
+    /// "not inside", so such an <c>out</c> would be accepted. A change that closes a gap makes its row fail: move the row to the N10
+    /// theory (expecting true) and correct the residual list.
+    /// </summary>
+    [Theory]
+
+    // a U+0345 U+20DD (a combining-class-0 mark) against a U+03B9 U+20DD: equal under standard NFC plus full case folding.
+    [InlineData("/data/aι⃝/x", "/data/aͅ⃝")]
+
+    // a U+0345 U+0301 against a and the precomposed U+03AF (iota with tonos): equal where folding comes before normalising (ext4 casefold).
+    [InlineData("/data/aί/x", "/data/áͅ")]
+    public void KnownResidual_FoldGaps_AreNotDetectedToday(string path, string folder)
+    {
+        Assert.False(ClientOutputPath.UnixInsideOrEqual(path, folder));
+    }
+
+    /// <summary>
     /// /d/x/link1 leads to /e/repo/sub, and /e/repo/sub/link2 to /f/plain: neither the typed path nor the real one (/f/plain/out) is
     /// inside /e/repo, but the folder holding link2 is.
     /// </summary>
