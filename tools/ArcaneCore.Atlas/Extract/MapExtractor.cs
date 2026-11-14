@@ -113,7 +113,23 @@ public sealed class MapExtractor
     private MapExtractMapReport ExtractMap(ClientMap map, string mapsDirectory, bool overwrite, ParallelOptions options, List<MapExtractFailure> failures)
     {
         // ref: vmangos@0e3ff01 contrib/extractor/System.cpp:845-851 (a map without a WDT is skipped without a message)
-        string wdtPath = ClientMapPaths.WdtPath(map.Directory);
+        // The reference fails to open a WDT whose name cannot be a file name and goes on with the next map; so does this.
+        string wdtPath;
+        try
+        {
+            wdtPath = ClientMapPaths.WdtPath(map.Directory);
+        }
+        catch (ArgumentException)
+        {
+            failures.Add(new MapExtractFailure(
+                map.Id,
+                -1,
+                -1,
+                $"World\\Maps\\{map.Directory}\\{map.Directory}.wdt",
+                $"the map directory '{map.Directory}' in Map.dbc is not a single folder name, so the map has no WDT to open"));
+            return new MapExtractMapReport(map.Id, map.Directory, HasWdt: false, 0, 0, 0, 0, Failed: 1, 0);
+        }
+
         WdtFile wdt;
         try
         {

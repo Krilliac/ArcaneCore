@@ -369,6 +369,12 @@ public static class MapTileEncoder
                                 for (int vx = x; vx <= x + 1; vx++)
                                 {
                                     float h = layer.Height(vy, vx);
+                                    if (!float.IsFinite(h))
+                                    {
+                                        // The server returns a stored water level as it is and the navigation mesh builder takes it as geometry.
+                                        throw new InvalidDataException($"The liquid height at vertex ({vy}, {vx}) of a shown square of chunk ({i}, {j}) is not a finite number ({h}).");
+                                    }
+
                                     int at = (vy * (ChunkSquares + 1)) + vx;
                                     if (!cellSet[at] || cellHeight[at] < h)
                                     {
