@@ -75,9 +75,10 @@ Observed on this machine (read only, 2026-10-07):
    [rebuild recipe](#rebuild-recipe): maps and vmaps take about four minutes, the continents' navmesh
    about 36 minutes with 6 threads.
 2. **Extract on first run, in ArcaneCore** (a C# extractor reading the MPQs). The `.map` part
-   exists since 2026-11-14 as the Atlas command `extract.maps` (see
-   [Extracting maps without vmangos' tools](#extracting-maps-without-vmangos-tools)); it is run by
-   hand, not at server start. vmaps need WMO/M2 parsing and BIH building (larger). Navmesh generation needs
+   and the vmap part exist since 2026-11-14 as the Atlas commands `extract.maps` and
+   `extract.vmaps` (see
+   [Extracting maps and vmaps without vmangos' tools](#extracting-maps-and-vmaps-without-vmangos-tools));
+   they are run by hand, not at server start. vmaps need WMO/M2 parsing and BIH building (larger). Navmesh generation needs
    Recast; a managed port (e.g. DotRecast, zlib licence) would be a new dependency, and generation
    should run as a background/offline job with cached output, never on the world thread.
 3. **Ship generated data.** Convenient, but the output is derived from Blizzard's assets: fine on
@@ -147,13 +148,14 @@ MoveMapGenerator mmap version 6 with Detour 7 (`src/game/Maps/MoveMapSharedDefin
 `dep/recastnavigation/Detour/Include/DetourNavMesh.h`), the values `TerrainTile`, `VMapFormat` and
 `NavMeshFormat` accept. A different vmangos revision should be checked the same way first.
 
-## Extracting maps without vmangos' tools
+## Extracting maps and vmaps without vmangos' tools
 
-`arcane-atlas` writes `maps/` itself, from the client's MPQ archives (or an extracted client tree),
-with no C++ build:
+`arcane-atlas` writes `maps/` and `vmaps/` itself, from the client's MPQ archives (or an extracted
+client tree), with no C++ build:
 
 ```
 arcane-atlas run --client <wow-client-dir> extract.maps out=<data-root>
+arcane-atlas run --client <wow-client-dir> extract.vmaps out=<data-root>
 ```
 
 `<data-root>` is an absolute path outside every git working tree and outside the client folder; the
@@ -165,10 +167,24 @@ its WDT, written, kept, absent and failed, with the reason for every refused fil
 The files are meant to equal, byte for byte, what vmangos' `MapExtractor -e 1 -f 0` writes (float
 heights, the -500 height limit, `z1.4`). `MapExtractorRealDataTests` checks exactly that against a
 vmangos extraction of the same client; it needs `ARCANECORE_TEST_TERRAIN_DIR` and
-`ARCANECORE_TEST_CLIENT_FILES_DIR`. **It has not been run yet**: the command was written and tested
-on synthetic tiles only (2026-11-14), on a machine without client data. Run it before relying on the
-output, and keep using the vmangos tools for `vmaps/` and `mmaps/`, which Atlas does not write.
-Details: [atlas](../areas/atlas.md).
+`ARCANECORE_TEST_CLIENT_FILES_DIR`.
+
+`extract.vmaps` takes `out`, `maps` and `threads` and always replaces the tree, tile and model files
+of the maps it writes. Its model files are meant to equal vmangos' byte for byte (same kept groups,
+same triangles, same tree builder); its tree and tile files hold the same placements but need not
+be the same bytes, because placement ids are handed out in another order and spawn bounds go through
+sines and cosines. It does not write `temp_gameobject_models` or the models only game objects use.
+`VmapExtractorRealDataTests` compares both against a vmangos extraction (it needs `vmaps/` in the
+terrain root as well). The existing `VMapNativeOracleTests` can also be run with
+`ARCANECORE_TEST_TERRAIN_DIR` set to the new data root: it then compares ArcaneCore's reader with
+vmangos' own library on the new files.
+
+**Neither comparison has been run yet**: both commands were written and tested on synthetic data
+only (2026-11-14), on a machine without client data; in those tests the server's own `TerrainTile`
+and `VMapManager` read the files back. Run the real-data tests before relying on the output, and
+keep using vmangos' `MoveMapGenerator` for `mmaps/`, which Atlas does not write (it reads `maps/`
+and `vmaps/`, whichever tool wrote them). Details and the full list of differences:
+[atlas](../areas/atlas.md).
 
 ## Verification
 
@@ -215,6 +231,6 @@ from …`, `Collision: vmaps from … (line of sight on, heights on)` and `Colli
 line of sight and model heights: a server built before them reads the same vmaps but misses models
 silently (fail-soft: missing means open).
 
-Later, for self-containment: running the `.map` extraction on first start (today it is the Atlas
-command above), and a terrain-grid A* fallback over `.map` heights for maps without mmaps. Navmesh
+Later, for self-containment: running the map and vmap extraction on first start (today they are
+the Atlas commands above), and a terrain-grid A* fallback over `.map` heights for maps without mmaps. Navmesh
 generation stays an offline job.

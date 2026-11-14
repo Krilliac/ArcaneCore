@@ -12,7 +12,7 @@ internal static class ExtractCommands
     private const int MaxThreads = 64;
     private const int MaxReportedFailures = 200;
 
-    /// <summary>Adds <c>extract.maps</c>.</summary>
+    /// <summary>Adds <c>extract.maps</c> and <c>extract.vmaps</c>.</summary>
     public static void Register(CommandRegistry registry)
     {
         ArgumentNullException.ThrowIfNull(registry);
@@ -28,9 +28,69 @@ internal static class ExtractCommands
             ],
             MapsAsync,
             CommandSurfaces.Headless | CommandSurfaces.Instance));
+
+        registry.Register(new CommandDefinition(
+            "extract.vmaps",
+            "Write the server's static collision files (vmaps/NNN.vmtree, NNN_YY_XX.vmtile and a model file per placed WMO and M2, format VMAP_7.0) from the client's WDT, ADT, WMO and M2 files, as the reference vmap extractor and assembler do together.",
+            [
+                new CommandArg("out", ArgType.String, "Absolute path of the server data root; the files go into its vmaps folder, replacing the files of the maps written. Refused inside a git working tree or the client folder.", Required: true),
+                new CommandArg("maps", ArgType.StringList, "Map ids to extract (for example 0,1). Empty extracts every map of Map.dbc."),
+                new CommandArg("threads", ArgType.Integer, $"Model files built at once (1 to {MaxThreads}). Default: the processor count.", Default: JsonValue.Create(0)),
+            ],
+            VmapsAsync,
+            CommandSurfaces.Headless | CommandSurfaces.Instance));
     }
 
-    private static Task<JsonNode?> MapsAsync(CommandInvocation call, CancellationToken cancellationToken)
+    private static Task<JsonNode?> VmapsAsync(CommandInvocation call, CancellationToken cancellationToken)
+    {
+        string name = call.Definition.Name;
+        (IClientFileSource files, IMapDirectory maps, List<uint> only, int threads, string output) = Common(call);
+        return Task.Run<JsonNode?>(
+            () =>
+            {
+                VmapExtractReport report;
+                try
+                {
+                    report = new VmapExtractor(files, maps).Extract(output, only, threads, cancellationToken);
+                }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                {
+                    throw new CommandException(CommandException.Failed, $"{name}: cannot write to '{output}': {e.Message}", e);
+                }
+
+                var list = new JsonArray();
+                foreach (VmapExtractMapReport map in report.Maps)
+                {
+                    list.Add(new JsonObject
+                    {
+                        ["id"] = map.Id,
+                        ["directory"] = map.Directory,
+                        ["hasWdt"] = map.HasWdt,
+                        ["tiled"] = map.Tiled,
+                        ["spawns"] = map.Spawns,
+                        ["tileFiles"] = map.TileFiles,
+                        ["failed"] = map.Failed,
+                    });
+                }
+
+                return new JsonObject
+                {
+                    ["out"] = report.VmapsDirectory,
+                    ["mapsWithModels"] = report.Maps.Count(m => m.Spawns > 0),
+                    ["spawns"] = report.Maps.Sum(m => (long)m.Spawns),
+                    ["tileFiles"] = report.Maps.Sum(m => m.TileFiles),
+                    ["modelFiles"] = report.ModelFiles,
+                    ["bytes"] = report.Bytes,
+                    ["maps"] = list,
+                    ["problems"] = new JsonArray([.. report.Problems.Take(MaxReportedFailures).Select(p => (JsonNode?)JsonValue.Create(p))]),
+                    ["problemCount"] = report.Problems.Count,
+                };
+            },
+            cancellationToken);
+    }
+
+    /// <summary>The arguments both commands share, checked before anything is read or written.</summary>
+    private static (IClientFileSource Files, IMapDirectory Maps, List<uint> Only, int Threads, string Output) Common(CommandInvocation call)
     {
         string name = call.Definition.Name;
         IClientFileSource files = call.Services.GetService(typeof(IClientFileSource)) as IClientFileSource
@@ -66,11 +126,16 @@ internal static class ExtractCommands
             threads = Math.Clamp(Environment.ProcessorCount, 1, MaxThreads);
         }
 
-        bool overwrite = call.GetBool("overwrite", false);
-
-        // Refuse a bad destination before reading anything.
         string[] protectedRoots = paths?.ClientRoot is { } root ? [root] : [];
         string output = ClientOutputPath.CheckDirectory(name, call.GetString("out"), protectedRoots);
+        return (files, maps, only, (int)threads, output);
+    }
+
+    private static Task<JsonNode?> MapsAsync(CommandInvocation call, CancellationToken cancellationToken)
+    {
+        string name = call.Definition.Name;
+        (IClientFileSource files, IMapDirectory maps, List<uint> only, int threads, string output) = Common(call);
+        bool overwrite = call.GetBool("overwrite", false);
 
         return Task.Run<JsonNode?>(
             () =>
@@ -88,7 +153,7 @@ internal static class ExtractCommands
                 MapExtractReport report;
                 try
                 {
-                    report = new MapExtractor(files, maps, areas).Extract(output, only, overwrite, (int)threads, cancellationToken);
+                    report = new MapExtractor(files, maps, areas).Extract(output, only, overwrite, threads, cancellationToken);
                 }
                 catch (Exception e) when (e is IOException or UnauthorizedAccessException)
                 {
