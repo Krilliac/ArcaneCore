@@ -113,7 +113,10 @@ public sealed class MapExtractor
     private MapExtractMapReport ExtractMap(ClientMap map, string mapsDirectory, bool overwrite, ParallelOptions options, List<MapExtractFailure> failures)
     {
         // ref: vmangos@0e3ff01 contrib/extractor/System.cpp:845-851 (a map without a WDT is skipped without a message)
-        // The reference fails to open a WDT whose name cannot be a file name and goes on with the next map; so does this.
+        // The reference builds the WDT name with snprintf and looks it up in the MPQ, so a directory holding \ or / is just a
+        // longer archive path there, and a WDT it does not find is skipped without a message. This tool does not look such a
+        // directory up (it would not be one folder under World\Maps): the map is refused and counted as Failed, with a
+        // failure line, and the run goes on with the next map. A directory that is one folder name behaves as in the reference.
         string wdtPath;
         try
         {
