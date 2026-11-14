@@ -83,9 +83,9 @@ internal readonly record struct DriveTarget(DriveKind Kind, string? Path);
 /// <c>core.worktree</c>) or created after the check, Linux bind mounts and other mount aliases, the other mount paths of a volume a
 /// link part-way along the path leads to (only the final volume's are walked), volumes unknown to the mount manager (refused); and on
 /// Unix a protected folder named by a spelling the file system equates that the fold does not: simple lower-casing (U+0130 as a
-/// plain <c>i</c>), compatibility forms (NFKC: fullwidth letters and the like), a case table of its own, or the U+0345 and iota
-/// sequences listed at <see cref="Fold"/> (they need the protected folder's own path to hold such a sequence); comparing identity
-/// (device and inode) instead of spelling would close that.
+/// plain <c>i</c>), compatibility forms (NFKC: fullwidth letters and the like) or a case table of its own (the U+0345 and iota
+/// sequences are handled, checked as far as written at <see cref="Fold"/>); comparing identity (device and inode) instead of
+/// spelling would close that.
 /// Stateless and thread-safe.
 /// </para>
 /// </remarks>
@@ -482,8 +482,8 @@ public static partial class ClientOutputPath
     /// to make spellings that NFC normalisation and full Unicode case folding make equal compare equal, with the exceptions listed at
     /// <see cref="Fold"/> (and many spellings they would not make equal compare equal too, which over-refuses on a case-sensitive file
     /// system, the safe side). Not covered: simple lower-casing (U+0130 as a plain <c>i</c>), compatibility forms (NFKC: fullwidth
-    /// letters and the like), a case table of the file system's own, and the U+0345 and iota sequences listed at <see cref="Fold"/>,
-    /// some of which standard NFC plus full case folding does make equal. Pure function.
+    /// letters and the like), and a case table of the file system's own. How far the U+0345 and iota sequences were checked is
+    /// written at <see cref="Fold"/>. Pure function.
     /// </summary>
     internal static bool UnixInsideOrEqual(string path, string folder)
     {
@@ -506,22 +506,20 @@ public static partial class ClientOutputPath
     //    ASCII, or is ASCII next to a modifier letter (U+0149, U+1E9A), are replaced by that form, upper-cased (AsciiEquivalent).
     // 2. ASCII is upper-cased, and every maximal run of other characters and combining marks (with the ASCII character a mark
     //    combines with) becomes one '?'; '/' is never part of a run. U+0345 is not taken for a combining mark: it case-folds to the
-    //    letter U+03B9, so after an ASCII letter it gives the same '?' that letter does rather than join the ASCII letter to a run;
-    //    but whether an ASCII character combines is decided by the first rune after any U+0345s, because NFC moves U+0345 (combining
-    //    class 240) behind the character's marks of combining class 1 to 239 (not behind a class-0 mark: see below).
+    //    letter U+03B9. An ASCII character (X) joins the run when the rune after it, past any run of iotas (U+0345, U+03B9, U+0399,
+    //    U+1FBE), is a mark (Mn, Mc, Me) or a precomposed iota with a mark (IsIotaWithMark). So X I, for any of those iotas, folds to
+    //    'X?', and X I M, X M I, X U+0345 M and X followed by a precomposed iota with a mark all fold to '?', whether a file system
+    //    normalises before it folds (NFC moves U+0345 behind marks of class 1 to 239, not behind class-0 marks such as U+20DD), folds
+    //    first (ext4/f2fs casefold turn U+0345 into a starter iota) or never normalises.
     // Intended result: two spellings that NFC and full case folding make equal fold equal, because a difference between them is one
-    // of the step-1 characters or lies inside a run (a precomposed letter and its decomposed form are both one run). The table and
-    // the U+0345 rule come from reviews against the Unicode 16.0.0 tables (2026-11-14), not from enumerating every code point here;
-    // the cases the tests pin are a U+0345 against a U+03B9, and a U+0345 U+0301 against a-acute U+0345.
-    // Not covered (X is any ASCII character but '/'; reaching any of these needs the protected folder's own path to hold the
-    // sequence; the KnownResidual tests pin them as they are):
-    // - X U+0345 M, where M is a mark of combining class 0 (U+20DD, U+093E), against X U+03B9 M. Standard NFC/NFD plus full case
-    //   folding makes them equal (casefold ext4/f2fs, APFS); here the first folds to '?' and the second to 'X?'.
-    // - On file systems that case-fold before they normalise, or never normalise (ext4/f2fs casefold, ZFS case-insensitive
-    //   without normalization): X U+0345 M, for any mark M, against X I M (I is U+03B9, U+0399 or U+1FBE), and against X followed
-    //   by a precomposed iota with a mark (U+03AF and the like). Same split: '?' against 'X?'.
-    // - Simple lower-casing (U+0130 lower-cases to a plain 'i' there, but fully folds to i U+0307, which the tests keep);
-    //   compatibility forms (NFKC); and file systems with case tables of their own.
+    // of the step-1 characters or lies inside a run (a precomposed letter and its decomposed form are both one run). The step-1 table
+    // and the iota rule come from reviews against the Unicode 16.0.0 tables (2026-11-14). The iota rule was also checked by brute
+    // force on a copy of this function (Python, Unicode 15.0): over every string of up to four runes from the letter a, a digit, a
+    // space, U+0345, the three iotas, U+0301, U+0308, U+20DD, U+093E, a-acute, alpha, alpha with ypogegrammeni and three
+    // precomposed iotas, no two spellings that NFC-then-fold, fold-then-NFD or per-code-point upper-casing make equal folded
+    // apart. Longer sequences and other characters were not enumerated.
+    // Not covered: simple lower-casing (U+0130 lower-cases to a plain 'i' there, but fully folds to i U+0307, which the tests keep);
+    // compatibility forms (NFKC); and file systems with case tables of their own.
     // Many spellings that NFC and case folding would not make equal fold equal too (two different non-ASCII names of the same
     // shape), which only over-refuses.
     private static string Fold(string text)
@@ -561,17 +559,17 @@ public static partial class ClientOutputPath
 
             if (rune.IsAscii)
             {
-                // U+0345 is not a mark here (see IsCombiningMark), but NFC may reorder it behind another mark that does combine with
-                // this character (a U+0345 U+0301 is a U+0301 U+0345), so the test looks past any U+0345 first (for a class-0 mark
-                // that over-joins: see the residual list above Fold). Only an ASCII
-                // character looks ahead, so a long run of U+0345 is walked once, not once per rune.
+                // The character joins the run when what follows it, past any run of iotas (U+0345 and the three letters it may
+                // fold to: U+03B9, U+0399, U+1FBE), is a mark or a precomposed iota with a mark: then, whether a file system
+                // normalises before or after it folds, the spelling can equal one where a mark sits on this character. Only an
+                // ASCII character looks ahead, so a long run of iotas is walked once, not once per rune.
                 int next = i + 1;
-                while (next < runes.Count && runes[next].Value == 0x0345)
+                while (next < runes.Count && (runes[next].Value is 0x0345 or 0x03B9 or 0x0399 or 0x1FBE))
                 {
                     next++;
                 }
 
-                if (next >= runes.Count || !IsCombiningMark(runes[next]))
+                if (next >= runes.Count || !(IsCombiningMark(runes[next]) || IsIotaWithMark(runes[next].Value)))
                 {
                     folded.Append(char.ToUpperInvariant((char)rune.Value));
                     inRun = false;
@@ -620,7 +618,14 @@ public static partial class ClientOutputPath
             or 0xFEFF or 0xFFA0 or (>= 0xFFF0 and <= 0xFFF8) or (>= 0x1BCA0 and <= 0x1BCA3) or (>= 0x1D173 and <= 0x1D17A)
             or (>= 0xE0000 and <= 0xE0FFF);
 
+    // Every code point whose canonical decomposition starts with U+03B9 or U+0399 (33 of them; checked against the Unicode 15.0
+    // tables of Python's unicodedata and the 16.0.0 tables in the 2026-11-14 review): an iota with a mark, written precomposed.
+    private static bool IsIotaWithMark(int value)
+        => value is 0x038A or 0x0390 or 0x03AA or 0x03AF or 0x03CA or (>= 0x1F30 and <= 0x1F3F) or 0x1F76 or 0x1F77
+            or (>= 0x1FD0 and <= 0x1FD3) or (>= 0x1FD6 and <= 0x1FDB);
+
     // U+0345 COMBINING GREEK YPOGEGRAMMENI is a mark that case-folds to the letter U+03B9, so it is treated as a letter (see Fold).
+    // Mn, Mc and Me count as marks.
     private static bool IsCombiningMark(Rune rune)
         => rune.Value != 0x0345
             && Rune.GetUnicodeCategory(rune) is UnicodeCategory.NonSpacingMark or UnicodeCategory.SpacingCombiningMark or UnicodeCategory.EnclosingMark;

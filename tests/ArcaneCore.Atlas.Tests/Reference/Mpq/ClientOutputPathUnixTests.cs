@@ -140,27 +140,29 @@ public sealed class ClientOutputPathUnixTests
     // Canonically equivalent orders of U+0345 (combining class 240) and U+0301 (230): NFC makes both a-acute U+0345.
     [InlineData("/data/áͅx/y", "/data/áͅx", true)]
     [InlineData("/data/áͅx", "/data/áͅx", true)]
+
+    // An ASCII character, U+0345 or an iota, then a mark: one name whether the file system normalises before or after it folds.
+    // U+20DD (Me) and U+093E (Mc) have combining class 0, so NFC does not move U+0345 behind them.
+    [InlineData("/data/a\u03B9\u20DD/x", "/data/a\u0345\u20DD", true)]
+    [InlineData("/data/a\u03B9\u093E/x", "/data/a\u0345\u093E", true)]
+    [InlineData("/data/a\u03B9\u0301x", "/data/a\u0345\u0301x", true)]
+    [InlineData("/data/1\u03B9\u0301x", "/data/1\u0345\u0301x", true)]
+    [InlineData("/data/_\u03B9\u0301x", "/data/_\u0345\u0301x", true)]
+    [InlineData("/data/a\u0399\u0301x", "/data/a\u0345\u0301x", true)]
+    [InlineData("/data/a\u1FBE\u0301x", "/data/a\u0345\u0301x", true)]
+
+    // Against a precomposed iota with that mark (U+03AF iota with tonos, U+038A capital iota with tonos).
+    [InlineData("/data/a\u03AF/x", "/data/a\u0345\u0301", true)]
+    [InlineData("/data/1\u03AFx", "/data/1\u0345\u0301x", true)]
+    [InlineData("/data/a\u038Ax", "/data/a\u0399\u0301x", true)]
+    [InlineData("/data/a\u03AFx", "/data/a\u1FBE\u0301x", true)]
+
+    // Must stay apart, so the rule cannot pass by refusing everything.
+    [InlineData("/data/abc/x", "/data/abd", false)]
+    [InlineData("/data/a\u0345x", "/data/b\u0345x", false)]
     public void N10_TheProtectedFolderComparison_IgnoresCaseAndUnicodeNormalisation(string path, string folder, bool inside)
     {
         Assert.Equal(inside, ClientOutputPath.UnixInsideOrEqual(path, folder));
-    }
-
-    /// <summary>
-    /// NOT desired behaviour: these pin gaps the fold is known to have today, listed as "Not covered" in the comment above
-    /// ClientOutputPath.Fold. Each pair names one folder on some normalising, case-insensitive file system, yet the comparison says
-    /// "not inside", so such an <c>out</c> would be accepted. A change that closes a gap makes its row fail: move the row to the N10
-    /// theory (expecting true) and correct the residual list.
-    /// </summary>
-    [Theory]
-
-    // a U+0345 U+20DD (a combining-class-0 mark) against a U+03B9 U+20DD: equal under standard NFC plus full case folding.
-    [InlineData("/data/aι⃝/x", "/data/aͅ⃝")]
-
-    // a U+0345 U+0301 against a and the precomposed U+03AF (iota with tonos): equal where folding comes before normalising (ext4 casefold).
-    [InlineData("/data/aί/x", "/data/áͅ")]
-    public void KnownResidual_FoldGaps_AreNotDetectedToday(string path, string folder)
-    {
-        Assert.False(ClientOutputPath.UnixInsideOrEqual(path, folder));
     }
 
     /// <summary>
