@@ -32,7 +32,51 @@ public. The same check runs on the child folder the command writes (`maps`, `vma
 lands in a working tree or the client folder is refused. Model names from the client become file names only when they are
 plain file names; a placement with any other name is dropped and reported as a problem. Staged `.part` files are created
 fresh (an existing entry, including a link, is deleted first) and removed when a write fails. A link swapped in after the
-check (time of check versus time of use) is not covered.
+check (time of check versus time of use) is not covered. On Windows the folder must also be written as `X:\...`: a path
+that starts with a separator (`\\?\`, `\\.\`, UNC, `\??\` in any form) is refused as a device or network path, no
+component may end in a space or a dot (Windows drops it, so `repo \` would be a sibling of `repo`), a `subst` drive is
+judged by the folder it stands for, and a drive letter mapped to a share is refused.
+
+### 1a. Review fixes and real-data results (later the same day)
+
+The review findings on the branch were fixed in three lanes, merged as `2adb92f9`, `2fc04d43` and `630484c2`:
+
+- **`extract.maps`**: a Map.dbc row whose directory is empty or holds `\`, `/` or `:` is a failure of that map (tile
+  `-1,-1`, no WDT), and the run goes on. A shown liquid square with a non-finite corner height refuses its tile, which is
+  reported and not written. Hidden squares are never read, as in the reference.
+- **`extract.vmaps`**:
+  - A WMO with a non-finite group bound is reported and not placed (`VmapBih` refuses non-finite input instead of
+    looping for ever, which vmangos' `BIH::subdivide` would).
+  - A placement whose position, rotation, scale or bounds are not finite, or whose scale is not above zero, is dropped
+    and reported once per kind and name, because the server's `ModelSpawn.Read` would refuse the whole tile.
+  - A map that ends with no placements has its old tree and tiles removed.
+  - M2 names resolve as vmangos resolves them: every root WMO's MODN doodad names first, then the ADTs in map order. A
+    path that fails no longer blocks a later path with the same plain name, and two paths that both convert to one plain
+    name are reported (the first wins).
+- **`extract.mmaps`**:
+  - With `overwrite` off, a map's tiles are kept only if the `NNN.mmap` about to be written is byte-identical to the
+    one on disk. Otherwise every tile of the map is rebuilt and one problem says so, because tiles store coordinates
+    relative to the origin of the run that built them.
+  - A damaged `.map` header, a huge height offset or a damaged tree of a tile-less map is a problem of that file or
+    map, not an abort.
+  - A tile written with failed sub-tiles counts as `partial` (summed and per map, also inside `written`).
+
+With `ARCANECORE_TEST_CLIENT_FILES_DIR` and `ARCANECORE_TEST_TERRAIN_DIR` set, all five real-data tests pass on the
+5875 client (Windows, .NET 10), with the same numbers before and after the fixes:
+
+| Output | Compared with vmangos |
+|---|---|
+| `.map` | 2,429 of 2,429 byte-identical; the file set is the same |
+| vmap model files | 4,282 byte-identical; 506 more exist only in the reference; 50 problems, all zero-byte ADTs in the extracted client |
+| vmap trees and tiles | 1,293 files, 503,794 spawn records match |
+| mmaps 0004931 / 0004832 / 0004830 | 8,526 / 11,988 / 21,114 polygons against 8,481 / 11,917 / 20,799; walkable area per flag within 10%; a path between two fixed point pairs on 0/48/30 found on both meshes, lengths within 15% (200.5 against 183.2, 207.6 against 207.8) |
+
+The one problem on 0004830 is DotRecast's: `rcBuildContours` throws "Multiple outlines for region" on 3 of 625
+sub-tiles, where vmangos' Recast logs the same condition and keeps the sub-tile (`RecastContour.cpp:1056`). Those
+sub-tiles are missing from our tile. Changing the vendored DotRecast is a decision for the maintainer.
+
+Still not run: an extraction from the MPQ archives on real data (`MapExtractorMpqTests` covers the MPQ path on a
+synthetic client).
 
 ## 2. Commits
 
@@ -178,9 +222,6 @@ Atlas can show differences directly: `arcane-atlas serve --data <new-root> --cli
   startup log lines (terrain, vmaps, navmeshes), then creature pathing in a city and a dungeon. This makes the area
   *implemented*, not *accepted*: real-client acceptance is the maintainer's
   ([client acceptance](../guide/client-acceptance.md)).
-- Update the "has not been run yet" sentences in [atlas](../areas/atlas.md),
-  [maps, vmaps and mmaps](../integration/maps-vmaps-mmaps.md) and `CHANGELOG.md` with what was actually run, on which
-  data, with counts.
 - Run the full local merge gate from `CLAUDE.md` before a pull request. Open one only when the maintainer asks.
 
 ## 8. Decisions already taken, and what was left out

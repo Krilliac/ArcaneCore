@@ -192,9 +192,10 @@ terrain inside buildings, and `threads=N` sets how many tiles are built at once.
 `MoveMapGenerator` in its inputs, parameters and filters and uses the vendored DotRecast for the
 Recast steps, so its tiles cover the same ground with other polygons. It writes no transport meshes
 and no off-mesh connections. On synthetic data the server's `NavMeshPathfinder` paths correctly on
-its tiles; `MmapExtractorRealDataTests` (walkable area per kind of ground against vmangos' tiles on
-three real tiles) **has not been run yet**, and how long a full build takes in managed code has not
-been measured.
+its tiles. `MmapExtractorRealDataTests` passes on the 5875 client: on three real tiles the walkable
+area per kind of ground is within 10% of vmangos' tiles, and a path between two fixed point pairs on
+0/48/30 is found on both meshes with lengths within 15%. How long a full build takes in managed code
+has not been measured.
 
 ## Verification
 
