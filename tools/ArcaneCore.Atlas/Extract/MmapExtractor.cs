@@ -50,6 +50,12 @@ public sealed class MmapExtractor
     private readonly string _dataRoot;
     private readonly string _mmapsDirectory;
 
+    /// <summary>
+    /// Test seam: called with the tile file's name after each tile file is written (on whichever thread built it), so a test
+    /// can stop a run deterministically between tiles. Null in production.
+    /// </summary>
+    internal Action<string>? TileWritten { get; set; }
+
     /// <param name="dataRoot">The server data root holding <c>maps</c> and <c>vmaps</c>.</param>
     /// <param name="mmapsDirectory">Where the files go; null for <c>&lt;data root&gt;/mmaps</c>.</param>
     public MmapExtractor(string dataRoot, string? mmapsDirectory = null)
@@ -66,7 +72,10 @@ public sealed class MmapExtractor
     /// <param name="threads">Tiles built at once (at least 1).</param>
     /// <param name="onlyTile">
     /// Build this one tile (the server's tile X and Y) of each selected map. The map's parameter file is still written
-    /// from all its tiles, so the tile fits a full build.
+    /// from all its tiles, so the tile fits a full build. A map whose tiles on disk were built against other parameters
+    /// (origin, tile size or tile count) is refused with an <see cref="ArgumentException"/> and nothing of it is written or
+    /// deleted, whatever <paramref name="overwrite"/> says: the tiles beside the new tile would stay in the wrong slot, so
+    /// that map has to be built whole, without a tile.
     /// </param>
     public MmapExtractReport Extract(IReadOnlyCollection<uint>? onlyMaps, bool overwrite, bool quick, int threads, CancellationToken cancellationToken, (int X, int Y)? onlyTile = null)
     {
@@ -126,12 +135,7 @@ public sealed class MmapExtractor
             BinaryPrimitives.WriteSingleLittleEndian(parameters.AsSpan(16), MmapTerrain.GridSize);
             BinaryPrimitives.WriteInt32LittleEndian(parameters.AsSpan(20), mapTiles.Count);
 
-            // Tiles hold Detour coordinates relative to the origin of the run that built them, so a tile left from a run with
-            // another origin, tile size or tile count does not fit this map's parameter file: such a map is rebuilt whole.
-            string parametersPath = Path.Combine(mmapsDirectory, NavMeshFormat.ParamsFileName(mapId));
-            bool staleTiles = !overwrite && ParametersDiffer(parametersPath, parameters);
-            bytes += ExtractOutput.WriteWhole(parametersPath, parameters);
-
+            // The requested tile is checked before anything of this map is written or deleted.
             // ref: vmangos@0e3ff01 contrib/mmap/src/MapBuilder.cpp:319-370 (buildSingleTile)
             IEnumerable<uint> building = mapTiles;
             if (onlyTile is { } single)
@@ -145,12 +149,48 @@ public sealed class MmapExtractor
                 building = [packedSingle];
             }
 
+            // A tile's vertices are world coordinates, but its header's X and Y are its slot counted from the origin of the run
+            // that built it, so a tile left from a run with another origin, tile size or tile count sits in the wrong slot of
+            // this map's parameter file. When the parameter file is about to change, every tile of the map on disk is therefore
+            // deleted BEFORE the new file is written: an interrupted or partial run then leaves fewer tiles, never stale ones that
+            // the next run would take for current. One tile cannot be rebuilt alone against changed parameters.
+            // ref: vmangos@0e3ff01 contrib/mmap/src/TileWorker.cpp:286-288 and :813-814 (the tile's own X, Y), MapBuilder.cpp:430-489 (the origin)
+            string parametersPath = Path.Combine(mmapsDirectory, NavMeshFormat.ParamsFileName(mapId));
+            List<string> oldTiles = TileFilesOf(mmapsDirectory, mapId);
+            bool parametersChanged = oldTiles.Count > 0 && ParametersDiffer(parametersPath, parameters);
+            if (parametersChanged && onlyTile is not null)
+            {
+                throw new ArgumentException($"Map {mapId}'s navmesh parameters changed since its tiles were built; build the whole map without tile=. Nothing was written for this map.", nameof(onlyTile));
+            }
+
+            int deleted = 0;
+            if (parametersChanged)
+            {
+                try
+                {
+                    foreach (string old in oldTiles)
+                    {
+                        // File.Delete removes a link itself and never follows it.
+                        File.Delete(old);
+                        deleted++;
+                    }
+                }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                {
+                    // The parameter file is still the old one, which the tiles left still match.
+                    problems.Add($"map {mapId}: the existing tiles built against the old {NavMeshFormat.ParamsFileName(mapId)} could not all be deleted ({deleted} of {oldTiles.Count} were); nothing else was written for this map: {e.Message}");
+                    reports.Add(new MmapExtractMapReport(mapId, mapTiles.Count, 0, 0, 0, 1, 0));
+                    continue;
+                }
+            }
+
+            bytes += ExtractOutput.WriteWhole(parametersPath, parameters);
+
             int written = 0;
             int existing = 0;
             int empty = 0;
             int failed = 0;
             int partial = 0;
-            int rebuiltStale = 0;
             long polygons = 0;
             long tileBytes = 0;
             Parallel.ForEach(building, new ParallelOptions { MaxDegreeOfParallelism = threads, CancellationToken = cancellationToken }, packed =>
@@ -163,13 +203,21 @@ public sealed class MmapExtractor
                 string target = Path.Combine(mmapsDirectory, name);
                 if (!overwrite && IsCurrentTile(target))
                 {
-                    if (!staleTiles)
-                    {
-                        Interlocked.Increment(ref existing);
-                        return;
-                    }
+                    Interlocked.Increment(ref existing);
+                    return;
+                }
 
-                    Interlocked.Increment(ref rebuiltStale);
+                // A tile that is rebuilt and comes out empty or failed must not leave its earlier file behind.
+                void DropOldFile()
+                {
+                    try
+                    {
+                        File.Delete(target);
+                    }
+                    catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                    {
+                        problems.Add($"{name}: the earlier tile file could not be deleted: {e.Message}");
+                    }
                 }
 
                 try
@@ -195,6 +243,7 @@ public sealed class MmapExtractor
                             problems.Add($"{name}: {result.Problem}");
                         }
 
+                        DropOldFile();
                         return;
                     }
 
@@ -205,18 +254,20 @@ public sealed class MmapExtractor
                     {
                         Interlocked.Increment(ref partial);
                     }
+
+                    TileWritten?.Invoke(name);
                 }
                 catch (Exception e) when (e is InvalidDataException or IOException or UnauthorizedAccessException)
                 {
                     Interlocked.Increment(ref failed);
                     problems.Add($"{name}: {e.Message}");
+                    DropOldFile();
                 }
             });
 
-            if (rebuiltStale > 0)
+            if (parametersChanged)
             {
-                string others = onlyTile is null ? string.Empty : " The other tiles of the map were not built in this run and are still stale.";
-                problems.Add($"map {mapId}: {NavMeshFormat.ParamsFileName(mapId)} differs from the one the existing tiles were built with (origin, tile size or tile count); {rebuiltStale} existing tile(s) were rebuilt as if overwrite were set.{others}");
+                problems.Add($"map {mapId}: {NavMeshFormat.ParamsFileName(mapId)} differs from the one the existing tiles were built with (origin, tile size or tile count); {deleted} existing tile file(s) were deleted and {written} of the map's {mapTiles.Count} tile(s) rebuilt.");
             }
 
             bytes += tileBytes;
@@ -364,6 +415,29 @@ public sealed class MmapExtractor
                 tiles.Add(((uint)x << 16) | (uint)y);
             }
         }
+    }
+
+    /// <summary>
+    /// The tile files of one map in the folder: only names that <see cref="NavMeshFormat.TileFileName"/> produces for the map
+    /// (compared without regard to case, as a Windows or macOS file system resolves them), directly in the folder (nothing below it, no folders).
+    /// </summary>
+    private static List<string> TileFilesOf(string directory, uint mapId)
+    {
+        string prefix = mapId.ToString("D3", CultureInfo.InvariantCulture);
+        var files = new List<string>();
+        foreach (string file in Directory.EnumerateFiles(directory, prefix + "*.mmtile"))
+        {
+            string name = Path.GetFileName(file);
+            if (name.Length == prefix.Length + 4 + ".mmtile".Length
+                && int.TryParse(name.AsSpan(prefix.Length, 2), NumberStyles.None, CultureInfo.InvariantCulture, out int x)
+                && int.TryParse(name.AsSpan(prefix.Length + 2, 2), NumberStyles.None, CultureInfo.InvariantCulture, out int y)
+                && string.Equals(name, NavMeshFormat.TileFileName(mapId, x, y), StringComparison.OrdinalIgnoreCase))
+            {
+                files.Add(file);
+            }
+        }
+
+        return files;
     }
 
     /// <summary>Whether the parameter file on disk is missing or is not the bytes about to be written.</summary>

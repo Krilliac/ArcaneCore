@@ -158,7 +158,18 @@ public sealed class VmapExtractor
     private MapResult ExtractMap(ClientMap map, string directory, VmapModelLibrary library, Dictionary<(uint, ushort), uint> ids, List<string> problems, HashSet<string> droppedNames, CancellationToken cancellationToken)
     {
         // ref: vmangos@0e3ff01 contrib/vmap_extractor/vmapextract/vmapexport.cpp:245-283 (ParsMapFiles: the WDT, then every <Map>_<x>_<y>.adt for x, y in 0..63)
-        string wdtPath = ClientMapPaths.WdtPath(map.Directory);
+        // A Map.dbc directory that cannot be one folder name (empty, or holding \, / or :) is this map's refused file, not the run's end.
+        string wdtPath;
+        try
+        {
+            wdtPath = ClientMapPaths.WdtPath(map.Directory);
+        }
+        catch (ArgumentException)
+        {
+            problems.Add($"the map directory '{map.Directory}' of map {map.Id} in Map.dbc is not a single folder name, so the map has no WDT to open; the map was refused");
+            return new MapResult(new VmapExtractMapReport(map.Id, map.Directory, HasWdt: false, Tiled: false, 0, 0, Failed: 1), 0, []);
+        }
+
         WdtFile wdt;
         try
         {
@@ -256,7 +267,7 @@ public sealed class VmapExtractor
         if (placements.Count == 0)
         {
             // The reference writes nothing for a map without a single placement, and an earlier run's files of this map are no longer true.
-            DeleteOldFiles(map, directory, tree: true);
+            DeleteOldFiles(map, directory, tree: true, problems);
             return new MapResult(new VmapExtractMapReport(map.Id, map.Directory, HasWdt: true, Tiled: true, 0, 0, failed), 0, []);
         }
 
@@ -283,7 +294,7 @@ public sealed class VmapExtractor
     private static bool IsFinite(Vector3 v) => float.IsFinite(v.X) && float.IsFinite(v.Y) && float.IsFinite(v.Z);
 
     /// <summary>Deletes an earlier run's tile files of one map (and its tree file when asked): only that map's own file names, nothing below the folder.</summary>
-    private static void DeleteOldFiles(ClientMap map, string directory, bool tree)
+    private static void DeleteOldFiles(ClientMap map, string directory, bool tree, List<string>? problems = null)
     {
         foreach (string stale in Directory.EnumerateFiles(directory, $"{map.Id:D3}_??_??.vmtile"))
         {
@@ -292,7 +303,15 @@ public sealed class VmapExtractor
 
         if (tree)
         {
-            File.Delete(Path.Combine(directory, VMapFormat.TreeFileName(map.Id)));
+            // A folder (or folder link) with the tree file's name is not ours to delete: File.Delete would throw and end the run.
+            string treePath = Path.Combine(directory, VMapFormat.TreeFileName(map.Id));
+            if (Directory.Exists(treePath))
+            {
+                problems?.Add($"map {map.Id}: '{VMapFormat.TreeFileName(map.Id)}' in the vmaps folder is a folder, not a tree file; it was left alone");
+                return;
+            }
+
+            File.Delete(treePath);
         }
     }
 
