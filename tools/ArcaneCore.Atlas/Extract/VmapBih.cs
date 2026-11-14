@@ -39,7 +39,7 @@ internal static class VmapBih
     public static BihTree Empty { get; } = BihTree.FromRaw(new Vector3(QuietNaN), new Vector3(QuietNaN), [LeafWord, 0, 0], []);
 
     /// <summary>Builds the tree over <paramref name="bounds"/> with at most <paramref name="leafSize"/> primitives per leaf where a split is possible.</summary>
-    /// <exception cref="InvalidDataException">The bounds are not usable (the reference tool stops with "negative node extents" or "invalid node overlap").</exception>
+    /// <exception cref="InvalidDataException">The bounds are not usable (the reference tool stops with "negative node extents" or "invalid node overlap"), or a bound is NaN or infinite (the reference tool never finishes on those).</exception>
     public static BihTree Build(IReadOnlyList<(Vector3 Low, Vector3 High)> bounds, int leafSize = DefaultLeafSize)
     {
         ArgumentNullException.ThrowIfNull(bounds);
@@ -56,6 +56,13 @@ internal static class VmapBih
         for (int i = 0; i < bounds.Count; i++)
         {
             indices[i] = (uint)i;
+            if (!IsFinite(bounds[i].Low) || !IsFinite(bounds[i].High))
+            {
+                // The reference tool loops for ever on a NaN bound (the split is NaN, every primitive goes right and the "stuck" test compares NaN with NaN); a bad client file is reported instead.
+                // ref: vmangos@0e3ff01 src/game/vmap/BIH.cpp:134,156 (the stuck test is FuzzyEq(prevSplit, split))
+                throw new InvalidDataException($"primitive {i} has a bound that is not finite ({bounds[i].Low} to {bounds[i].High}).");
+            }
+
             boxes[i] = new Box { Lo = bounds[i].Low, Hi = bounds[i].High };
             all = i == 0 ? boxes[0] : Merge(all, boxes[i]);
         }
@@ -296,6 +303,8 @@ internal static class VmapBih
 
         return ny > nz ? 1 : 2;
     }
+
+    private static bool IsFinite(Vector3 v) => float.IsFinite(v.X) && float.IsFinite(v.Y) && float.IsFinite(v.Z);
 
     // ref: vmangos@0e3ff01 dep/g3dlite/include/G3D/g3dmath.h:839-856 (a == b, or |a - b| within 0.00001 * (|a| + 1))
     private static bool FuzzyEq(float a, float b)
