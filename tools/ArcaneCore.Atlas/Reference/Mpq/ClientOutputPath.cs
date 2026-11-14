@@ -33,7 +33,7 @@ internal readonly record struct DriveTarget(DriveKind Kind, string? Path);
 /// <summary>
 /// Decides where Atlas may write client data and data derived from it. It must never end up in a git working tree or bare
 /// repository (it is not ours to commit) or inside the client installation or another protected folder (which stay read-only),
-/// whatever links, drive letters or mount points lead there.
+/// whatever links, drive letters or mount points lead there, except in the cases listed as not covered below.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -45,8 +45,9 @@ internal readonly record struct DriveTarget(DriveKind Kind, string? Path);
 /// exist yet, is appended as typed. The canonical path is returned and is the path the caller writes to.
 /// </para>
 /// <para>
-/// The working-tree walk runs on every alias of the path: as typed, canonical, and through every mount-manager path of its volume
-/// (transitively, refused past <see cref="MaxMountAliases"/>). Each ancestor's <c>.git</c> is probed tri-state (present refuses, an
+/// The working-tree walk runs on these aliases of the path: as typed, canonical, each resolved prefix with the rest of the path
+/// joined on (see below), and through every mount-manager path of the final volume (transitively, refused past
+/// <see cref="MaxMountAliases"/>); not on every path that may reach it (see the residual list). Each ancestor's <c>.git</c> is probed tri-state (present refuses, an
 /// error refuses, only "not found" continues), and an ancestor holding <c>HEAD</c>, <c>objects</c> and <c>refs</c> is a bare
 /// repository. Protected folders are canonicalised the same way (one that cannot be refuses the command) and compared in volume GUID
 /// space and by name across the aliases.
@@ -82,7 +83,8 @@ internal readonly record struct DriveTarget(DriveKind Kind, string? Path);
 /// <c>core.worktree</c>) or created after the check, Linux bind mounts and other mount aliases, the other mount paths of a volume a
 /// link part-way along the path leads to (only the final volume's are walked), volumes unknown to the mount manager (refused); and on
 /// Unix a protected folder named by a spelling the file system equates that the fold does not: simple lower-casing (U+0130 as a
-/// plain <c>i</c>), compatibility forms (NFKC: fullwidth letters and the like) or a case table of its own; comparing identity
+/// plain <c>i</c>), compatibility forms (NFKC: fullwidth letters and the like), a case table of its own, or folding U+0345 to
+/// U+03B9 before reordering the marks after an ASCII letter (see <see cref="Fold"/>); comparing identity
 /// (device and inode) instead of spelling would close that.
 /// Stateless and thread-safe.
 /// </para>
@@ -476,10 +478,12 @@ public static partial class ClientOutputPath
 
     /// <summary>
     /// Whether <paramref name="path"/> is <paramref name="folder"/> or inside it, compared through <see cref="Fold"/>: a case-insensitive
-    /// or normalising file system (WSL <c>/mnt/c</c>, casefold ext4, APFS, vfat, CIFS) opens more than one spelling of a name. Two
-    /// spellings that NFC normalisation and Unicode case folding make equal compare equal (and so do many they would not, which
-    /// over-refuses on a case-sensitive file system, the safe side). Not covered: spellings a file system equates beyond that, through
-    /// compatibility forms (NFKC: fullwidth letters and the like) or a case table of its own. Pure function.
+    /// or normalising file system (WSL <c>/mnt/c</c>, casefold ext4, APFS, vfat, CIFS) opens more than one spelling of a name. Meant
+    /// to make spellings that NFC normalisation and full Unicode case folding make equal compare equal, with the exceptions listed at
+    /// <see cref="Fold"/> (and many spellings they would not make equal compare equal too, which over-refuses on a case-sensitive file
+    /// system, the safe side). Not covered: simple lower-casing (U+0130 as a plain <c>i</c>), compatibility forms (NFKC: fullwidth
+    /// letters and the like), a case table of the file system's own, and an ASCII letter followed by U+0345 and another mark against
+    /// the same letter, U+03B9 and that mark. Pure function.
     /// </summary>
     internal static bool UnixInsideOrEqual(string path, string folder)
     {
@@ -502,13 +506,18 @@ public static partial class ClientOutputPath
     //    ASCII, or is ASCII next to a modifier letter (U+0149, U+1E9A), are replaced by that form, upper-cased (AsciiEquivalent).
     // 2. ASCII is upper-cased, and every maximal run of other characters and combining marks (with the ASCII character a mark
     //    combines with) becomes one '?'; '/' is never part of a run. U+0345 is not taken for a combining mark: it case-folds to the
-    //    letter U+03B9, so after an ASCII letter it must give the same '?' that letter does, not join the ASCII letter to its run.
+    //    letter U+03B9, so after an ASCII letter it gives the same '?' that letter does rather than join the ASCII letter to a run;
+    //    but whether an ASCII letter combines is decided by the first rune after any U+0345s, because NFC moves U+0345 (combining
+    //    class 240) behind the other marks of the letter.
     // Intended result: two spellings that NFC and full case folding make equal fold equal, because a difference between them is one
     // of the step-1 characters or lies inside a run (a precomposed letter and its decomposed form are both one run). The table and
-    // the U+0345 exception come from a review against the Unicode 16.0.0 tables (2026-11-14), not from enumerating every code point
-    // here. Not covered: simple lower-casing (U+0130 lower-cases to a plain 'i' there, but fully folds to i U+0307, which the tests
-    // keep), compatibility forms (NFKC), and file systems with case tables of their own. Many spellings that NFC and case folding
-    // would not make equal fold equal too (two different non-ASCII names of the same shape), which only over-refuses.
+    // the U+0345 rule come from reviews against the Unicode 16.0.0 tables (2026-11-14), not from enumerating every code point here;
+    // the cases the tests pin are a U+0345 against a U+03B9, and a U+0345 U+0301 against a-acute U+0345. Not covered: an ASCII
+    // letter, U+0345 and another mark against the same letter, U+03B9 and that mark (equal only to a file system that folds each
+    // code point before it reorders marks); simple lower-casing (U+0130 lower-cases to a plain 'i' there, but fully folds to
+    // i U+0307, which the tests keep); compatibility forms (NFKC); and file systems with case tables of their own. Many spellings
+    // that NFC and case folding would not make equal fold equal too (two different non-ASCII names of the same shape), which only
+    // over-refuses.
     private static string Fold(string text)
     {
         var runes = new List<Rune>(text.Length);
@@ -544,7 +553,15 @@ public static partial class ClientOutputPath
                 continue;
             }
 
-            bool combinesWithNext = i + 1 < runes.Count && IsCombiningMark(runes[i + 1]);
+            // U+0345 is not a mark here (see IsCombiningMark), but NFC may reorder it behind another mark that does combine with
+            // this letter (a U+0345 U+0301 is a U+0301 U+0345), so the test looks past any U+0345 first.
+            int next = i + 1;
+            while (next < runes.Count && runes[next].Value == 0x0345)
+            {
+                next++;
+            }
+
+            bool combinesWithNext = next < runes.Count && IsCombiningMark(runes[next]);
             if (rune.IsAscii && !combinesWithNext)
             {
                 folded.Append(char.ToUpperInvariant((char)rune.Value));

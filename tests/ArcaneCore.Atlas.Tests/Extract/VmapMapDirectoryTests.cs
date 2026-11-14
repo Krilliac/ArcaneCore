@@ -35,7 +35,7 @@ public sealed class VmapMapDirectoryTests
         ClientMapDirectory maps = Client(fixture);
         using var output = new TestDirectory();
 
-        VmapExtractReport report = new VmapExtractor(fixture.Files, maps).Extract(output.Path, null, threads: 1, CancellationToken.None);
+        VmapExtractReport report = new VmapExtractor(fixture.Files, maps).Extract(output.Path, null, threads: 1, CancellationToken.None, Path.Combine(output.Path, VmapExtractor.VmapsFolder));
 
         Assert.Equal(new uint[] { 0, 7, 8, 9, 10 }, report.Maps.Select(m => m.Id));
         Assert.True(report.Maps[0].HasWdt);
@@ -61,7 +61,7 @@ public sealed class VmapMapDirectoryTests
         File.WriteAllBytes(inside, [1]);
 
         // Azeroth has no placements, so the extractor wants to delete an earlier run's tree file, which is a folder here.
-        VmapExtractReport report = new VmapExtractor(fixture.Files, maps).Extract(output.Path, null, threads: 1, CancellationToken.None);
+        VmapExtractReport report = new VmapExtractor(fixture.Files, maps).Extract(output.Path, null, threads: 1, CancellationToken.None, Path.Combine(output.Path, VmapExtractor.VmapsFolder));
 
         Assert.Equal(new uint[] { 0, 7, 8, 9, 10 }, report.Maps.Select(m => m.Id));
         Assert.Contains(report.Problems, p => p.Contains("'000.vmtree'", StringComparison.Ordinal) && p.Contains("is a folder", StringComparison.Ordinal));
@@ -88,7 +88,7 @@ public sealed class VmapMapDirectoryTests
 
         Directory.Delete(target);
 
-        VmapExtractReport report = new VmapExtractor(fixture.Files, maps).Extract(output.Path, null, threads: 1, CancellationToken.None);
+        VmapExtractReport report = new VmapExtractor(fixture.Files, maps).Extract(output.Path, null, threads: 1, CancellationToken.None, Path.Combine(output.Path, VmapExtractor.VmapsFolder));
 
         Assert.Equal(new uint[] { 0, 7, 8, 9, 10 }, report.Maps.Select(m => m.Id));
         Assert.Contains(report.Problems, p => p.Contains("'000.vmtree'", StringComparison.Ordinal) && p.Contains("is a folder", StringComparison.Ordinal));

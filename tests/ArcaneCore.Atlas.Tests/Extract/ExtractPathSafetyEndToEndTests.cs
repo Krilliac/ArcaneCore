@@ -69,7 +69,7 @@ public sealed class ExtractPathSafetyEndToEndTests
         using var scratch = new TestDirectory();
         string output = Path.Combine(scratch.Path, "a", "b", "out");
 
-        VmapExtractReport report = fixture.Extractor().Extract(output, [0], threads: 2, CancellationToken.None);
+        VmapExtractReport report = fixture.Extractor().Extract(output, [0], threads: 2, CancellationToken.None, Path.Combine(output, VmapExtractor.VmapsFolder));
 
         // Every file anywhere under the scratch root is one of the plain placements' files, inside <out>/vmaps.
         string[] files = [.. Directory.EnumerateFiles(scratch.Path, "*", SearchOption.AllDirectories).Select(f => Path.GetRelativePath(scratch.Path, f).Replace(Path.DirectorySeparatorChar, '/')).Order(StringComparer.Ordinal)];

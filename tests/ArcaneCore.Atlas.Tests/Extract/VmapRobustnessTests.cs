@@ -98,7 +98,7 @@ public sealed class VmapNonFinitePlacementTests
         AddKalimdor(fixture, tile);
         using var output = new TestDirectory();
 
-        VmapExtractReport report = await VmapWithin.RunAsync(() => fixture.Extractor().Extract(output.Path, [1], threads: 2, CancellationToken.None));
+        VmapExtractReport report = await VmapWithin.RunAsync(() => fixture.Extractor().Extract(output.Path, [1], threads: 2, CancellationToken.None, Path.Combine(output.Path, VmapExtractor.VmapsFolder)));
 
         Assert.Contains(report.Problems, p => p.Contains("Nan.wmo", StringComparison.Ordinal) && p.Contains("not finite", StringComparison.Ordinal));
         Assert.DoesNotContain(Directory.EnumerateFiles(report.VmapsDirectory), f => f.Contains("Nan.wmo", StringComparison.Ordinal));
@@ -131,7 +131,7 @@ public sealed class VmapNonFinitePlacementTests
         AddKalimdor(fixture, tile);
         using var output = new TestDirectory();
 
-        VmapExtractReport report = await VmapWithin.RunAsync(() => fixture.Extractor().Extract(output.Path, [1], threads: 2, CancellationToken.None));
+        VmapExtractReport report = await VmapWithin.RunAsync(() => fixture.Extractor().Extract(output.Path, [1], threads: 2, CancellationToken.None, Path.Combine(output.Path, VmapExtractor.VmapsFolder)));
 
         // The tile parses with the server's own reader, which refuses a non-finite or non-positive transform.
         ModelSpawn[] spawns = [.. TileSpawns(report.VmapsDirectory)];
@@ -170,7 +170,7 @@ public sealed class VmapNonFinitePlacementTests
         string model = output.Write(Path.Combine("vmaps", "Cube.m2.vmo"), [9]);
         string unrelated = output.Write(Path.Combine("vmaps", "001_notes.txt"), [9]);
 
-        VmapExtractReport report = await VmapWithin.RunAsync(() => fixture.Extractor().Extract(output.Path, [1], threads: 1, CancellationToken.None));
+        VmapExtractReport report = await VmapWithin.RunAsync(() => fixture.Extractor().Extract(output.Path, [1], threads: 1, CancellationToken.None, Path.Combine(output.Path, VmapExtractor.VmapsFolder)));
 
         Assert.Equal(0, report.Maps[0].Spawns);
         Assert.False(File.Exists(tree));
@@ -197,7 +197,7 @@ public sealed class VmapNonFinitePlacementTests
         AddKalimdor(fixture, tile);
         using var output = new TestDirectory();
 
-        VmapExtractReport report = await VmapWithin.RunAsync(() => fixture.Extractor().Extract(output.Path, [1], threads: 1, CancellationToken.None));
+        VmapExtractReport report = await VmapWithin.RunAsync(() => fixture.Extractor().Extract(output.Path, [1], threads: 1, CancellationToken.None, Path.Combine(output.Path, VmapExtractor.VmapsFolder)));
 
         Assert.Single(report.Problems, p => p.Contains("M2 name 'Thing.m2' is used by both 'World\\Doodads\\Two\\Thing.m2' and 'World\\Doodads\\Three\\Thing.m2'", StringComparison.Ordinal));
         string written = Path.Combine(report.VmapsDirectory, "Thing.m2.vmo");

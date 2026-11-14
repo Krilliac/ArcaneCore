@@ -63,7 +63,7 @@ public sealed class MapLiquidFiniteTests
         fixture.Files.Add(ClientMapPaths.AdtPath("Azeroth", TerrainFixture.ListedButAbsent), SyntheticTerrain.Adt(bad).Bytes);
         using var output = new TestDirectory();
 
-        MapExtractReport report = new MapExtractor(fixture.Files, fixture.Maps, Areas).Extract(output.Path, [0], overwrite: false, threads: 2, CancellationToken.None);
+        MapExtractReport report = new MapExtractor(fixture.Files, fixture.Maps, Areas).Extract(output.Path, [0], overwrite: false, threads: 2, CancellationToken.None, Path.Combine(output.Path, MapExtractor.MapsFolder));
 
         MapExtractMapReport azeroth = Assert.Single(report.Maps);
         Assert.Equal(2, azeroth.Written);

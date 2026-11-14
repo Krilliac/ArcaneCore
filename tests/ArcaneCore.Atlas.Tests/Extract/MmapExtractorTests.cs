@@ -64,8 +64,8 @@ public sealed class MmapWorld : IDisposable
         WmoSpec[] global = [new(FloorPath, 5001, new WorldPoint(0, 20, 0), new WorldPoint(0, 0, 0), new WorldPoint(-11, 19, -11), new WorldPoint(11, 21, 11), 0, 0, 0)];
         fixture.Files.Add(ClientMapPaths.WdtPath("DeadminesInstance"), SyntheticTerrain.Wdt([], WdtFile.GlobalWmoFlag, global));
 
-        new MapExtractor(fixture.Files, fixture.Maps, ExtractFixtures.Areas((1, 0))).Extract(DataRoot, null, overwrite: false, threads: 2, CancellationToken.None);
-        new VmapExtractor(fixture.Files, fixture.Maps).Extract(DataRoot, null, threads: 2, CancellationToken.None);
+        new MapExtractor(fixture.Files, fixture.Maps, ExtractFixtures.Areas((1, 0))).Extract(DataRoot, null, overwrite: false, threads: 2, CancellationToken.None, Path.Combine(DataRoot, MapExtractor.MapsFolder));
+        new VmapExtractor(fixture.Files, fixture.Maps).Extract(DataRoot, null, threads: 2, CancellationToken.None, Path.Combine(DataRoot, VmapExtractor.VmapsFolder));
         Report = new MmapExtractor(DataRoot).Extract(null, overwrite: false, quick: false, Environment.ProcessorCount, CancellationToken.None);
     }
 

@@ -74,6 +74,22 @@ public sealed class ClientCommandsReadTests : IDisposable
         Assert.Equal(new[] { "Azeroth.wdt" }, Directory.GetFileSystemEntries(Path.GetDirectoryName(destination)!).Select(Path.GetFileName).ToArray());
     }
 
+    /// <summary>The staged overwrite deletes an existing <c>&lt;out&gt;.part</c> first, as the help text says, and leaves none behind.</summary>
+    [Fact]
+    public async Task Overwrite_WithAnExistingStagingFile_DeletesIt_AndWritesTheResult()
+    {
+        using AtlasContext context = Compose();
+        string destination = _dir.Write(Path.Combine("out", "Azeroth.wdt"), [1, 2, 3]);
+        File.WriteAllBytes(destination + ".part", [9, 9, 9, 9]);
+
+        CommandResult result = await Run(context, new JsonObject { ["path"] = WdtPath, ["out"] = destination, ["overwrite"] = true });
+
+        Assert.True(result.Ok, result.ErrorMessage);
+        Assert.Equal(Wdt, File.ReadAllBytes(destination));
+        Assert.False(File.Exists(destination + ".part"));
+        Assert.Equal(new[] { "Azeroth.wdt" }, Directory.GetFileSystemEntries(Path.GetDirectoryName(destination)!).Select(Path.GetFileName).ToArray());
+    }
+
     private AtlasContext Compose()
     {
         MemoryClientFiles tables = ClientMapDirectoryTests.SampleFiles();

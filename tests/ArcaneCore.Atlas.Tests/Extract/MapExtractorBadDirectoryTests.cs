@@ -37,7 +37,7 @@ public sealed class MapExtractorBadDirectoryTests
         (TerrainFixture fixture, ClientMapDirectory maps) = Client();
         using var output = new TestDirectory();
 
-        MapExtractReport report = new MapExtractor(fixture.Files, maps, Areas).Extract(output.Path, null, overwrite: false, threads: 2, CancellationToken.None);
+        MapExtractReport report = new MapExtractor(fixture.Files, maps, Areas).Extract(output.Path, null, overwrite: false, threads: 2, CancellationToken.None, Path.Combine(output.Path, MapExtractor.MapsFolder));
 
         Assert.Equal(new uint[] { 0, 7, 8, 9, 10 }, report.Maps.Select(m => m.Id));
         MapExtractMapReport azeroth = report.Maps[0];
@@ -65,7 +65,7 @@ public sealed class MapExtractorBadDirectoryTests
         (TerrainFixture fixture, ClientMapDirectory maps) = Client();
         using var output = new TestDirectory();
 
-        MapExtractReport report = new MapExtractor(fixture.Files, maps, Areas).Extract(output.Path, [8], overwrite: false, threads: 1, CancellationToken.None);
+        MapExtractReport report = new MapExtractor(fixture.Files, maps, Areas).Extract(output.Path, [8], overwrite: false, threads: 1, CancellationToken.None, Path.Combine(output.Path, MapExtractor.MapsFolder));
 
         Assert.Equal(8u, Assert.Single(report.Failures).Map);
         Assert.Empty(Directory.EnumerateFiles(report.MapsDirectory));

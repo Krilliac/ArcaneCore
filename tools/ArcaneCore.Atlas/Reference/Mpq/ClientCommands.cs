@@ -45,7 +45,7 @@ internal static class ClientCommands
             [
                 new CommandArg("path", ArgType.String, "In-archive path of the file, either slash, any case.", Required: true),
                 new CommandArg("out", ArgType.String, "Absolute path to write. Refused inside a git working tree or the client folder.", Required: true),
-                new CommandArg("overwrite", ArgType.Boolean, "Replace the file when it already exists: the bytes go to <out>.part, which is then renamed over it, so the existing file is never opened for writing.", Default: JsonValue.Create(false)),
+                new CommandArg("overwrite", ArgType.Boolean, "Replace the file when it already exists. It is replaced through a staged file: an existing <out>.part is deleted first, the bytes are written to a new <out>.part, which is then renamed over <out>, so the existing file is never opened for writing.", Default: JsonValue.Create(false)),
             ],
             ReadAsync,
             CommandSurfaces.Headless | CommandSurfaces.Instance));

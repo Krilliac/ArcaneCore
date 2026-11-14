@@ -81,18 +81,18 @@ public sealed class VmapExtractor
     }
 
     /// <summary>
-    /// Extracts into <c>&lt;outputRoot&gt;/vmaps</c>, or into <paramref name="vmapsDirectory"/> when one is given, replacing the files
-    /// of the maps it writes.
+    /// Extracts into <paramref name="vmapsDirectory"/>, the vmaps folder of <paramref name="outputRoot"/>, replacing the files of
+    /// the maps it writes.
     /// </summary>
     /// <param name="outputRoot">The server data root.</param>
     /// <param name="onlyMaps">Map ids to extract; null or empty extracts every map.</param>
     /// <param name="threads">Model files built at once (at least 1).</param>
     /// <param name="vmapsDirectory">
-    /// Where the files go, and what the report names; null for <c>&lt;outputRoot&gt;/vmaps</c>. <c>extract.vmaps</c> passes the real
-    /// folder its check judged for that path, so a link there is not traversed again for every file.
+    /// Where the files go, and what the report names; required, so no caller writes through an unchecked <c>&lt;outputRoot&gt;/vmaps</c>.
+    /// <c>extract.vmaps</c> passes the real folder its check judged for that path, so a link there is not traversed again for every file.
     /// </param>
     /// <exception cref="ArgumentException">A requested map id is not in Map.dbc.</exception>
-    public VmapExtractReport Extract(string outputRoot, IReadOnlyCollection<uint>? onlyMaps, int threads, CancellationToken cancellationToken, string? vmapsDirectory = null)
+    public VmapExtractReport Extract(string outputRoot, IReadOnlyCollection<uint>? onlyMaps, int threads, CancellationToken cancellationToken, string vmapsDirectory)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(outputRoot);
         ArgumentOutOfRangeException.ThrowIfLessThan(threads, 1);
@@ -110,7 +110,8 @@ public sealed class VmapExtractor
             selected.AddRange(_maps.Maps.OrderBy(m => m.Id));
         }
 
-        string directory = vmapsDirectory ?? Path.Combine(outputRoot, VmapsFolder);
+        ArgumentException.ThrowIfNullOrWhiteSpace(vmapsDirectory);
+        string directory = vmapsDirectory;
         Directory.CreateDirectory(directory);
 
         var library = new VmapModelLibrary(_files);
@@ -155,7 +156,10 @@ public sealed class VmapExtractor
     /// first name in ordinal order is built and written, and one problem names every spelling.
     /// </summary>
     /// <param name="directory">The vmaps folder.</param>
-    /// <param name="modelFiles">File name and model of every placed model; the names are distinct (ordinal).</param>
+    /// <param name="modelFiles">
+    /// File name and model of every placed model. The names are expected to be distinct (ordinal), as the run's SortedDictionary
+    /// keys are; that is not checked, and a repeated name would be reported as a spelling that differs only in case.
+    /// </param>
     /// <param name="build">Makes a model file's bytes; called once per file written, on any thread.</param>
     /// <param name="threads">Files built at once (at least 1).</param>
     /// <param name="cancellationToken">Stops the run.</param>
@@ -167,8 +171,9 @@ public sealed class VmapExtractor
     /// writes one file, in turn, from whichever spelling was extracted first; on a case-sensitive one it writes a file per
     /// spelling. This tool writes the first spelling in ordinal order on every file system: on a case-sensitive one the
     /// placements of the other spellings then find no model file of their own name (the spawn records keep their names). Names
-    /// reach this step through FixNameCase, which gives every spelling of a name the same case, so the case does not arise from
-    /// client data today; the rule keeps the parallel writes safe whatever names arrive.
+    /// reach this step through FixNameCase, which gives every spelling of a name of three characters or more the same case, but
+    /// returns a shorter name unchanged, so client data can still produce two spellings (<c>ab</c> and <c>AB</c> placed from two
+    /// folders, for example); the rule keeps the parallel writes safe whatever names arrive.
     /// </remarks>
     // ref: vmangos@0e3ff01 src/game/vmap/TileAssembler.cpp:195-206 (every placed model name becomes a model file)
     internal static VmapModelFileResult WriteModelFiles(string directory, IEnumerable<KeyValuePair<string, VmapModelInfo>> modelFiles, Func<VmapModelInfo, byte[]> build, int threads, CancellationToken cancellationToken)

@@ -136,6 +136,10 @@ public sealed class ClientOutputPathUnixTests
     [InlineData("/data/ŉx", "/data/ʼnx", true)]
     [InlineData("/data/ẚx/y", "/data/aʾx", true)]
     [InlineData("/data/aͅx", "/data/aιx", true)]
+
+    // Canonically equivalent orders of U+0345 (combining class 240) and U+0301 (230): NFC makes both a-acute U+0345.
+    [InlineData("/data/áͅx/y", "/data/áͅx", true)]
+    [InlineData("/data/áͅx", "/data/áͅx", true)]
     public void N10_TheProtectedFolderComparison_IgnoresCaseAndUnicodeNormalisation(string path, string folder, bool inside)
     {
         Assert.Equal(inside, ClientOutputPath.UnixInsideOrEqual(path, folder));

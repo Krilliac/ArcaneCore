@@ -29,7 +29,7 @@ public sealed class MapExtractorTests
         var fixture = new TerrainFixture();
         using var output = new TestDirectory();
 
-        MapExtractReport report = Extractor(fixture).Extract(output.Path, null, overwrite: false, threads: 2, CancellationToken.None);
+        MapExtractReport report = Extractor(fixture).Extract(output.Path, null, overwrite: false, threads: 2, CancellationToken.None, Path.Combine(output.Path, MapExtractor.MapsFolder));
 
         Assert.Equal(Path.Combine(output.Path, "maps"), report.MapsDirectory);
         Assert.Equal(new[] { "0004832.map", "0004833.map" }, Directory.EnumerateFiles(report.MapsDirectory).Select(Path.GetFileName).Order(StringComparer.Ordinal));
@@ -54,18 +54,18 @@ public sealed class MapExtractorTests
         var fixture = new TerrainFixture();
         using var output = new TestDirectory();
         MapExtractor extractor = Extractor(fixture);
-        extractor.Extract(output.Path, null, overwrite: false, threads: 1, CancellationToken.None);
+        extractor.Extract(output.Path, null, overwrite: false, threads: 1, CancellationToken.None, Path.Combine(output.Path, MapExtractor.MapsFolder));
         string flat = MapFile(output.Path, TerrainFixture.Flat);
         byte[] real = File.ReadAllBytes(flat);
         File.WriteAllBytes(flat, [1, 2, 3]);
 
-        MapExtractReport kept = extractor.Extract(output.Path, null, overwrite: false, threads: 1, CancellationToken.None);
+        MapExtractReport kept = extractor.Extract(output.Path, null, overwrite: false, threads: 1, CancellationToken.None, Path.Combine(output.Path, MapExtractor.MapsFolder));
 
         Assert.Equal(0, kept.Written);
         Assert.Equal(2, kept.Existing);
         Assert.Equal(new byte[] { 1, 2, 3 }, File.ReadAllBytes(flat));
 
-        MapExtractReport rewritten = extractor.Extract(output.Path, null, overwrite: true, threads: 1, CancellationToken.None);
+        MapExtractReport rewritten = extractor.Extract(output.Path, null, overwrite: true, threads: 1, CancellationToken.None, Path.Combine(output.Path, MapExtractor.MapsFolder));
 
         Assert.Equal(2, rewritten.Written);
         Assert.Equal(0, rewritten.Existing);
@@ -81,7 +81,7 @@ public sealed class MapExtractorTests
         fixture.Files.Add(ClientMapPaths.AdtPath("Azeroth", TerrainFixture.ListedButAbsent), damaged);
         using var output = new TestDirectory();
 
-        MapExtractReport report = Extractor(fixture).Extract(output.Path, [0], overwrite: false, threads: 2, CancellationToken.None);
+        MapExtractReport report = Extractor(fixture).Extract(output.Path, [0], overwrite: false, threads: 2, CancellationToken.None, Path.Combine(output.Path, MapExtractor.MapsFolder));
 
         MapExtractMapReport azeroth = Assert.Single(report.Maps);
         Assert.Equal(2, azeroth.Written);
@@ -102,7 +102,7 @@ public sealed class MapExtractorTests
         fixture.Files.Add(ClientMapPaths.WdtPath("Kalimdor"), [9, 9, 9, 9]);
         using var output = new TestDirectory();
 
-        MapExtractReport report = Extractor(fixture).Extract(output.Path, [1], overwrite: false, threads: 1, CancellationToken.None);
+        MapExtractReport report = Extractor(fixture).Extract(output.Path, [1], overwrite: false, threads: 1, CancellationToken.None, Path.Combine(output.Path, MapExtractor.MapsFolder));
 
         MapExtractMapReport kalimdor = Assert.Single(report.Maps);
         Assert.True(kalimdor.HasWdt);
@@ -118,11 +118,11 @@ public sealed class MapExtractorTests
         using var output = new TestDirectory();
         MapExtractor extractor = Extractor(fixture);
 
-        Assert.Throws<ArgumentException>(() => extractor.Extract(output.Path, [7], overwrite: false, threads: 1, CancellationToken.None));
-        Assert.Throws<ArgumentOutOfRangeException>(() => extractor.Extract(output.Path, null, overwrite: false, threads: 0, CancellationToken.None));
+        Assert.Throws<ArgumentException>(() => extractor.Extract(output.Path, [7], overwrite: false, threads: 1, CancellationToken.None, Path.Combine(output.Path, MapExtractor.MapsFolder)));
+        Assert.Throws<ArgumentOutOfRangeException>(() => extractor.Extract(output.Path, null, overwrite: false, threads: 0, CancellationToken.None, Path.Combine(output.Path, MapExtractor.MapsFolder)));
         using var cancelled = new CancellationTokenSource();
         cancelled.Cancel();
-        Assert.ThrowsAny<OperationCanceledException>(() => extractor.Extract(output.Path, null, overwrite: false, threads: 1, cancelled.Token));
+        Assert.ThrowsAny<OperationCanceledException>(() => extractor.Extract(output.Path, null, overwrite: false, threads: 1, cancelled.Token, Path.Combine(output.Path, MapExtractor.MapsFolder)));
         Assert.Empty(Directory.EnumerateFiles(Path.Combine(output.Path, "maps")));
     }
 
@@ -278,7 +278,7 @@ public sealed class MapExtractorRealDataTests
         AreaExploreFlags areas = AreaExploreFlags.Load(ClientTerrainRealData.Files);
 
         MapExtractReport report = new MapExtractor(ClientTerrainRealData.Files, ClientTerrainRealData.Maps, areas)
-            .Extract(output.Path, null, overwrite: false, Environment.ProcessorCount, CancellationToken.None);
+            .Extract(output.Path, null, overwrite: false, Environment.ProcessorCount, CancellationToken.None, Path.Combine(output.Path, MapExtractor.MapsFolder));
 
         Assert.Empty(report.Failures);
         string[] written = [.. Directory.EnumerateFiles(report.MapsDirectory).Select(f => Path.GetFileName(f)!).Order(StringComparer.Ordinal)];

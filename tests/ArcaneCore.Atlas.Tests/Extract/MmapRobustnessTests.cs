@@ -391,7 +391,7 @@ public sealed class MmapExtractorRobustnessTests(MmapWorld world) : IClassFixtur
         files.Add(ClientMapPaths.WdtPath("DeadminesInstance"), SyntheticTerrain.Wdt([], WdtFile.GlobalWmoFlag, global));
         var maps = SyntheticTerrain.Maps(new ClientMap(VmapFixture.Dungeon, "DeadminesInstance", "The Deadmines", 1));
         using var data = new TestDirectory();
-        new VmapExtractor(files, maps).Extract(data.Path, null, threads: 1, CancellationToken.None);
+        new VmapExtractor(files, maps).Extract(data.Path, null, threads: 1, CancellationToken.None, Path.Combine(data.Path, VmapExtractor.VmapsFolder));
 
         var registry = new CommandRegistry();
         ExtractCommands.Register(registry);
@@ -414,7 +414,7 @@ public sealed class MmapExtractorRobustnessTests(MmapWorld world) : IClassFixtur
     public void AnM2sTrianglesAreWoundTheOppositeWayToItsStoredHull()
     {
         using var data = new TestDirectory();
-        new VmapFixture().Extractor().Extract(data.Path, null, threads: 1, CancellationToken.None);
+        new VmapFixture().Extractor().Extract(data.Path, null, threads: 1, CancellationToken.None, Path.Combine(data.Path, VmapExtractor.VmapsFolder));
         string vmaps = Path.Combine(data.Path, "vmaps");
         var mesh = new MmapMeshData();
         Assert.True(new MmapModels(new MmapModelCache(vmaps), quick: true).Load(0, VmapFixture.Tile.Y, VmapFixture.Tile.X, mesh));

@@ -399,7 +399,7 @@ public sealed class VmapExtractorTests
         var fixture = new VmapFixture();
         using var output = new TestDirectory();
 
-        VmapExtractReport report = fixture.Extractor().Extract(output.Path, null, threads: 2, CancellationToken.None);
+        VmapExtractReport report = fixture.Extractor().Extract(output.Path, null, threads: 2, CancellationToken.None, Path.Combine(output.Path, VmapExtractor.VmapsFolder));
 
         Assert.Equal(Path.Combine(output.Path, "vmaps"), report.VmapsDirectory);
         Assert.Equal(
@@ -444,7 +444,7 @@ public sealed class VmapExtractorTests
     {
         var fixture = new VmapFixture();
         using var output = new TestDirectory();
-        string directory = fixture.Extractor().Extract(output.Path, [0], threads: 1, CancellationToken.None).VmapsDirectory;
+        string directory = fixture.Extractor().Extract(output.Path, [0], threads: 1, CancellationToken.None, Path.Combine(output.Path, VmapExtractor.VmapsFolder)).VmapsDirectory;
 
         (VMapTree tree, List<(ModelSpawn Spawn, uint Slot)> global) = VMapTree.Parse(0, File.ReadAllBytes(Path.Combine(directory, "000.vmtree")));
         Assert.True(tree.IsTiled);
@@ -491,7 +491,7 @@ public sealed class VmapExtractorTests
     {
         var fixture = new VmapFixture();
         using var output = new TestDirectory();
-        string directory = fixture.Extractor().Extract(output.Path, [VmapFixture.Dungeon], threads: 1, CancellationToken.None).VmapsDirectory;
+        string directory = fixture.Extractor().Extract(output.Path, [VmapFixture.Dungeon], threads: 1, CancellationToken.None, Path.Combine(output.Path, VmapExtractor.VmapsFolder)).VmapsDirectory;
 
         (VMapTree tree, List<(ModelSpawn Spawn, uint Slot)> global) = VMapTree.Parse(VmapFixture.Dungeon, File.ReadAllBytes(Path.Combine(directory, "036.vmtree")));
 
@@ -518,7 +518,7 @@ public sealed class VmapExtractorTests
         fixture.Files.Add(ClientMapPaths.AdtPath("Azeroth", VmapFixture.Neighbour), [1, 2, 3]);
         using var output = new TestDirectory();
 
-        VmapExtractReport report = fixture.Extractor().Extract(output.Path, [0], threads: 1, CancellationToken.None);
+        VmapExtractReport report = fixture.Extractor().Extract(output.Path, [0], threads: 1, CancellationToken.None, Path.Combine(output.Path, VmapExtractor.VmapsFolder));
 
         // The destructible wall is not placed, but the doodad of its set still is.
         VmapExtractMapReport azeroth = Assert.Single(report.Maps);
@@ -537,14 +537,14 @@ public sealed class VmapExtractorTests
         string stale = output.Write(Path.Combine("vmaps", "000_10_10.vmtile"), [9]);
         string other = output.Write(Path.Combine("vmaps", "001_10_10.vmtile"), [9]);
 
-        fixture.Extractor().Extract(output.Path, [0], threads: 1, CancellationToken.None);
+        fixture.Extractor().Extract(output.Path, [0], threads: 1, CancellationToken.None, Path.Combine(output.Path, VmapExtractor.VmapsFolder));
 
         Assert.False(File.Exists(stale));
         Assert.True(File.Exists(other));
-        Assert.Throws<ArgumentException>(() => fixture.Extractor().Extract(output.Path, [7], threads: 1, CancellationToken.None));
+        Assert.Throws<ArgumentException>(() => fixture.Extractor().Extract(output.Path, [7], threads: 1, CancellationToken.None, Path.Combine(output.Path, VmapExtractor.VmapsFolder)));
         using var cancelled = new CancellationTokenSource();
         cancelled.Cancel();
-        Assert.ThrowsAny<OperationCanceledException>(() => fixture.Extractor().Extract(output.Path, null, threads: 1, cancelled.Token));
+        Assert.ThrowsAny<OperationCanceledException>(() => fixture.Extractor().Extract(output.Path, null, threads: 1, cancelled.Token, Path.Combine(output.Path, VmapExtractor.VmapsFolder)));
     }
 
     [Fact]
@@ -610,7 +610,7 @@ public sealed class VmapRealRun : IDisposable
 
         _output = new TestDirectory();
         Report = new VmapExtractor(ClientTerrainRealData.Files, ClientTerrainRealData.Maps)
-            .Extract(_output.Path, null, Environment.ProcessorCount, CancellationToken.None);
+            .Extract(_output.Path, null, Environment.ProcessorCount, CancellationToken.None, Path.Combine(_output.Path, VmapExtractor.VmapsFolder));
     }
 
     /// <summary>The run's report (null when skipped).</summary>

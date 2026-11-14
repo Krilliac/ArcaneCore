@@ -28,7 +28,7 @@ public sealed class MapExtractorMpqTests
     }
 
     private static MapExtractReport Run(IClientFileSource files, string output)
-        => new MapExtractor(files, ClientMapDirectory.Load(files), AreaExploreFlags.Load(files)).Extract(output, null, overwrite: false, threads: 2, CancellationToken.None);
+        => new MapExtractor(files, ClientMapDirectory.Load(files), AreaExploreFlags.Load(files)).Extract(output, null, overwrite: false, threads: 2, CancellationToken.None, Path.Combine(output, MapExtractor.MapsFolder));
 
     [Fact]
     public void Extract_FromMpqArchives_WritesTheFilesTheInMemoryClientWrites()
