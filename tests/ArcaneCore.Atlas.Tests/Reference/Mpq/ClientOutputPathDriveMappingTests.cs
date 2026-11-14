@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using ArcaneCore.Atlas.Core.Commands;
 using ArcaneCore.Atlas.Reference.Mpq;
 using Xunit;
@@ -6,18 +5,29 @@ using Xunit;
 namespace ArcaneCore.Atlas.Tests.Reference.Mpq;
 
 /// <summary>
-/// A drive letter made by <c>subst</c> (or a network mapping) hides where its files really are; the output rules are applied to the
-/// real location. The QueryDosDevice strings are tested as text; one test makes a real <c>subst</c> drive.
+/// A drive letter made by <c>subst</c> or <c>DefineDosDevice</c> (or a network mapping) hides where its files really are; the output
+/// rules are applied to the real location, found by opening the path and asking Windows for its final name. The QueryDosDevice
+/// strings are tested as text; the other tests make real session drive letters through <see cref="SessionDrive"/>, which serialises
+/// them across test processes and removes them again.
 /// </summary>
 public sealed class ClientOutputPathDriveMappingTests : IDisposable
 {
+    private const string Command = "extract.test";
+
     private readonly TestDirectory _dir = new();
 
     public void Dispose() => _dir.Dispose();
 
+    /// <summary>
+    /// The classification is only used for the refusal message of a network drive and for a letter that is not defined at all. A
+    /// <c>\Device\...</c> name reads as Plain whatever it is (a CD drive, a raw path into a folder): where such a letter leads, and
+    /// what kind of drive that is, is decided by opening the path (see the raw-target tests below and the drive-type tests in
+    /// <see cref="ClientOutputPathGuardTests"/>).
+    /// </summary>
     [Theory]
     [InlineData(@"\Device\HarddiskVolume3", DriveKind.Plain, null)]
     [InlineData(@"\Device\CdRom0", DriveKind.Plain, null)]
+    [InlineData(@"\Device\HarddiskVolume3\Users\someone\repo\sub", DriveKind.Plain, null)]
     [InlineData(@"\??\D:\repo\sub", DriveKind.Substituted, @"D:\repo\sub")]
     [InlineData(@"\??\d:\", DriveKind.Substituted, @"d:\")]
     [InlineData(@"\??\D:", DriveKind.Substituted, @"D:\")]
@@ -35,82 +45,115 @@ public sealed class ClientOutputPathDriveMappingTests : IDisposable
         Assert.Equal(path, parsed.Path);
     }
 
-    /// <summary>A drive letter that no drive, mapping or substitute uses.</summary>
-    private static char FreeLetter()
+    private string Repository(out string sub)
     {
-        HashSet<char> used = [.. DriveInfo.GetDrives().Select(d => char.ToUpperInvariant(d.Name[0]))];
-        for (char letter = 'Z'; letter >= 'D'; letter--)
-        {
-            if (!used.Contains(letter) && ClientOutputPath.QueryDosDevice(letter) is null)
-            {
-                return letter;
-            }
-        }
-
-        throw new InvalidOperationException("no free drive letter for the subst test");
-    }
-
-    private static void Subst(string arguments)
-    {
-        using Process process = Process.Start(new ProcessStartInfo("subst.exe", arguments)
-        {
-            CreateNoWindow = true,
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-        })!;
-        string output = process.StandardOutput.ReadToEnd() + process.StandardError.ReadToEnd();
-        process.WaitForExit();
-        Assert.True(process.ExitCode == 0, $"subst {arguments} failed: {output}");
+        string tree = GuardFixtures.WorkingTree(_dir.Path, "repo", out _);
+        sub = Path.Combine(tree, "sub");
+        Directory.CreateDirectory(sub);
+        return tree;
     }
 
     [WindowsFact]
-    public void ASubstDrive_IsJudgedByWhereItReallyPoints()
+    public void ASubstDriveIntoARepository_IsJudgedByWhereItReallyPoints()
     {
-        string tree = Path.Combine(_dir.Path, "repo");
-        Directory.CreateDirectory(Path.Combine(tree, ".git"));
-        Directory.CreateDirectory(Path.Combine(tree, "sub"));
-        string client = Path.Combine(_dir.Path, "client");
-        Directory.CreateDirectory(Path.Combine(client, "Data"));
-        string plain = Path.Combine(_dir.Path, "plain");
-        Directory.CreateDirectory(plain);
-
-        char letter = FreeLetter();
-        Subst($"{letter}: \"{Path.Combine(tree, "sub")}\"");
-        try
+        string tree = Repository(out string sub);
+        SessionDrive.Subst(sub).Use(letter =>
         {
             DriveTarget target = ClientOutputPath.ParseDosDeviceTarget(ClientOutputPath.QueryDosDevice(letter)!);
             Assert.Equal(DriveKind.Substituted, target.Kind);
-            Assert.Equal(Path.Combine(tree, "sub"), target.Path, ignoreCase: true);
+            Assert.Equal(sub, target.Path, ignoreCase: true);
             string asked = $@"{letter}:\data";
 
-            CommandException directory = Assert.Throws<CommandException>(() => ClientOutputPath.CheckDirectory("extract.test", asked, []));
+            CommandException directory = Assert.Throws<CommandException>(() => ClientOutputPath.CheckDirectory(Command, asked, []));
             Assert.Contains("git working tree", directory.Message, StringComparison.Ordinal);
             Assert.Contains(tree, directory.Message, StringComparison.Ordinal);
             CommandException file = Assert.Throws<CommandException>(() => ClientOutputPath.Check(asked + @"\x.bin", overwrite: true, []));
             Assert.Contains("git working tree", file.Message, StringComparison.Ordinal);
-            Assert.Empty(Directory.GetFileSystemEntries(Path.Combine(tree, "sub")));
-        }
-        finally
-        {
-            Subst($"{letter}: /d");
-        }
+            Assert.Empty(Directory.GetFileSystemEntries(sub));
+        });
+    }
 
-        // The same letter pointing at ordinary storage is accepted, and a protected folder reached through it is still protected.
-        letter = FreeLetter();
-        Subst($"{letter}: \"{_dir.Path}\"");
-        try
+    [WindowsFact]
+    public void ASubstDriveToOrdinaryStorage_IsAccepted_AndTheRealPathIsReturned()
+    {
+        string plain = Path.Combine(_dir.Path, "plain");
+        Directory.CreateDirectory(plain);
+        SessionDrive.Subst(_dir.Path).Use(letter =>
         {
-            string viaDrive = $@"{letter}:\plain\out";
-            Assert.Equal(viaDrive, ClientOutputPath.CheckDirectory("extract.test", viaDrive, []));
-            CommandException read = Assert.Throws<CommandException>(() => ClientOutputPath.CheckDirectory("extract.test", $@"{letter}:\client\Data\out", [client]));
+            // The check returns the folder it judged (D7), so the command writes there and not through the letter.
+            Assert.Equal(Path.Combine(plain, "out"), ClientOutputPath.CheckDirectory(Command, $@"{letter}:\plain\out", []), ignoreCase: true);
+            Assert.Equal(Path.Combine(plain, "x.bin"), ClientOutputPath.Check($@"{letter}:\plain\x.bin", overwrite: false, []), ignoreCase: true);
+            Assert.Equal(_dir.Path, ClientOutputPath.CheckDirectory(Command, $@"{letter}:\", []), ignoreCase: true);
+        });
+    }
+
+    [WindowsFact]
+    public void AProtectedFolderReachedThroughASubstDrive_IsStillProtected_EitherWay()
+    {
+        string client = Path.Combine(_dir.Path, "client");
+        Directory.CreateDirectory(Path.Combine(client, "Data"));
+        SessionDrive.Subst(_dir.Path).Use(letter =>
+        {
+            CommandException read = Assert.Throws<CommandException>(() => ClientOutputPath.CheckDirectory(Command, $@"{letter}:\client\Data\out", [client]));
             Assert.Contains("read-only", read.Message, StringComparison.Ordinal);
-            CommandException reverse = Assert.Throws<CommandException>(() => ClientOutputPath.CheckDirectory("extract.test", Path.Combine(client, "Data", "out"), [$@"{letter}:\client"]));
+            CommandException reverse = Assert.Throws<CommandException>(() => ClientOutputPath.CheckDirectory(Command, Path.Combine(client, "Data", "out"), [$@"{letter}:\client"]));
             Assert.Contains("read-only", reverse.Message, StringComparison.Ordinal);
-        }
-        finally
+        });
+    }
+
+    [WindowsFact]
+    public void D2_ARawTargetDriveIntoARepository_IsJudgedByWhereItLeads()
+    {
+        string tree = Repository(out string sub);
+        SessionDrive.RawTarget(SessionDrive.NtPathOf(sub)).Use(letter =>
         {
-            Subst($"{letter}: /d");
-        }
+            // QueryDosDevice reads \Device\HarddiskVolumeN\...\repo\sub: the old classification called that Plain and judged X:\data as written.
+            Assert.Equal(DriveKind.Plain, ClientOutputPath.ParseDosDeviceTarget(ClientOutputPath.QueryDosDevice(letter)!).Kind);
+            string asked = $@"{letter}:\data";
+
+            CommandException directory = Assert.Throws<CommandException>(() => ClientOutputPath.CheckDirectory(Command, asked, []));
+            Assert.Contains("git working tree", directory.Message, StringComparison.Ordinal);
+            Assert.Contains(tree, directory.Message, StringComparison.Ordinal);
+            CommandException file = Assert.Throws<CommandException>(() => ClientOutputPath.Check(asked + @"\x.bin", overwrite: true, []));
+            Assert.Contains("git working tree", file.Message, StringComparison.Ordinal);
+            Assert.Empty(Directory.GetFileSystemEntries(sub));
+        });
+    }
+
+    [WindowsFact]
+    public void D4_ASecondLetterForTheWholeVolume_StillMeetsTheProtectedFolder_EitherWay()
+    {
+        string client = Path.Combine(_dir.Path, "client");
+        Directory.CreateDirectory(Path.Combine(client, "Data"));
+        SessionDrive.RawTarget(ClientOutputPath.QueryDosDevice(_dir.Path[0])!).Use(letter =>
+        {
+            string viaLetter = letter + client[1..];
+            CommandException read = Assert.Throws<CommandException>(() => ClientOutputPath.CheckDirectory(Command, Path.Combine(viaLetter, "Data", "out"), [client]));
+            Assert.Contains("read-only", read.Message, StringComparison.Ordinal);
+            CommandException reverse = Assert.Throws<CommandException>(() => ClientOutputPath.CheckDirectory(Command, Path.Combine(client, "Data", "out"), [viaLetter]));
+            Assert.Contains("read-only", reverse.Message, StringComparison.Ordinal);
+        });
+    }
+
+    [WindowsFact]
+    public void D3_AJunctionToASubstDriveIntoARepository_IsJudgedByWhereTheDriveLeads()
+    {
+        string tree = Repository(out string sub);
+        string junction = Path.Combine(_dir.Path, "via-letter");
+        SessionDrive.Subst(sub).Use(letter =>
+        {
+            // The junction stores \??\X:\, which the old code took as the real place and never mapped again.
+            GuardFixtures.JunctionTo(junction, $@"{letter}:\");
+            try
+            {
+                CommandException e = Assert.Throws<CommandException>(() => ClientOutputPath.CheckDirectory(Command, Path.Combine(junction, "data"), []));
+                Assert.Contains("git working tree", e.Message, StringComparison.Ordinal);
+                Assert.Contains(tree, e.Message, StringComparison.Ordinal);
+            }
+            finally
+            {
+                DirectoryLinks.Delete(junction);
+            }
+        });
     }
 }
