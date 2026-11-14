@@ -44,7 +44,15 @@ public sealed record VmapExtractReport(string VmapsDirectory, IReadOnlyList<Vmap
 /// the same plain name the reference keeps the first in its archive listing, this the first in path order (each case
 /// is reported); the game object model list (<c>temp_gameobject_models</c>) is not written, because nothing in ArcaneCore
 /// reads it; placements whose model name is not a plain file name are dropped and reported, where the reference would
-/// write them through the path; and a client file that fails the readers' checks is reported and left out.
+/// write them through the path; placements with a position, rotation, scale or bound that is not a finite number, or a
+/// scale of zero or less (the server's reader refuses the whole tile or tree for one), are dropped and reported; a WMO
+/// with a non-finite group bound, which the reference tool never finishes on, is refused and reported; and a client file
+/// that fails the readers' checks is reported and left out.
+/// </para>
+/// <para>
+/// M2 names: every root WMO's doodad names are resolved before the first map, then each ADT's in map id order (the
+/// reference follows Map.dbc's record order and its archive listing order for the WMOs). A path that fails does not block
+/// a later path of the same plain name, and two paths of one plain name that both convert are reported.
 /// </para>
 /// </remarks>
 public sealed class VmapExtractor
@@ -99,6 +107,9 @@ public sealed class VmapExtractor
         Directory.CreateDirectory(directory);
 
         var library = new VmapModelLibrary(_files);
+
+        // ref: vmangos@0e3ff01 contrib/vmap_extractor/vmapextract/vmapexport.cpp:505,529 (every root WMO's doodad names are extracted before the first map)
+        library.ExtractWmoDoodadModels(cancellationToken);
         var ids = new Dictionary<(uint ClientId, ushort DoodadId), uint>();
         var problems = new List<string>();
         var droppedNames = new HashSet<string>(StringComparer.Ordinal);
@@ -221,13 +232,68 @@ public sealed class VmapExtractor
             return true;
         });
 
+        // The server refuses a spawn with a non-finite field or a scale of zero or less (VMapFormat's ModelSpawn.Read) and then
+        // ignores the whole tile, or the whole tree of a map whose building is global, so such a placement never reaches a file.
+        // Bounds are the ones the tree is built from: an M2's come from its hull transformed by the placement.
+        placements.RemoveAll(p =>
+        {
+            if (HasUsableTransform(p))
+            {
+                return false;
+            }
+
+            int nul = p.Name.IndexOf('\0', StringComparison.Ordinal);
+            string shown = nul >= 0 ? p.Name[..nul] : p.Name;
+            string kind = (p.Flags & VMapFormat.ModM2) != 0 ? "M2" : "WMO";
+            if (droppedNames.Add($"transform:{kind}:{shown}"))
+            {
+                problems.Add($"{kind} placements of '{shown}' were dropped: a position, rotation, scale or bound is not a finite number, or the scale is not above zero");
+            }
+
+            return true;
+        });
+
         if (placements.Count == 0)
         {
-            // The reference writes nothing for a map without a single placement.
+            // The reference writes nothing for a map without a single placement, and an earlier run's files of this map are no longer true.
+            DeleteOldFiles(map, directory, tree: true);
             return new MapResult(new VmapExtractMapReport(map.Id, map.Directory, HasWdt: true, Tiled: true, 0, 0, failed), 0, []);
         }
 
         return Assemble(map, directory, placements, failed);
+    }
+
+    /// <summary>Whether a placement can be written as a spawn the server's reader accepts.</summary>
+    private static bool HasUsableTransform(Placement p)
+    {
+        if (!float.IsFinite(p.Scale) || p.Scale <= 0 || !IsFinite(p.Position) || !IsFinite(p.Rotation))
+        {
+            return false;
+        }
+
+        if ((p.Flags & VMapFormat.ModM2) != 0)
+        {
+            (Vector3 low, Vector3 high) = TransformedBound(p);
+            return IsFinite(low) && IsFinite(high);
+        }
+
+        return IsFinite(p.BoundLow) && IsFinite(p.BoundHigh);
+    }
+
+    private static bool IsFinite(Vector3 v) => float.IsFinite(v.X) && float.IsFinite(v.Y) && float.IsFinite(v.Z);
+
+    /// <summary>Deletes an earlier run's tile files of one map (and its tree file when asked): only that map's own file names, nothing below the folder.</summary>
+    private static void DeleteOldFiles(ClientMap map, string directory, bool tree)
+    {
+        foreach (string stale in Directory.EnumerateFiles(directory, $"{map.Id:D3}_??_??.vmtile"))
+        {
+            File.Delete(stale);
+        }
+
+        if (tree)
+        {
+            File.Delete(Path.Combine(directory, VMapFormat.TreeFileName(map.Id)));
+        }
     }
 
     // ref: vmangos@0e3ff01 contrib/vmap_extractor/vmapextract/adtfile.cpp:94-245 (ADTFile::init: MMDX, MWMO, then MDDF and MODF entries in file order)
@@ -419,10 +485,7 @@ public sealed class VmapExtractor
         uint globalTile = PackTile(GlobalTile, GlobalTile);
         bool tiled = !entries.Any(e => e.Tile == globalTile);
 
-        foreach (string stale in Directory.EnumerateFiles(directory, $"{map.Id:D3}_??_??.vmtile"))
-        {
-            File.Delete(stale);
-        }
+        DeleteOldFiles(map, directory, tree: false);
 
         long bytes = 0;
         using (var stream = new MemoryStream())

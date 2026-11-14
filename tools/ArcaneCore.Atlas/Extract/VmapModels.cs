@@ -100,7 +100,9 @@ internal sealed class VmapModelLibrary
 
     private readonly IClientFileSource _files;
     private readonly Dictionary<string, VmapModelInfo?> _models = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _m2Paths = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _wmoRoots = new(StringComparer.Ordinal);
+    private readonly List<string> _wmoRootOrder = [];
     private readonly List<string> _problems = [];
 
     /// <param name="files">The client files.</param>
@@ -133,6 +135,52 @@ internal sealed class VmapModelLibrary
             else
             {
                 _wmoRoots.Add(name, path);
+                _wmoRootOrder.Add(path);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Resolves the doodad model of every name in every root WMO's MODN chunk, before any map is read, as the reference
+    /// extractor does. This decides which client path an M2 plain name goes to when folders hold the same name: the
+    /// WMO's doodads first, then the ADTs' in the order they are met.
+    /// </summary>
+    // ref: vmangos@0e3ff01 contrib/vmap_extractor/vmapextract/vmapexport.cpp:115-137 (ExtractWmo runs before ParsMapFiles) and wmo.cpp:89-106 (every MODN string goes through ExtractSingleModel)
+    public void ExtractWmoDoodadModels(CancellationToken cancellationToken)
+    {
+        foreach (string path in _wmoRootOrder)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            byte[]? bytes;
+            try
+            {
+                bytes = _files.Read(path);
+            }
+            catch (Exception e) when (e is InvalidDataException or IOException or NotSupportedException)
+            {
+                // The placement pass reads the root again and reports it if the WMO is placed.
+                continue;
+            }
+
+            if (bytes is null)
+            {
+                continue;
+            }
+
+            foreach (WowChunk chunk in WowChunks.Scan(bytes, 0, bytes.Length))
+            {
+                if (chunk.Tag != "MODN")
+                {
+                    continue;
+                }
+
+                ReadOnlySpan<byte> blob = bytes.AsSpan(chunk.Offset, chunk.Size);
+                for (long offset = 0; offset < blob.Length;)
+                {
+                    string stored = WowChunks.StringAt(blob, offset) ?? string.Empty;
+                    offset += stored.Length + 1;
+                    Doodad(stored);
+                }
             }
         }
     }
@@ -190,20 +238,51 @@ internal sealed class VmapModelLibrary
         }
 
         string name = ClientModelNames.FixNameSpaces(ClientModelNames.FixNameCase(plain));
+        string folder = original[..(original.Length - plain.Length)];
         if (_models.TryGetValue(name, out VmapModelInfo? known))
         {
             // An existing file of that name answers for every later path with the same plain name.
-            return (name, known is { IsWmo: false } ? known : null);
+            if (known is not { IsWmo: false })
+            {
+                return (name, null);
+            }
+
+            if (_m2Paths.Add(ClientPath.Key(original)))
+            {
+                NoteCollision(known, name, original, folder);
+            }
+
+            return (name, known);
         }
 
-        // The reference tries the path with the fixed file name, then the path as stored, then the fixed name with its
-        // underscores turned back into spaces; the first that opens and has a bounding hull is converted.
-        string folder = original[..(original.Length - plain.Length)];
+        // The reference creates no file for a path that fails, so a later path of the same plain name is tried afresh;
+        // only the same path is not tried again.
+        if (!_m2Paths.Add(ClientPath.Key(original)))
+        {
+            return (name, null);
+        }
+
+        VmapModelInfo? info = ResolveM2(name, original, folder, quiet: false);
+        if (info is not null)
+        {
+            _models[name] = info;
+        }
+
+        return (name, info);
+    }
+
+    /// <summary>
+    /// The reference tries the path with the fixed file name, then the path as stored, then the fixed name with its
+    /// underscores turned back into spaces; the first that opens and has a bounding hull is converted.
+    /// </summary>
+    // ref: vmangos@0e3ff01 contrib/vmap_extractor/vmapextract/gameobject_extract.cpp:56-76
+    private VmapModelInfo? ResolveM2(string name, string original, string folder, bool quiet)
+    {
         string fixedPath = folder + name;
-        VmapModelInfo? info = Guard(fixedPath, () => ConvertM2(name, fixedPath));
+        VmapModelInfo? info = Guard(fixedPath, () => ConvertM2(name, fixedPath), quiet);
         if (info is null && !string.Equals(original, fixedPath, StringComparison.Ordinal) && _files.Exists(original))
         {
-            info = Guard(original, () => ConvertM2(name, original));
+            info = Guard(original, () => ConvertM2(name, original), quiet);
         }
 
         if (info is null && folder.Length > 0)
@@ -211,12 +290,31 @@ internal sealed class VmapModelLibrary
             string spaced = folder + name.Replace('_', ' ');
             if (!string.Equals(spaced, fixedPath, StringComparison.Ordinal) && !string.Equals(spaced, original, StringComparison.Ordinal) && _files.Exists(spaced))
             {
-                info = Guard(spaced, () => ConvertM2(name, spaced));
+                info = Guard(spaced, () => ConvertM2(name, spaced), quiet);
             }
         }
 
-        _models[name] = info;
-        return (name, info);
+        return info;
+    }
+
+    /// <summary>
+    /// A path whose plain name is already taken by an extracted M2 of another client file: reported when it would have
+    /// converted too (the reference would never have looked at it). The first path keeps the name.
+    /// </summary>
+    private void NoteCollision(VmapModelInfo first, string name, string original, string folder)
+    {
+        string firstKey = ClientPath.Key(first.ClientPath);
+        if (string.Equals(ClientPath.Key(folder + name), firstKey, StringComparison.Ordinal) || string.Equals(ClientPath.Key(original), firstKey, StringComparison.Ordinal))
+        {
+            // Another spelling of the same client file: nothing to convert.
+            return;
+        }
+
+        VmapModelInfo? other = ResolveM2(name, original, folder, quiet: true);
+        if (other is not null && !string.Equals(ClientPath.Key(other.ClientPath), ClientPath.Key(first.ClientPath), StringComparison.Ordinal))
+        {
+            _problems.Add($"M2 name '{name}' is used by both '{first.ClientPath}' and '{other.ClientPath}'; placements get the first.");
+        }
     }
 
     /// <summary>Reads a placed model again and converts it in full, for writing its model file. Thread-safe.</summary>
@@ -246,7 +344,7 @@ internal sealed class VmapModelLibrary
         return digits == 3;
     }
 
-    private VmapModelInfo? Guard(string path, Func<VmapModelInfo?> convert)
+    private VmapModelInfo? Guard(string path, Func<VmapModelInfo?> convert, bool quiet = false)
     {
         try
         {
@@ -254,10 +352,16 @@ internal sealed class VmapModelLibrary
         }
         catch (Exception e) when (e is InvalidDataException or IOException or NotSupportedException)
         {
-            _problems.Add($"'{path}' was not extracted: {e.Message}");
+            if (!quiet)
+            {
+                _problems.Add($"'{path}' was not extracted: {e.Message}");
+            }
+
             return null;
         }
     }
+
+    private static bool IsFinite(Vector3 v) => float.IsFinite(v.X) && float.IsFinite(v.Y) && float.IsFinite(v.Z);
 
     private VmapModelInfo? ConvertWmo(string name, string path)
     {
@@ -356,6 +460,12 @@ internal sealed class VmapModelLibrary
                 || string.Equals(root.GroupNameAt(group.NameOffset), AntiportalName, StringComparison.Ordinal))
             {
                 continue;
+            }
+
+            if (!IsFinite(group.BoundsMin) || !IsFinite(group.BoundsMax))
+            {
+                // The group tree of the model cannot be built over a NaN or infinite bound (the reference tool never finishes on one).
+                throw new InvalidDataException($"group {g} has a bound that is not finite ({group.BoundsMin} to {group.BoundsMax}).");
             }
 
             triangles += group.TriangleCount;
