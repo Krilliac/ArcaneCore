@@ -9,5 +9,9 @@
   built by the script (copied into the vmangos source as `contrib/vmap_probe`); it is not part of
   the .NET solution.
 
+`maps/` can also be written without the vmangos build, by `arcane-atlas run --client <client-dir>
+extract.maps out=<data-root>` ([docs/integration/maps-vmaps-mmaps.md](../../docs/integration/maps-vmaps-mmaps.md#extracting-maps-without-vmangos-tools)).
+`vmaps/` and `mmaps/` still need the script.
+
 The extracted data is derived from Blizzard's assets. Keep it, and the tools directory, outside the
 repository (`DocsLinkTests` walks every `.md` file under the checkout, the vmangos copy included).

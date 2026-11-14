@@ -74,9 +74,10 @@ Observed on this machine (read only, 2026-10-07):
    expect. **Done on 2026-10-07**, see [Extraction](#extraction-2026-10-07) and the
    [rebuild recipe](#rebuild-recipe): maps and vmaps take about four minutes, the continents' navmesh
    about 36 minutes with 6 threads.
-2. **Extract on first run, in ArcaneCore** (a C# extractor reading the MPQs). `.map` generation is
-   a contained job (MPQ + WDT/ADT `MCNK` heights, area ids, `MCLQ` liquid) and could run at first
-   startup in minutes. vmaps need WMO/M2 parsing and BIH building (larger). Navmesh generation needs
+2. **Extract on first run, in ArcaneCore** (a C# extractor reading the MPQs). The `.map` part
+   exists since 2026-11-14 as the Atlas command `extract.maps` (see
+   [Extracting maps without vmangos' tools](#extracting-maps-without-vmangos-tools)); it is run by
+   hand, not at server start. vmaps need WMO/M2 parsing and BIH building (larger). Navmesh generation needs
    Recast; a managed port (e.g. DotRecast, zlib licence) would be a new dependency, and generation
    should run as a background/offline job with cached output, never on the world thread.
 3. **Ship generated data.** Convenient, but the output is derived from Blizzard's assets: fine on
@@ -146,6 +147,29 @@ MoveMapGenerator mmap version 6 with Detour 7 (`src/game/Maps/MoveMapSharedDefin
 `dep/recastnavigation/Detour/Include/DetourNavMesh.h`), the values `TerrainTile`, `VMapFormat` and
 `NavMeshFormat` accept. A different vmangos revision should be checked the same way first.
 
+## Extracting maps without vmangos' tools
+
+`arcane-atlas` writes `maps/` itself, from the client's MPQ archives (or an extracted client tree),
+with no C++ build:
+
+```
+arcane-atlas run --client <wow-client-dir> extract.maps out=<data-root>
+```
+
+`<data-root>` is an absolute path outside every git working tree and outside the client folder; the
+files go to `<data-root>/maps`. `maps=0,1` limits the run to some map ids, `overwrite=true` rewrites
+tiles that are already there (without it they are kept, so a stopped run continues) and `threads=N`
+sets how many tiles are converted at once. The answer is a JSON report: per map the tiles listed by
+its WDT, written, kept, absent and failed, with the reason for every refused file.
+
+The files are meant to equal, byte for byte, what vmangos' `MapExtractor -e 1 -f 0` writes (float
+heights, the -500 height limit, `z1.4`). `MapExtractorRealDataTests` checks exactly that against a
+vmangos extraction of the same client; it needs `ARCANECORE_TEST_TERRAIN_DIR` and
+`ARCANECORE_TEST_CLIENT_FILES_DIR`. **It has not been run yet**: the command was written and tested
+on synthetic tiles only (2026-11-14), on a machine without client data. Run it before relying on the
+output, and keep using the vmangos tools for `vmaps/` and `mmaps/`, which Atlas does not write.
+Details: [atlas](../areas/atlas.md).
+
 ## Verification
 
 `tests/ArcaneCore.Game.Tests/Collision/RealTerrainDataTests.cs` and `VMapNativeOracleTests.cs` read
@@ -191,5 +215,6 @@ from …`, `Collision: vmaps from … (line of sight on, heights on)` and `Colli
 line of sight and model heights: a server built before them reads the same vmaps but misses models
 silently (fail-soft: missing means open).
 
-Later, for self-containment: an in-process `.map` extractor run on first start, and a terrain-grid
-A* fallback over `.map` heights for maps without mmaps. Navmesh generation stays an offline job.
+Later, for self-containment: running the `.map` extraction on first start (today it is the Atlas
+command above), and a terrain-grid A* fallback over `.map` heights for maps without mmaps. Navmesh
+generation stays an offline job.

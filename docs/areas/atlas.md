@@ -77,7 +77,7 @@ Atlas defines four viewport compare modes (`CompareMode`: `Server`, `Reference`,
 | `live.trails` | `Live` | `Live` | **Trails**: recent entity positions, fading with age (untiled). |
 | `live.grids` | `Live` | `Live` | **Loaded grids**: grids the world daemon has loaded on this map (untiled). |
 
-### 3. Command catalog (98 commands)
+### 3. Command catalog (101 commands)
 
 Every command returns a JSON envelope `{"command":"...","ok":true,"elapsedMs":...,"data":{...}}` or `{"command":"...","ok":false,"elapsedMs":...,"error":{"code":"...","message":"..."}}`.
 
@@ -116,6 +116,9 @@ Every command returns a JSON envelope `{"command":"...","ok":true,"elapsedMs":..
 - `diff.models` (`map`, `x`, `y`, `radius?`): compares server `.vmtile` WMO/M2 collision triangles against client `MODF`/`MDDF` placed models (`ModelDiff`), classifying documented extractor filters (`m2-without-collision-hull`, `wmo-NonCollidable-material`, `wmo-antiportal-group`, `wmo-unreachable-group`, `wmo-liquid-degenerate-face`, `wmo-tilted-doodad-rotation`, `wmo-duplicate-face`) under `expectedCount` and unmatched triangles under `unexplainedCount`.
 - `diff.nav` (`map`, `x`, `y`, `radius?`): compares server `NavMeshTile` against `DotRecast.Detour` (`NavDiff`), classifying `offmesh-ignored-by-server`, `bv-tree-rejected-by-server`, `portal-byte-quantization`, and `portal-slab-climb-rule` under `expectedCount` and any vertex, polygon, or unexpected link mismatch under `unexplainedCount`.
 - `diff.vmap.native` (`map`, `a`, `b`): the server's spell line of sight (doodads ignored), model floor below `a` and WMO group around `a` against vmangos' own `VMapManager2`, run as a child process through `VMapProbe` (`tools/terrain/vmap-oracle`, built by `tools/terrain/build-terrain-data.ps1`; `VMapNativeProbe`, `VMapNativeCommands`). The executable comes from `ARCANECORE_ATLAS_VMAP_PROBE`, else `ARCANECORE_TEST_VMAP_ORACLE`; without it, or without the data root's `vmaps` folder, the command is refused `unavailable` and says what is missing. The answer carries `native`, `server` and `match` for `lineOfSight`, `height` (equal within 0.01 yard) and `area`, and `allMatch`. One run is two probe queries (the point as given for line of sight and area, the point raised by the server's 2-yard floor probe for the height) and is killed after two minutes.
+
+#### Server data extraction (`Extract/`)
+- `extract.maps` (`out`, `maps?`, `overwrite?`, `threads?`): writes the server's terrain files (`maps/MMMXXYY.map`, format `z1.4`: heights, area explore flags, liquid, holes) from the open client's `Map.dbc`, `AreaTable.dbc`, WDT and ADT files (`MapExtractor`, `MapTileEncoder`, `AreaExploreFlags`). The output is what vmangos' `MapExtractor` writes with its defaults (`-f 0`, height limit on): float heights, heights below -500 raised to -500, stacked `MCLQ` layers merged into one surface, a corner two chunks share taken from the chunk visited last. `out` is the server data root (the folder `World:Maps:DataDirectory` names) and must be an absolute path outside every git working tree and outside the client folder; `maps` limits the run to some map ids; an existing tile file is kept unless `overwrite=true`, so a stopped run continues; `threads` is the number of tiles converted at once (default: the processor count). The answer lists, per map, the tiles listed, written, kept, absent (listed by the WDT without an ADT) and failed, and each refused file with the reason. Headless and attached (`run`, `script`, `ctl`, MCP); not in the palette. Example: `arcane-atlas run --client <client-dir> extract.maps out=<data-root>`.
 
 #### Headless CPU renderer and scene exporters (`Render/`)
 - `render.png` (`width?`, `height?`, `out`, `view?`): renders a view (with optional RFC 7396 merge patch) to a PNG file using the deterministic software renderer (`CpuRenderer`, `PngWriter`).
@@ -243,8 +246,11 @@ This is still the loopback posture of section 6: the token is per instance, and 
 - `Host/`: loopback Kestrel server (`AtlasServer`), bearer token and WebSocket `auth` handshake, discovery lifecycle, CLI verbs (`serve`, `ctl`, `run`, `script`, `mcp`, `layers`), `ChunkPicker`, and MCP stdio protocol (`McpServer`).
 - `Web/`: Node.js + headless Edge/Chrome browser tests (`WebScriptTests`, `WebAssetsTests`, `browser.test.mjs`) verifying `ATG1` scene decoding, picking, split-screen, and WebGL2 canvas capture.
 - `Live/`: `LiveFeed`, `LiveStore` spline interpolation and trails, `live.*` commands, and live geometry layers.
+- `Extract/`: `MapTileEncoder` byte layouts and the server's `TerrainTile` reading them back (heights, shared corners, the -500 limit, areas, holes, merged liquid), `AreaExploreFlags`, `MapExtractor` file names, resume and failure reports, and the `extract.maps` command's refusals. `MapExtractorRealDataTests` compares every tile with the `.map` file vmangos' extractor wrote, byte for byte; it needs `ARCANECORE_TEST_TERRAIN_DIR` and `ARCANECORE_TEST_CLIENT_FILES_DIR` and is skipped without them.
 
 ## Limits
+
+- `extract.maps` writes float heights with the -500 limit only: vmangos' packed 8 and 16 bit heights (`-f 1`) and unlimited heights (`-h 0`) are not produced. A tile whose ADT fails the reader's checks is reported and not written. The vmaps and the navigation meshes still come from vmangos' tools ([maps, vmaps and mmaps](../integration/maps-vmaps-mmaps.md)).
 
 - Textured terrain, WMO and M2 layers are not implemented yet (lanes A2 and A3 of [atlas-models](atlas-models.md)): the shipped layers render untextured attribute-colored collision, bounding, and render geometry with surface-normal shading and wireframe overlays. The texture, material and model-package foundation is in place.
 - `live.connect` discovery of running daemons requires Windows when `pid` is omitted because the world daemon's map feed uses Windows named pipes (`\\.\pipe\arcanecore-mapfeed-{pid}` with `ControlPipeSecurity` and `PIPE_REJECT_REMOTE_CLIENTS`). All offline server, client, diff, render, export, and MCP commands are cross-platform.
