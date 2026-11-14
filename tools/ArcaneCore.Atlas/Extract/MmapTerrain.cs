@@ -246,7 +246,11 @@ internal sealed class MmapTerrain
         uint liquidOffset = U32(file, 24);
         uint holesOffset = U32(file, 32);
         uint holesSize = U32(file, 36);
-        uint heightFlags = U32(file, Checked(file, heightOffset + 4, 4, path));
+
+        // The height block's header (fourcc, flags, grid height, grid maximum) is checked in long arithmetic: the offset is
+        // a file value, and a uint sum would wrap past the check.
+        int heightAt = Checked(file, heightOffset, 16, path);
+        uint heightFlags = U32(file, heightAt + 4);
         bool haveTerrain = (heightFlags & HeightNoHeight) == 0;
         bool haveLiquid = liquidOffset != 0 && !_skipLiquid;
         if (!haveTerrain && !haveLiquid)
@@ -265,9 +269,9 @@ internal sealed class MmapTerrain
 
         if (haveTerrain)
         {
-            float gridHeight = F32(file, (int)heightOffset + 8);
-            float gridMaxHeight = F32(file, (int)heightOffset + 12);
-            int at = (int)heightOffset + 16;
+            float gridHeight = F32(file, heightAt + 8);
+            float gridMaxHeight = F32(file, heightAt + 12);
+            int at = heightAt + 16;
             var v9 = new float[V9SizeSq];
             var v8 = new float[V8SizeSq];
             if ((heightFlags & HeightAsInt8) != 0)

@@ -369,18 +369,27 @@ public sealed class MmapExtractorTests(MmapWorld world) : IClassFixture<MmapWorl
 
 /// <summary>
 /// A fact that needs the reference tools' full data root (<c>ARCANECORE_TEST_TERRAIN_DIR</c>, holding <c>maps/</c>,
-/// <c>vmaps/</c> and <c>mmaps/</c>); reported as skipped, with the reason, otherwise.
+/// <c>vmaps/</c> and <c>mmaps/</c>). Skipped, with the reason, when the variable is not set; when it is set, the fact runs and
+/// fails with a clear message if the folder is not a complete data root (a wrong path must not read as a pass).
 /// </summary>
 public sealed class MmapRealFactAttribute : FactAttribute
 {
-    /// <summary>Skips the fact unless the data root is complete.</summary>
+    /// <summary>Skips the fact when the variable is unset.</summary>
     public MmapRealFactAttribute()
     {
-        string? root = Environment.GetEnvironmentVariable(AtlasPaths.TerrainEnvironmentVariable);
-        if (string.IsNullOrWhiteSpace(root) || !new[] { "maps", "vmaps", "mmaps" }.All(f => Directory.Exists(Path.Combine(root, f))))
+        if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(AtlasPaths.TerrainEnvironmentVariable)))
         {
-            Skip = $"{AtlasPaths.TerrainEnvironmentVariable} is not set to a data root holding maps/, vmaps/ and mmaps/ (vmangos tool output for 1.12.1).";
+            Skip = $"{AtlasPaths.TerrainEnvironmentVariable} is not set (it names a data root holding maps/, vmaps/ and mmaps/ from the vmangos tools for 1.12.1).";
         }
+    }
+
+    /// <summary>The data root, or a failure that says what is missing from the folder the variable names.</summary>
+    public static string Root()
+    {
+        string root = Environment.GetEnvironmentVariable(AtlasPaths.TerrainEnvironmentVariable)!;
+        string[] missing = [.. new[] { "maps", "vmaps", "mmaps" }.Where(f => !Directory.Exists(Path.Combine(root, f)))];
+        Assert.True(missing.Length == 0, $"{AtlasPaths.TerrainEnvironmentVariable} is set to '{root}', which has no {string.Join(", ", missing)} folder; it must be a data root holding maps/, vmaps/ and mmaps/.");
+        return root;
     }
 }
 
@@ -414,13 +423,63 @@ public sealed class MmapExtractorRealDataTests(Xunit.Abstractions.ITestOutputHel
         return areas;
     }
 
-    [MmapRealFact]
-    public void Tiles_CoverTheGroundTheReferenceGeneratorsTilesCover()
+    // Walkable ground in Stormwind's trade district, tile 0/48/30: points that are polygon centres of vmangos's own
+    // tile (so walkable on the reference mesh), 140 to 175 yards apart in a straight line with buildings between them, so the
+    // path is a real detour: the reference path is 183 and 208 yards long.
+    private static readonly (Vector3 Start, Vector3 End)[] PathPairs =
+    [
+        (new Vector3(-8760.5f, 739.0f, 99.1f), new Vector3(-8834.0f, 611.3f, 94.7f)),
+        (new Vector3(-8898.6f, 927.8f, 115.3f), new Vector3(-8726.2f, 937.6f, 101.0f)),
+    ];
+
+    /// <summary>How far our mesh's shortest path may differ from the reference's: the two meshes have different polygons.</summary>
+    private const double PathTolerance = 0.15;
+
+    private static double PathLength(IReadOnlyList<Vector3> points)
     {
-        string root = Environment.GetEnvironmentVariable(AtlasPaths.TerrainEnvironmentVariable)!;
+        double length = 0;
+        for (int i = 1; i < points.Count; i++)
+        {
+            length += Vector3.Distance(points[i - 1], points[i]);
+        }
+
+        return length;
+    }
+
+    /// <summary>Per flag class, the walkable area of both meshes compared; returns what differs.</summary>
+    private static List<string> CompareAreas(string name, Dictionary<ushort, double> mineArea, Dictionary<ushort, double> referenceArea, Xunit.Abstractions.ITestOutputHelper output)
+    {
+        // Kinds of ground covering under half a percent of a tile are too small to compare by ratio; a kind that is missing
+        // from one side altogether is reported from a much smaller area.
+        const double RatioFloor = 1400;
+        const double MissingFloor = 200;
+        var failures = new List<string>();
+        foreach (ushort flags in mineArea.Keys.Union(referenceArea.Keys).Order())
+        {
+            double a = mineArea.GetValueOrDefault(flags);
+            double b = referenceArea.GetValueOrDefault(flags);
+            output.WriteLine($"  flags 0x{flags:X2}: {a:F0} sq yd (reference {b:F0})");
+            if ((a > RatioFloor || b > RatioFloor) && Math.Abs(a - b) > 0.1 * Math.Max(a, b))
+            {
+                failures.Add($"{name} flags 0x{flags:X2}: {a:F0} sq yd, reference {b:F0}");
+            }
+            else if ((a == 0 && b > MissingFloor) || (b == 0 && a > MissingFloor))
+            {
+                failures.Add($"{name} flags 0x{flags:X2}: {a:F0} sq yd, reference {b:F0} (a kind of ground missing from one side)");
+            }
+        }
+
+        return failures;
+    }
+
+    [MmapRealFact]
+    public void Tiles_CoverTheGroundTheReferenceGeneratorsTilesCover_AndAPathFoundOnBothAgrees()
+    {
+        string root = MmapRealFactAttribute.Root();
         using var scratch = new TestDirectory();
         var extractor = new MmapExtractor(root, scratch.Path);
         var failures = new List<string>();
+        var problems = new List<string>();
         foreach ((uint map, int x, int y) in Tiles)
         {
             MmapExtractReport report = extractor.Extract([map], overwrite: true, quick: false, threads: 1, CancellationToken.None, onlyTile: (x, y));
@@ -430,23 +489,49 @@ public sealed class MmapExtractorRealDataTests(Xunit.Abstractions.ITestOutputHel
             NavMeshTile mine = NavMeshTile.ParseFile(File.ReadAllBytes(Path.Combine(scratch.Path, name)));
             NavMeshTile reference = NavMeshTile.ParseFile(File.ReadAllBytes(Path.Combine(root, "mmaps", name)));
             Assert.Equal((reference.X, reference.Y), (mine.X, mine.Y));
-            Dictionary<ushort, double> mineArea = AreaByFlags(mine);
-            Dictionary<ushort, double> referenceArea = AreaByFlags(reference);
             output.WriteLine($"{name}: {mine.Polys.Length} polygons (reference {reference.Polys.Length}); problems: {report.Problems.Count}");
-            foreach (ushort flags in mineArea.Keys.Union(referenceArea.Keys).Order())
+            foreach (string problem in report.Problems)
             {
-                double a = mineArea.GetValueOrDefault(flags);
-                double b = referenceArea.GetValueOrDefault(flags);
-                output.WriteLine($"  flags 0x{flags:X2}: {a:F0} sq yd (reference {b:F0})");
-
-                // Kinds of ground covering under half a percent of a tile are too small to compare by ratio.
-                if (Math.Max(a, b) > 1400 && Math.Abs(a - b) > 0.1 * Math.Max(a, b))
-                {
-                    failures.Add($"{name} flags 0x{flags:X2}: {a:F0} sq yd, reference {b:F0}");
-                }
+                output.WriteLine($"  problem: {problem}");
             }
+
+            problems.AddRange(report.Problems);
+            failures.AddRange(CompareAreas(name, AreaByFlags(mine), AreaByFlags(reference), output));
         }
 
-        Assert.True(failures.Count == 0, "Walkable area differs from the reference by more than 10%:\n" + string.Join("\n", failures));
+        Assert.True(failures.Count == 0, "Walkable area differs from the reference by more than 10%:" + Environment.NewLine + string.Join(Environment.NewLine, failures));
+        ExplainedProblems(problems);
+
+        // A path across the trade district, on the reference's own tile and on ours, loaded by the server's loader.
+        var mineServer = new NavMeshPathfinder(scratch.Path);
+        var referenceServer = new NavMeshPathfinder(Path.Combine(root, "mmaps"));
+        Assert.True(mineServer.LoadTile(0, 48, 30));
+        Assert.True(referenceServer.LoadTile(0, 48, 30));
+        foreach ((Vector3 start, Vector3 end) in PathPairs)
+        {
+            PathResult theirs = referenceServer.FindPath(0, start, end);
+            PathResult ours = mineServer.FindPath(0, start, end);
+            Assert.True(theirs.Type == PathType.Normal, $"the reference mesh has no path from {start} to {end}: {theirs.Type}");
+            Assert.True(ours.Type == PathType.Normal, $"our mesh has no path from {start} to {end} (reference: {PathLength(theirs.Points):F1} yards): {ours.Type}");
+            double expected = PathLength(theirs.Points);
+            double actual = PathLength(ours.Points);
+            output.WriteLine($"path {start} -> {end}: ours {actual:F1} yd, reference {expected:F1} yd");
+            Assert.InRange(actual, expected * (1 - PathTolerance), expected * (1 + PathTolerance));
+            Assert.True(Vector3.Distance(end, ours.End) < 1.5f, $"our path ends at {ours.End}, not near {end}");
+        }
+    }
+
+    /// <summary>
+    /// The only problem the three tiles are known to report: 3 sub-tiles of tile 0/48/30 for which DotRecast throws "Multiple
+    /// outlines for region", where the reference generator's own Recast logs the same message and carries on (it keeps the
+    /// sub-tile). That is why tile 0/48/30 is a little short of ground (flags 0x01) against the reference. Anything else is new.
+    /// </summary>
+    private static void ExplainedProblems(List<string> problems)
+    {
+        var known = new System.Text.RegularExpressions.Regex(
+            @"^0004830\.mmtile: Recast gave up on [1-9]\d* of 625 sub-tiles \(first: Exception: rcBuildContours: Multiple outlines for region \d+\.\); they are missing from the tile\.$",
+            System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        string[] unexplained = [.. problems.Where(p => !known.IsMatch(p))];
+        Assert.True(unexplained.Length == 0, "Problems the comparison does not explain:" + Environment.NewLine + string.Join(Environment.NewLine, unexplained));
     }
 }

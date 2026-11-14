@@ -116,6 +116,10 @@ internal static class ExtractCommands
                 {
                     throw new CommandException(CommandException.Failed, $"{name}: cannot write to '{dataRoot}': {e.Message}", e);
                 }
+                catch (InvalidDataException e)
+                {
+                    throw new CommandException(CommandException.Failed, $"{name}: {e.Message}", e);
+                }
 
                 var list = new JsonArray();
                 foreach (MmapExtractMapReport map in report.Maps)
@@ -129,6 +133,7 @@ internal static class ExtractCommands
                         ["empty"] = map.Empty,
                         ["failed"] = map.Failed,
                         ["polygons"] = map.Polygons,
+                        ["partial"] = map.Partial,
                     });
                 }
 
@@ -139,6 +144,7 @@ internal static class ExtractCommands
                     ["existing"] = report.Maps.Sum(m => m.Existing),
                     ["empty"] = report.Maps.Sum(m => m.Empty),
                     ["failed"] = report.Maps.Sum(m => m.Failed),
+                    ["partial"] = report.Maps.Sum(m => m.Partial),
                     ["polygons"] = report.Maps.Sum(m => m.Polygons),
                     ["bytes"] = report.Bytes,
                     ["maps"] = list,
@@ -175,6 +181,10 @@ internal static class ExtractCommands
                 catch (Exception e) when (e is IOException or UnauthorizedAccessException)
                 {
                     throw new CommandException(CommandException.Failed, $"{name}: cannot write to '{output}': {e.Message}", e);
+                }
+                catch (InvalidDataException e)
+                {
+                    throw new CommandException(CommandException.Failed, $"{name}: {e.Message}", e);
                 }
 
                 var list = new JsonArray();
@@ -270,6 +280,10 @@ internal static class ExtractCommands
                 catch (Exception e) when (e is IOException or UnauthorizedAccessException)
                 {
                     throw new CommandException(CommandException.Failed, $"{name}: cannot write to '{output}': {e.Message}", e);
+                }
+                catch (InvalidDataException e)
+                {
+                    throw new CommandException(CommandException.Failed, $"{name}: {e.Message}", e);
                 }
 
                 return ToJson(report);

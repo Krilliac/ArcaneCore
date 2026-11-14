@@ -14,7 +14,8 @@ namespace ArcaneCore.Atlas.Extract;
 /// <param name="Empty">Tiles with nothing walkable (no file is written for them).</param>
 /// <param name="Failed">Tiles that could not be built.</param>
 /// <param name="Polygons">Polygons in the tiles written.</param>
-public sealed record MmapExtractMapReport(uint Id, int Tiles, int Written, int Existing, int Empty, int Failed, long Polygons);
+/// <param name="Partial">Tiles written (and counted in <paramref name="Written"/>) with at least one sub-tile missing because its build failed.</param>
+public sealed record MmapExtractMapReport(uint Id, int Tiles, int Written, int Existing, int Empty, int Failed, long Polygons, int Partial = 0);
 
 /// <summary>The outcome of a <see cref="MmapExtractor"/> run.</summary>
 /// <param name="MmapsDirectory">The folder the files are in.</param>
@@ -94,7 +95,17 @@ public sealed class MmapExtractor
             if (mapTiles.Count == 0)
             {
                 // A map without terrain tiles is one building: its tiles are the ones the building's box covers.
-                AddTilesOfGlobalModel(mapId, cache, mapTiles);
+                try
+                {
+                    AddTilesOfGlobalModel(mapId, cache, mapTiles);
+                }
+                catch (Exception e) when (e is InvalidDataException or IOException or UnauthorizedAccessException)
+                {
+                    // One damaged file costs this map, not the run.
+                    problems.Add($"map {mapId}: {e.Message}");
+                    reports.Add(new MmapExtractMapReport(mapId, 0, 0, 0, 0, 1, 0));
+                    continue;
+                }
             }
 
             if (mapTiles.Count == 0)
@@ -114,7 +125,12 @@ public sealed class MmapExtractor
             BinaryPrimitives.WriteSingleLittleEndian(parameters.AsSpan(12), MmapTerrain.GridSize);
             BinaryPrimitives.WriteSingleLittleEndian(parameters.AsSpan(16), MmapTerrain.GridSize);
             BinaryPrimitives.WriteInt32LittleEndian(parameters.AsSpan(20), mapTiles.Count);
-            bytes += ExtractOutput.WriteWhole(Path.Combine(mmapsDirectory, NavMeshFormat.ParamsFileName(mapId)), parameters);
+
+            // Tiles hold Detour coordinates relative to the origin of the run that built them, so a tile left from a run with
+            // another origin, tile size or tile count does not fit this map's parameter file: such a map is rebuilt whole.
+            string parametersPath = Path.Combine(mmapsDirectory, NavMeshFormat.ParamsFileName(mapId));
+            bool staleTiles = !overwrite && ParametersDiffer(parametersPath, parameters);
+            bytes += ExtractOutput.WriteWhole(parametersPath, parameters);
 
             // ref: vmangos@0e3ff01 contrib/mmap/src/MapBuilder.cpp:319-370 (buildSingleTile)
             IEnumerable<uint> building = mapTiles;
@@ -133,6 +149,8 @@ public sealed class MmapExtractor
             int existing = 0;
             int empty = 0;
             int failed = 0;
+            int partial = 0;
+            int rebuiltStale = 0;
             long polygons = 0;
             long tileBytes = 0;
             Parallel.ForEach(building, new ParallelOptions { MaxDegreeOfParallelism = threads, CancellationToken = cancellationToken }, packed =>
@@ -145,8 +163,13 @@ public sealed class MmapExtractor
                 string target = Path.Combine(mmapsDirectory, name);
                 if (!overwrite && IsCurrentTile(target))
                 {
-                    Interlocked.Increment(ref existing);
-                    return;
+                    if (!staleTiles)
+                    {
+                        Interlocked.Increment(ref existing);
+                        return;
+                    }
+
+                    Interlocked.Increment(ref rebuiltStale);
                 }
 
                 try
@@ -154,7 +177,10 @@ public sealed class MmapExtractor
                     MmapTileBuilder.Result result = BuildTile(mapId, tileX, tileY, mapsDirectory, cache, origin, quick, problems, name, cancellationToken);
                     if (result.FailedSubTiles > 0)
                     {
-                        problems.Add($"{name}: Recast gave up on {result.FailedSubTiles} of 625 sub-tiles; they are missing from the tile.");
+                        string cause = result.FirstFailure is null ? string.Empty : $" (first: {result.FirstFailure})";
+                        problems.Add(result.UnexpectedFailure
+                            ? $"{name}: {result.FailedSubTiles} of 625 sub-tiles failed with an unexpected error in the generator's own steps, not a Recast refusal{cause}; they are missing from the tile."
+                            : $"{name}: Recast gave up on {result.FailedSubTiles} of 625 sub-tiles{cause}; they are missing from the tile.");
                     }
 
                     if (result.File is null)
@@ -175,6 +201,10 @@ public sealed class MmapExtractor
                     Interlocked.Add(ref tileBytes, ExtractOutput.WriteWhole(target, result.File));
                     Interlocked.Add(ref polygons, result.Polygons);
                     Interlocked.Increment(ref written);
+                    if (result.FailedSubTiles > 0)
+                    {
+                        Interlocked.Increment(ref partial);
+                    }
                 }
                 catch (Exception e) when (e is InvalidDataException or IOException or UnauthorizedAccessException)
                 {
@@ -183,8 +213,14 @@ public sealed class MmapExtractor
                 }
             });
 
+            if (rebuiltStale > 0)
+            {
+                string others = onlyTile is null ? string.Empty : " The other tiles of the map were not built in this run and are still stale.";
+                problems.Add($"map {mapId}: {NavMeshFormat.ParamsFileName(mapId)} differs from the one the existing tiles were built with (origin, tile size or tile count); {rebuiltStale} existing tile(s) were rebuilt as if overwrite were set.{others}");
+            }
+
             bytes += tileBytes;
-            reports.Add(new MmapExtractMapReport(mapId, mapTiles.Count, written, existing, empty, failed, polygons));
+            reports.Add(new MmapExtractMapReport(mapId, mapTiles.Count, written, existing, empty, failed, polygons, partial));
         }
 
         return new MmapExtractReport(mmapsDirectory, reports, bytes, [.. problems.Distinct().Order(StringComparer.Ordinal)]);
@@ -327,6 +363,19 @@ public sealed class MmapExtractor
             {
                 tiles.Add(((uint)x << 16) | (uint)y);
             }
+        }
+    }
+
+    /// <summary>Whether the parameter file on disk is missing or is not the bytes about to be written.</summary>
+    private static bool ParametersDiffer(string path, byte[] parameters)
+    {
+        try
+        {
+            return !File.Exists(path) || !File.ReadAllBytes(path).AsSpan().SequenceEqual(parameters);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return true;
         }
     }
 
