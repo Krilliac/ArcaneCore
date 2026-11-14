@@ -67,4 +67,30 @@ public sealed class VmapMapDirectoryTests
         Assert.Contains(report.Problems, p => p.Contains("'000.vmtree'", StringComparison.Ordinal) && p.Contains("is a folder", StringComparison.Ordinal));
         Assert.True(File.Exists(inside));
     }
+
+    [WindowsFact]
+    public void Extract_SkipsADanglingFolderLinkWhereATreeFileBelongs_AndReportsIt()
+    {
+        var fixture = new TerrainFixture();
+        ClientMapDirectory maps = Client(fixture);
+        using var output = new TestDirectory();
+        string vmaps = Path.Combine(output.Path, "vmaps");
+        Directory.CreateDirectory(vmaps);
+        string target = Path.Combine(output.Path, "gone");
+        Directory.CreateDirectory(target);
+        string link = Path.Combine(vmaps, "000.vmtree");
+        var start = new System.Diagnostics.ProcessStartInfo("cmd.exe", $"/c mklink /J \"{link}\" \"{target}\"") { UseShellExecute = false, CreateNoWindow = true };
+        using (System.Diagnostics.Process mklink = System.Diagnostics.Process.Start(start)!)
+        {
+            mklink.WaitForExit();
+            Assert.True(mklink.ExitCode == 0, "mklink /J failed, so the junction case cannot be tested here.");
+        }
+
+        Directory.Delete(target);
+
+        VmapExtractReport report = new VmapExtractor(fixture.Files, maps).Extract(output.Path, null, threads: 1, CancellationToken.None);
+
+        Assert.Equal(new uint[] { 0, 7, 8, 9, 10 }, report.Maps.Select(m => m.Id));
+        Assert.Contains(report.Problems, p => p.Contains("'000.vmtree'", StringComparison.Ordinal) && p.Contains("is a folder", StringComparison.Ordinal));
+    }
 }

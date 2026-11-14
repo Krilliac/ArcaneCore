@@ -72,7 +72,10 @@ public sealed class MmapExtractor
     /// <param name="threads">Tiles built at once (at least 1).</param>
     /// <param name="onlyTile">
     /// Build this one tile (the server's tile X and Y) of each selected map. The map's parameter file is still written
-    /// from all its tiles, so the tile fits a full build.
+    /// from all its tiles, so the tile fits a full build. A map whose tiles on disk were built against other parameters
+    /// (origin, tile size or tile count) is refused with an <see cref="ArgumentException"/> and nothing of it is written or
+    /// deleted, whatever <paramref name="overwrite"/> says: the tiles beside the new tile would stay in the wrong slot, so
+    /// that map has to be built whole, without a tile.
     /// </param>
     public MmapExtractReport Extract(IReadOnlyCollection<uint>? onlyMaps, bool overwrite, bool quick, int threads, CancellationToken cancellationToken, (int X, int Y)? onlyTile = null)
     {
@@ -155,14 +158,13 @@ public sealed class MmapExtractor
             string parametersPath = Path.Combine(mmapsDirectory, NavMeshFormat.ParamsFileName(mapId));
             List<string> oldTiles = TileFilesOf(mmapsDirectory, mapId);
             bool parametersChanged = oldTiles.Count > 0 && ParametersDiffer(parametersPath, parameters);
-            bool staleTiles = parametersChanged && !overwrite;
-            if (staleTiles && onlyTile is not null)
+            if (parametersChanged && onlyTile is not null)
             {
-                throw new ArgumentException($"Map {mapId}'s navmesh parameters changed since its tiles were built; build the whole map or pass overwrite=true. Nothing was written for this map.", nameof(onlyTile));
+                throw new ArgumentException($"Map {mapId}'s navmesh parameters changed since its tiles were built; build the whole map without tile=. Nothing was written for this map.", nameof(onlyTile));
             }
 
             int deleted = 0;
-            if (parametersChanged && onlyTile is null)
+            if (parametersChanged)
             {
                 try
                 {
@@ -263,7 +265,7 @@ public sealed class MmapExtractor
                 }
             });
 
-            if (staleTiles)
+            if (parametersChanged)
             {
                 problems.Add($"map {mapId}: {NavMeshFormat.ParamsFileName(mapId)} differs from the one the existing tiles were built with (origin, tile size or tile count); {deleted} existing tile file(s) were deleted and {written} of the map's {mapTiles.Count} tile(s) rebuilt.");
             }
@@ -416,8 +418,8 @@ public sealed class MmapExtractor
     }
 
     /// <summary>
-    /// The tile files of one map in the folder: only names that <see cref="NavMeshFormat.TileFileName"/> produces for the map,
-    /// directly in the folder (nothing below it, no folders).
+    /// The tile files of one map in the folder: only names that <see cref="NavMeshFormat.TileFileName"/> produces for the map
+    /// (compared without regard to case, as a Windows or macOS file system resolves them), directly in the folder (nothing below it, no folders).
     /// </summary>
     private static List<string> TileFilesOf(string directory, uint mapId)
     {
@@ -429,7 +431,7 @@ public sealed class MmapExtractor
             if (name.Length == prefix.Length + 4 + ".mmtile".Length
                 && int.TryParse(name.AsSpan(prefix.Length, 2), NumberStyles.None, CultureInfo.InvariantCulture, out int x)
                 && int.TryParse(name.AsSpan(prefix.Length + 2, 2), NumberStyles.None, CultureInfo.InvariantCulture, out int y)
-                && string.Equals(name, NavMeshFormat.TileFileName(mapId, x, y), StringComparison.Ordinal))
+                && string.Equals(name, NavMeshFormat.TileFileName(mapId, x, y), StringComparison.OrdinalIgnoreCase))
             {
                 files.Add(file);
             }

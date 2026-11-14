@@ -95,18 +95,21 @@ public sealed class MmapResumeTests(MmapWorld world) : IClassFixture<MmapWorld>
         Assert.Contains("1 existing tile file(s) were deleted and 2 of the map's 3 tile(s) rebuilt", problem, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void OneTile_AgainstChangedParameters_IsRefused_AndWritesAndDeletesNothing()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void OneTile_AgainstChangedParameters_IsRefused_AndWritesAndDeletesNothing(bool overwrite)
     {
         using TestDirectory copy = Copy();
         string mmaps = Path.Combine(copy.Path, "mmaps");
         MoveTheOrigin(copy);
         Dictionary<string, byte[]> before = MapFiles(mmaps);
 
-        ArgumentException e = Assert.Throws<ArgumentException>(() => new MmapExtractor(copy.Path).Extract([0], overwrite: false, quick: false, threads: 1, CancellationToken.None, onlyTile: (50, 30)));
+        ArgumentException e = Assert.Throws<ArgumentException>(() => new MmapExtractor(copy.Path).Extract([0], overwrite, quick: false, threads: 1, CancellationToken.None, onlyTile: (50, 30)));
 
         Assert.Contains("navmesh parameters changed since its tiles were built", e.Message, StringComparison.Ordinal);
-        Assert.Contains("build the whole map or pass overwrite=true", e.Message, StringComparison.Ordinal);
+        Assert.Contains("build the whole map without tile=", e.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("overwrite=true", e.Message, StringComparison.Ordinal);
         Dictionary<string, byte[]> after = MapFiles(mmaps);
         Assert.Equal(before.Keys.Order(StringComparer.Ordinal), after.Keys.Order(StringComparer.Ordinal));
         Assert.All(before, pair => Assert.Equal(pair.Value, after[pair.Key]));
@@ -147,7 +150,7 @@ public sealed class MmapResumeTests(MmapWorld world) : IClassFixture<MmapWorld>
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void ATileThatIsRebuiltEmpty_HasItsOldFileDeleted(bool overwrite)
+    public void AStaleTileThatRebuildsEmpty_IsDeleted_WithTheBulkDeletionOrTheEmptyRule(bool overwrite)
     {
         using TestDirectory copy = Copy();
         string mmaps = Path.Combine(copy.Path, "mmaps");
@@ -196,5 +199,120 @@ public sealed class MmapResumeTests(MmapWorld world) : IClassFixture<MmapWorld>
 
         Assert.True(Assert.Single(report.Maps).Failed >= 1);
         Assert.False(File.Exists(Path.Combine(mmaps, OldTile)));
+    }
+
+    [Fact]
+    public void ATileThatIsNotCurrentAndRebuildsEmpty_HasItsOldFileDeleted_ByTheEmptyRuleAlone_WithoutOverwrite()
+    {
+        using TestDirectory copy = Copy();
+        string mmaps = Path.Combine(copy.Path, "mmaps");
+
+        // A tile of the map's own tile set that has no tile file (its mesh is empty), and a file of that name that is not a tile file.
+        // The tile set and so the parameter file are untouched, so only the empty rule can remove it.
+        string[] fromMaps = [.. Directory.EnumerateFiles(Path.Combine(copy.Path, "maps"), "000*.map").Select(f => Path.GetFileNameWithoutExtension(f)! + ".mmtile")];
+        string[] fromVmaps = [.. Directory.EnumerateFiles(Path.Combine(copy.Path, "vmaps"), "000_*.vmtile").Select(f => "000" + Path.GetFileName(f)[7..9] + Path.GetFileName(f)[4..6] + ".mmtile")];
+        string? emptyTile = fromMaps.Concat(fromVmaps).Distinct().Order(StringComparer.Ordinal).FirstOrDefault(n => !File.Exists(Path.Combine(mmaps, n)));
+        Assert.NotNull(emptyTile);
+        byte[] parametersBefore = File.ReadAllBytes(Path.Combine(mmaps, Parameters));
+        string planted = Path.Combine(mmaps, emptyTile);
+        File.WriteAllBytes(planted, [1, 2, 3]);
+
+        MmapExtractReport report = new MmapExtractor(copy.Path).Extract([0], overwrite: false, quick: false, threads: 1, CancellationToken.None);
+
+        Assert.Empty(report.Problems);
+        Assert.False(File.Exists(planted));
+        Assert.True(File.Exists(Path.Combine(mmaps, OldTile)));
+        Assert.Equal(parametersBefore, File.ReadAllBytes(Path.Combine(mmaps, Parameters)));
+    }
+
+    [Fact]
+    public void OverwriteWithChangedParameters_DeletesEveryOldTile_RebuildsAll_AndReportsIt()
+    {
+        using TestDirectory copy = Copy();
+        MoveTheOrigin(copy);
+
+        MmapExtractReport report = new MmapExtractor(copy.Path).Extract([0], overwrite: true, quick: false, threads: 1, CancellationToken.None);
+
+        Assert.Equal(2, Assert.Single(report.Maps).Written);
+        string problem = Assert.Single(report.Problems);
+        Assert.Contains("000.mmap differs", problem, StringComparison.Ordinal);
+        Assert.Contains("1 existing tile file(s) were deleted and 2 of the map's 3 tile(s) rebuilt", problem, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TheStaleDeletion_OnlyTouchesTheMapsOwnTileNames_LookAlikesSurvive()
+    {
+        using TestDirectory copy = Copy();
+        string mmaps = Path.Combine(copy.Path, "mmaps");
+        MoveTheOrigin(copy);
+
+        // The first three pass the "000*.mmtile" search but are not names this map's tiles have; the last two are other maps' tiles.
+        string[] fileLookAlikes = ["000ab31.mmtile", "0004931x.mmtile", "0001.mmtile", "0010101.mmtile", "1000101.mmtile"];
+        foreach (string name in fileLookAlikes)
+        {
+            File.WriteAllBytes(Path.Combine(mmaps, name), [9, 9]);
+        }
+
+        string folder = Path.Combine(mmaps, "0000101.mmtile");
+        Directory.CreateDirectory(folder);
+        File.WriteAllBytes(Path.Combine(folder, "inside.bin"), [5]);
+
+        MmapExtractReport report = new MmapExtractor(copy.Path).Extract([0], overwrite: false, quick: false, threads: 1, CancellationToken.None);
+
+        Assert.Contains("1 existing tile file(s) were deleted", Assert.Single(report.Problems), StringComparison.Ordinal);
+        foreach (string name in fileLookAlikes)
+        {
+            Assert.Equal<byte>([9, 9], File.ReadAllBytes(Path.Combine(mmaps, name)));
+        }
+
+        Assert.True(File.Exists(Path.Combine(folder, "inside.bin")));
+    }
+
+    [WindowsFact]
+    public void ADifferentlyCasedStaleTile_IsFoundAndDeleted_WhereTheFileSystemIgnoresCase()
+    {
+        using TestDirectory copy = Copy();
+        string mmaps = Path.Combine(copy.Path, "mmaps");
+        File.Move(Path.Combine(mmaps, OldTile), Path.Combine(mmaps, "0004931.MMTILE"));
+        Assert.True(File.Exists(Path.Combine(mmaps, OldTile)), "The test needs a file system that ignores case (a default NTFS folder does).");
+        MoveTheOrigin(copy);
+
+        MmapExtractReport report = new MmapExtractor(copy.Path).Extract([0], overwrite: false, quick: false, threads: 1, CancellationToken.None);
+
+        Assert.Contains("1 existing tile file(s) were deleted", Assert.Single(report.Problems), StringComparison.Ordinal);
+        Assert.Equal(2, Assert.Single(report.Maps).Written);
+    }
+
+    [WindowsFact]
+    public void WhenAnOldTileCannotBeDeleted_TheMapIsReported_AndTheParameterFileIsNotWritten()
+    {
+        using TestDirectory copy = Copy();
+        string mmaps = Path.Combine(copy.Path, "mmaps");
+        MoveTheOrigin(copy);
+        byte[] parametersBefore = File.ReadAllBytes(Path.Combine(mmaps, Parameters));
+
+        MmapExtractReport report;
+        using (new FileStream(Path.Combine(mmaps, OldTile), FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            report = new MmapExtractor(copy.Path).Extract([0], overwrite: false, quick: false, threads: 1, CancellationToken.None);
+        }
+
+        MmapExtractMapReport map = Assert.Single(report.Maps);
+        Assert.Equal((0, 1), (map.Written, map.Failed));
+        Assert.Contains("could not all be deleted (0 of 1 were)", Assert.Single(report.Problems), StringComparison.Ordinal);
+        Assert.Equal(parametersBefore, File.ReadAllBytes(Path.Combine(mmaps, Parameters)));
+        Assert.False(File.Exists(Path.Combine(mmaps, "0005030.mmtile")));
+    }
+}
+
+/// <summary>A fact that is skipped, with its reason, off Windows: the case needs the file system or a file lock that Windows has.</summary>
+internal sealed class WindowsFactAttribute : FactAttribute
+{
+    public WindowsFactAttribute()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Skip = "Windows only: it needs a case-insensitive file system, a file held open against deletion, or mklink /J.";
+        }
     }
 }
