@@ -93,9 +93,10 @@ internal static class ExtractCommands
         string[] protectedRoots = paths?.ClientRoot is { } root ? [root] : [];
 
         // Both checks return the real folder they judged (links, drive mappings and mount points resolved), and the run writes there.
-        // The child is judged too: a link at 'mmaps' leads somewhere the data root's check never looked.
+        // The child is judged too: a link at 'mmaps' leads somewhere the data root's check never looked. The data root is already a
+        // real path, so the child check does not apply the typed-path 8.3 rule to it again (a real long name such as data~1 passes).
         string dataRoot = ClientOutputPath.CheckDirectory(name, requested, protectedRoots);
-        string mmapsDirectory = ClientOutputPath.CheckDirectory(name, Path.Combine(dataRoot, MmapExtractor.MmapsFolder), protectedRoots);
+        string mmapsDirectory = ClientOutputPath.CheckChildDirectory(name, dataRoot, MmapExtractor.MmapsFolder, protectedRoots);
         if (!Directory.Exists(Path.Combine(dataRoot, MmapExtractor.MapsFolder)) && !Directory.Exists(Path.Combine(dataRoot, MmapExtractor.VmapsFolder)))
         {
             throw new CommandException(CommandException.BadArguments, $"{name}: '{dataRoot}' holds neither a maps nor a vmaps folder.");
@@ -256,8 +257,9 @@ internal static class ExtractCommands
         string[] protectedRoots = paths?.ClientRoot is { } root ? [root] : [];
         string output = ClientOutputPath.CheckDirectory(name, call.GetString("out"), protectedRoots);
 
-        // The check on 'out' judges 'out'; a link at the child folder leads somewhere it never looked, so the child is judged too.
-        string child = ClientOutputPath.CheckDirectory(name, Path.Combine(output, childFolder), protectedRoots);
+        // The check on 'out' judges 'out'; a link at the child folder leads somewhere it never looked, so the child is judged too
+        // (inside the real folder the first check returned, without its typed-path 8.3 rule).
+        string child = ClientOutputPath.CheckChildDirectory(name, output, childFolder, protectedRoots);
         return (files, maps, only, threads, output, child);
     }
 

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
 using ArcaneCore.Atlas.Reference.Mpq;
 using Xunit;
@@ -73,7 +74,9 @@ internal sealed class FakeOutputPathPlatform : IOutputPathPlatform
 /// A drive letter made for one test (by <c>subst</c> or <c>DefineDosDevice</c>), removed on dispose. Drive letters belong to the whole
 /// logon session, so every test process that makes one first takes the named mutex <c>Local\ArcaneCore.Atlas.SubstDriveTest</c>;
 /// a letter that turns out to be taken (by something outside the tests) is skipped and the next free one tried. Dispose never throws:
-/// a failed removal is recorded in <see cref="CleanupError"/> for the test to assert after its finally block.
+/// a failed removal is recorded in <see cref="CleanupError"/>. Tests run their body through <see cref="Use"/> or <see cref="UseAsync"/>,
+/// which remove the letter whatever the body does and fail the test with the removal error even when the body failed as well.
+/// Owned by the test that made it; created and disposed on any thread.
 /// </summary>
 internal sealed class SessionDrive : IDisposable
 {
@@ -165,6 +168,60 @@ internal sealed class SessionDrive : IDisposable
         return process.ExitCode == 0 ? null : $"{file} {arguments} exited with {process.ExitCode}: {output.Trim()}";
     }
 
+    /// <summary>Runs <paramref name="body"/> with the drive letter, then removes the letter (see <see cref="Finish"/>).</summary>
+    public void Use(Action<char> body)
+    {
+        ArgumentNullException.ThrowIfNull(body);
+        ExceptionDispatchInfo? failure = null;
+        try
+        {
+            body(Letter);
+        }
+        catch (Exception e)
+        {
+            failure = ExceptionDispatchInfo.Capture(e);
+        }
+
+        Finish(failure);
+    }
+
+    /// <summary>Runs <paramref name="body"/> with the drive letter, then removes the letter (see <see cref="Finish"/>).</summary>
+    public async Task UseAsync(Func<char, Task> body)
+    {
+        ArgumentNullException.ThrowIfNull(body);
+        ExceptionDispatchInfo? failure = null;
+        try
+        {
+            await body(Letter);
+        }
+        catch (Exception e)
+        {
+            failure = ExceptionDispatchInfo.Capture(e);
+        }
+
+        Finish(failure);
+    }
+
+    // Removes the letter, then: the body's failure alone is rethrown as it was; a removal error alone fails the test; both fail it
+    // with one exception that names the removal error and carries the body's failure as its inner exception.
+    private void Finish(ExceptionDispatchInfo? failure)
+    {
+        Dispose();
+        if (CleanupError is null)
+        {
+            failure?.Throw();
+            return;
+        }
+
+        if (failure is null)
+        {
+            Assert.Fail($"the test body passed, but its drive letter was not removed: {CleanupError}");
+            return;
+        }
+
+        throw new AggregateException($"the test body failed, and its drive letter was not removed either: {CleanupError}", failure.SourceException);
+    }
+
     public void Dispose()
     {
         if (_disposed)
@@ -188,12 +245,18 @@ internal sealed class SessionDrive : IDisposable
         finally
         {
             _mutex.Dispose();
+            if (_mutex.Failure is { } release)
+            {
+                string released = $"releasing {MutexName} threw {release.GetType().Name}: {release.Message}";
+                CleanupError = CleanupError is null ? released : $"{CleanupError}; {released}";
+            }
         }
     }
 
     /// <summary>
     /// Holds the named mutex on a thread of its own: a mutex belongs to the thread that took it, and an async test may finish on
-    /// another thread than it started on. Created on any thread, disposed on any thread.
+    /// another thread than it started on. Created on any thread, disposed on any thread. Anything the holder thread throws (the
+    /// mutex cannot be made or taken) is handed to the constructor, which disposes what it made and throws it to the test.
     /// </summary>
     private sealed class MutexHolder : IDisposable
     {
@@ -210,30 +273,54 @@ internal sealed class SessionDrive : IDisposable
             if (_failure is not null)
             {
                 _thread.Join();
-                throw new TimeoutException(_failure.Message, _failure);
+                _acquired.Dispose();
+                _release.Dispose();
+                throw new InvalidOperationException($"could not take {MutexName}: {_failure.Message}", _failure);
             }
         }
 
+        /// <summary>What the holder thread threw after the mutex was taken (releasing it failed), or null; read it after <see cref="Dispose"/>.</summary>
+        public Exception? Failure => _failure;
+
+        // _failure is written before _acquired is set (or the thread ends) and read after the constructor's wait (or Dispose's
+        // join) returns, so the event or the join orders the two.
         private void Hold()
         {
-            using var mutex = new Mutex(initiallyOwned: false, MutexName);
+            Mutex? mutex = null;
             try
             {
-                if (!mutex.WaitOne(TimeSpan.FromMinutes(2)))
+                mutex = new Mutex(initiallyOwned: false, MutexName);
+                bool owned;
+                try
+                {
+                    owned = mutex.WaitOne(TimeSpan.FromMinutes(2));
+                }
+                catch (AbandonedMutexException)
+                {
+                    // A test process died holding it: the mutex is this thread's now, and any letter it left behind is skipped as taken.
+                    owned = true;
+                }
+
+                if (!owned)
                 {
                     _failure = new TimeoutException($"another test process held {MutexName} for two minutes");
-                    _acquired.Set();
                     return;
                 }
-            }
-            catch (AbandonedMutexException)
-            {
-                // A test process died holding it: the mutex is this thread's now, and any letter it left behind is skipped as taken.
-            }
 
-            _acquired.Set();
-            _release.Wait();
-            mutex.ReleaseMutex();
+                _acquired.Set();
+                _release.Wait();
+                mutex.ReleaseMutex();
+            }
+            catch (Exception e)
+            {
+                // Before the mutex is taken this reaches the constructor; after it (ReleaseMutex failed), Failure reports it on Dispose.
+                _failure = e;
+            }
+            finally
+            {
+                mutex?.Dispose();
+                _acquired.Set();
+            }
         }
 
         public void Dispose()

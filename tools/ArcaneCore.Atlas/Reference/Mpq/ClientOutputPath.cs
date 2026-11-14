@@ -54,15 +54,23 @@ internal readonly record struct DriveTarget(DriveKind Kind, string? Path);
 /// <para>
 /// On Unix the path is resolved by walking it with <c>lstat</c> (every link's target spliced in and walked again, at most
 /// <see cref="MaxUnixLinks"/> links, a dangling link refused), <c>/proc</c>, <c>/sys</c> and <c>/dev</c> are refused, and protected
-/// folders are compared without regard to case or Unicode normalisation (a coarser fold than NFC plus case folding, because the build
-/// runs in invariant globalization mode where string.Normalize does nothing; it over-refuses on a case-sensitive file system).
+/// folders are compared without regard to case or Unicode normalisation (a fold of its own, because the build runs in invariant
+/// globalization mode where string.Normalize does nothing; it over-refuses on a case-sensitive file system).
+/// </para>
+/// <para>
+/// A link part-way along the path leads to a folder that is on neither the typed nor the final path, and that folder's own ancestors
+/// are walked too: on Windows every existing prefix of the typed path is resolved by handle and the rest of the path joined on, on
+/// Unix the folder holding each link passed is walked.
 /// </para>
 /// <para>
 /// Not covered (residual): a change made after the check (narrowed by <see cref="HoldDirectory(string, string, string)"/>), a link or
 /// mount elsewhere that points at the output (it cannot be enumerated), file-system filter redirection (bind links, ProjFS,
 /// container layers), a protected folder reached over a loopback share, a repository without any marker (<c>GIT_DIR</c>,
-/// <c>core.worktree</c>) or created after the check, Linux bind mounts and other mount aliases, and volumes unknown to the mount
-/// manager (refused). Stateless and thread-safe.
+/// <c>core.worktree</c>) or created after the check, Linux bind mounts and other mount aliases, the other mount paths of a volume a
+/// link part-way along the path leads to (only the final volume's are walked), volumes unknown to the mount manager (refused), and on
+/// Unix a protected folder named by a spelling the file system equates beyond NFC and Unicode case folding (compatibility forms such
+/// as fullwidth letters, or a case table of its own); comparing identity (device and inode) instead of spelling would close that.
+/// Stateless and thread-safe.
 /// </para>
 /// </remarks>
 public static partial class ClientOutputPath
@@ -133,11 +141,68 @@ public static partial class ClientOutputPath
     }
 
     /// <summary>
+    /// Validates the folder <paramref name="childName"/> inside <paramref name="checkedFolder"/>, a folder
+    /// <see cref="CheckDirectory(string, string, IEnumerable{string})"/> returned, and returns its real path (a different folder when the
+    /// child is a link). The same rules, except that the 8.3 short-name rule is not applied: it is a rule about what the operator typed,
+    /// and <paramref name="checkedFolder"/> is a name Windows gave (normalized, so long names) plus a remainder that rule already passed,
+    /// so a component that only looks like a short name there (<c>data~1</c>) is a real long name.
+    /// </summary>
+    /// <param name="command">The command's name, for the refusal message.</param>
+    /// <param name="checkedFolder">What <see cref="CheckDirectory(string, string, IEnumerable{string})"/> returned; nothing else.</param>
+    /// <param name="childName">One plain path component (for example <c>maps</c>).</param>
+    /// <param name="protectedRoots">Folders the output must not be, or be inside of.</param>
+    /// <returns>The canonical child folder.</returns>
+    /// <exception cref="ArgumentException"><paramref name="childName"/> is not one plain path component.</exception>
+    /// <exception cref="CommandException">As for <see cref="CheckDirectory(string, string, IEnumerable{string})"/>, without the 8.3 short-name refusal.</exception>
+    internal static string CheckChildDirectory(string command, string checkedFolder, string childName, IEnumerable<string> protectedRoots)
+        => CheckChildDirectory(command, checkedFolder, childName, protectedRoots, SystemOutputPathPlatform.Instance);
+
+    internal static string CheckChildDirectory(string command, string checkedFolder, string childName, IEnumerable<string> protectedRoots, IOutputPathPlatform platform)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(command);
+        ArgumentNullException.ThrowIfNull(checkedFolder);
+        ArgumentException.ThrowIfNullOrWhiteSpace(childName);
+        ArgumentNullException.ThrowIfNull(protectedRoots);
+        ArgumentNullException.ThrowIfNull(platform);
+        if (childName is "." or ".." || childName.IndexOfAny([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar]) >= 0)
+        {
+            throw new ArgumentException($"'{childName}' is not one plain path component.", nameof(childName));
+        }
+
+        string full = Path.TrimEndingDirectorySeparator(FullPath(command, Path.Join(checkedFolder, childName), shortNameRule: false));
+        return Judge(command, full, isDirectory: true, protectedRoots, platform).Path;
+    }
+
+    /// <summary>
+    /// The Unix rules of <see cref="CheckDirectory(string, string, IEnumerable{string})"/> on <paramref name="full"/>, whatever platform
+    /// this runs on, so the Unix judgement can be tested against an in-memory tree on Windows too. Protected folders still go through
+    /// <see cref="Path.GetFullPath(string)"/>, which off Unix makes a drive path of them: pass none there.
+    /// </summary>
+    /// <param name="command">The command's name, for the refusal message.</param>
+    /// <param name="full">An absolute, normalized <c>/</c> path without a trailing separator.</param>
+    /// <param name="protectedRoots">Folders the output must not be, or be inside of.</param>
+    /// <param name="platform">Where <c>lstat</c> and the repository probes come from.</param>
+    /// <returns>The canonical folder.</returns>
+    internal static string CheckDirectoryUnix(string command, string full, IEnumerable<string> protectedRoots, IOutputPathPlatform platform)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(command);
+        ArgumentNullException.ThrowIfNull(full);
+        ArgumentNullException.ThrowIfNull(protectedRoots);
+        ArgumentNullException.ThrowIfNull(platform);
+        return JudgeUnix(command, full, isDirectory: true, protectedRoots, platform).Path;
+    }
+
+    /// <summary>
     /// Creates <paramref name="writePath"/> (the folder an extractor writes through), checks that it is now the folder
     /// <paramref name="expectedCanonical"/> that <see cref="CheckDirectory(string, string, IEnumerable{string})"/> judged, and on Windows
-    /// holds it open (list access, no delete sharing) until the result is disposed, so neither the folder nor, on NTFS, any of its
-    /// parents can be renamed or deleted, and a link at <paramref name="writePath"/> cannot be replaced, while the run writes. Unix has
-    /// no share modes: there it creates and checks only.
+    /// holds two handles until the result is disposed: one to the folder (reached by following links) and one to the entry at
+    /// <paramref name="writePath"/> itself (a link there, or the folder again). Both have list access and share read and write but not
+    /// delete, so while the run writes neither entry can be deleted or renamed, which also keeps a link at <paramref name="writePath"/>
+    /// from being deleted and made again elsewhere; on NTFS their parents cannot be renamed either. Write sharing stays because the
+    /// extractors' writes rename a staging file inside the folder, and a rename opens the folder for write.
+    /// Not pinned: a link's target rewritten in place (that takes only write-attributes access, which share modes do not stop) or the
+    /// still-empty folder turned into a link; and because files are written by path, a drive letter redefined during the run.
+    /// Unix has no share modes: there it creates and checks only.
     /// </summary>
     /// <param name="command">The command's name, for the refusal message.</param>
     /// <param name="writePath">The path the extractor will write through.</param>
@@ -182,7 +247,7 @@ public static partial class ClientOutputPath
             OpenResult again = platform.Open(writePath, OpenMode.Follow);
             using (again.Entry)
             {
-                if (again.Outcome != OpenOutcome.Opened || again.Entry!.Identity != target.Identity)
+                if (again.Outcome != OpenOutcome.Opened || !SameEntry(again.Entry!, target))
                 {
                     throw Changed(command, writePath, "another folder", expectedCanonical);
                 }
@@ -222,6 +287,7 @@ public static partial class ClientOutputPath
     /// exist yet appended as given.
     /// </summary>
     /// <exception cref="IOException">The location cannot be determined (a dangling link, an unreadable component, a name Windows cannot give).</exception>
+    /// <exception cref="ArgumentException"><paramref name="fullPath"/> is not a valid path (<see cref="Path.GetFullPath(string)"/> rejects it, for example an empty string or one holding a null character).</exception>
     public static string ResolveLinks(string fullPath)
     {
         ArgumentNullException.ThrowIfNull(fullPath);
@@ -296,6 +362,7 @@ public static partial class ClientOutputPath
 
         string current = "/";
         int links = 0;
+        var linkFolders = new List<string>();
         bool missing = false;
         bool leafExists = true;
         bool leafIsDirectory = true;
@@ -357,6 +424,12 @@ public static partial class ClientOutputPath
                         throw Refuse($"cannot check {what}: the symbolic link '{candidate}' is empty; refusing.", command);
                     }
 
+                    // The folder the link sits in (resolved so far): its ancestors are on neither the typed nor the final path.
+                    if (!linkFolders.Contains(current, StringComparer.Ordinal))
+                    {
+                        linkFolders.Add(current);
+                    }
+
                     if (text[0] == '/')
                     {
                         current = "/";
@@ -378,14 +451,15 @@ public static partial class ClientOutputPath
             }
         }
 
-        return new UnixCanonical(current, leafExists, leafIsDirectory);
+        return new UnixCanonical(current, leafExists, leafIsDirectory, linkFolders);
     }
 
     /// <summary>
-    /// Whether <paramref name="path"/> is <paramref name="folder"/> or inside it, compared without regard to case or Unicode
-    /// normalisation: a case-insensitive or normalising file system (WSL <c>/mnt/c</c>, casefold ext4, APFS, vfat, CIFS) opens either
-    /// spelling. The fold is coarser than NFC plus case folding (see <see cref="Fold"/>), so it over-refuses on a case-sensitive file
-    /// system and between different non-ASCII names of the same shape, which is the safe side. Pure function.
+    /// Whether <paramref name="path"/> is <paramref name="folder"/> or inside it, compared through <see cref="Fold"/>: a case-insensitive
+    /// or normalising file system (WSL <c>/mnt/c</c>, casefold ext4, APFS, vfat, CIFS) opens more than one spelling of a name. Two
+    /// spellings that NFC normalisation and Unicode case folding make equal compare equal (and so do many they would not, which
+    /// over-refuses on a case-sensitive file system, the safe side). Not covered: spellings a file system equates beyond that, through
+    /// compatibility forms (NFKC: fullwidth letters and the like) or a case table of its own. Pure function.
     /// </summary>
     internal static bool UnixInsideOrEqual(string path, string folder)
     {
@@ -403,28 +477,53 @@ public static partial class ClientOutputPath
     }
 
     // Case folding and Unicode normalisation without ICU: the build runs in invariant globalization mode, where string.Normalize
-    // returns its input unchanged. ASCII is upper-cased, and every maximal run of non-ASCII characters and combining marks (with the
-    // ASCII letter a mark combines with) becomes one '?'; '/' is never part of a run. Any two spellings that NFC normalisation and case
-    // folding make equal fold equal (a precomposed letter and its decomposed form are both one run), and so do some that they would
-    // not (two different non-ASCII names of the same shape), which only over-refuses.
+    // returns its input unchanged. Two steps:
+    // 1. Default-ignorable code points are dropped, and the non-ASCII characters whose NFC form, case folding or upper case is ASCII
+    //    are replaced by it (AsciiEquivalent lists them all; checked against the Unicode 15 data by enumerating every code point).
+    // 2. ASCII is upper-cased, and every maximal run of other characters and combining marks (with the ASCII character a mark
+    //    combines with) becomes one '?'; '/' is never part of a run.
+    // So two spellings that NFC and case folding make equal fold equal: a difference between them is either one of the step-1
+    // characters or lies inside a run (a precomposed letter and its decomposed form are both one run). Many that they would not make
+    // equal fold equal too (two different non-ASCII names of the same shape), which only over-refuses.
     private static string Fold(string text)
     {
-        var folded = new StringBuilder(text.Length);
-        bool inRun = false;
-        for (int i = 0; i < text.Length; i++)
+        var runes = new List<Rune>(text.Length);
+        foreach (Rune rune in text.EnumerateRunes())
         {
-            char c = text[i];
-            if (c == '/')
+            if (IsDefaultIgnorable(rune.Value))
+            {
+                continue;
+            }
+
+            if (AsciiEquivalent(rune.Value) is { } ascii)
+            {
+                foreach (char c in ascii)
+                {
+                    runes.Add(new Rune(c));
+                }
+
+                continue;
+            }
+
+            runes.Add(rune);
+        }
+
+        var folded = new StringBuilder(runes.Count);
+        bool inRun = false;
+        for (int i = 0; i < runes.Count; i++)
+        {
+            Rune rune = runes[i];
+            if (rune.Value == '/')
             {
                 folded.Append('/');
                 inRun = false;
                 continue;
             }
 
-            bool combinesWithNext = i + 1 < text.Length && IsCombiningMark(text[i + 1]);
-            if (c <= '\u007F' && !combinesWithNext)
+            bool combinesWithNext = i + 1 < runes.Count && IsCombiningMark(runes[i + 1]);
+            if (rune.IsAscii && !combinesWithNext)
             {
-                folded.Append(char.ToUpperInvariant(c));
+                folded.Append(char.ToUpperInvariant((char)rune.Value));
                 inRun = false;
                 continue;
             }
@@ -439,11 +538,39 @@ public static partial class ClientOutputPath
         return folded.ToString();
     }
 
-    private static bool IsCombiningMark(char c)
-        => CharUnicodeInfo.GetUnicodeCategory(c) is UnicodeCategory.NonSpacingMark or UnicodeCategory.SpacingCombiningMark or UnicodeCategory.EnclosingMark;
+    // Every non-ASCII code point whose NFC form, Unicode case folding or upper case is all ASCII, upper-cased: KELVIN SIGN, LONG S,
+    // DOTLESS I (its upper case is I), SHARP S and CAPITAL SHARP S, the Latin ligatures, GREEK QUESTION MARK and GREEK VARIA.
+    private static string? AsciiEquivalent(int value) => value switch
+    {
+        0x212A => "K",
+        0x017F => "S",
+        0x0131 => "I",
+        0x00DF or 0x1E9E => "SS",
+        0xFB00 => "FF",
+        0xFB01 => "FI",
+        0xFB02 => "FL",
+        0xFB03 => "FFI",
+        0xFB04 => "FFL",
+        0xFB05 or 0xFB06 => "ST",
+        0x037E => ";",
+        0x1FEF => "`",
+        _ => null,
+    };
 
-    // The checks every form of the request goes through before anything looks at the file system.
-    private static string FullPath(string command, string requested)
+    // Unicode's Default_Ignorable_Code_Point set (zero-width characters, joiners, bidi controls, variation selectors, tags, fillers),
+    // which normalising and case-folding file systems may drop from a name.
+    private static bool IsDefaultIgnorable(int value)
+        => value is 0x00AD or 0x034F or 0x061C or (>= 0x115F and <= 0x1160) or (>= 0x17B4 and <= 0x17B5) or (>= 0x180B and <= 0x180F)
+            or (>= 0x200B and <= 0x200F) or (>= 0x202A and <= 0x202E) or (>= 0x2060 and <= 0x206F) or 0x3164 or (>= 0xFE00 and <= 0xFE0F)
+            or 0xFEFF or 0xFFA0 or (>= 0xFFF0 and <= 0xFFF8) or (>= 0x1BCA0 and <= 0x1BCA3) or (>= 0x1D173 and <= 0x1D17A)
+            or (>= 0xE0000 and <= 0xE0FFF);
+
+    private static bool IsCombiningMark(Rune rune)
+        => Rune.GetUnicodeCategory(rune) is UnicodeCategory.NonSpacingMark or UnicodeCategory.SpacingCombiningMark or UnicodeCategory.EnclosingMark;
+
+    // The checks every form of the request goes through before anything looks at the file system. shortNameRule is false only for
+    // a path that is already canonical (see CheckChildDirectory).
+    private static string FullPath(string command, string requested, bool shortNameRule = true)
     {
         if (OperatingSystem.IsWindows())
         {
@@ -457,7 +584,7 @@ public static partial class ClientOutputPath
 
         if (OperatingSystem.IsWindows())
         {
-            RefuseWindowsSpecials(requested, command);
+            RefuseWindowsSpecials(requested, command, shortNameRule);
         }
 
         string full = Path.GetFullPath(requested);
@@ -465,7 +592,7 @@ public static partial class ClientOutputPath
         {
             // GetFullPath may make something else of a path (a device path out of a device name on older Windows): judge what it made.
             RefuseWindowsRooted(full, command);
-            RefuseWindowsSpecials(full, command);
+            RefuseWindowsSpecials(full, command, shortNameRule);
         }
 
         return full;
@@ -494,6 +621,7 @@ public static partial class ClientOutputPath
         AddAndWalk(command, full, isDirectory, platform, paths, StringComparison.OrdinalIgnoreCase);
         AddAndWalk(command, canonical.Path, isDirectory, platform, paths, StringComparison.OrdinalIgnoreCase);
         var volumePaths = new List<string> { canonical.GuidPath! };
+        AddResolvedPrefixes(command, full, isDirectory, platform, paths, volumePaths);
         AddMountAliases(command, canonical, isDirectory, platform, paths, volumePaths);
 
         foreach (string root in protectedRoots)
@@ -522,6 +650,11 @@ public static partial class ClientOutputPath
         var paths = new List<string>();
         AddAndWalk(command, full, isDirectory, platform, paths, StringComparison.Ordinal);
         AddAndWalk(command, canonical.Path, isDirectory, platform, paths, StringComparison.Ordinal);
+        foreach (string folder in canonical.LinkFolders)
+        {
+            AddAndWalk(command, folder, startAtSelf: true, platform, paths, StringComparison.Ordinal);
+        }
+
         foreach (string root in protectedRoots)
         {
             string rootFull = RootFullPath(command, root);
@@ -646,13 +779,14 @@ public static partial class ClientOutputPath
             }
 
             // The DOS name comes from the mount manager, but a path is opened through this session's drive letters: one defined
-            // differently here would send the canonical path somewhere else. Open it again and require the same file.
+            // differently here would send the canonical path somewhere else. Open it again and require the same file on the same
+            // volume (the file id alone can repeat: a 64-bit index padded with zeros, a cloned volume with the same serial).
             OpenResult again = platform.Open(ancestor, OpenMode.Follow);
             using (again.Entry)
             {
-                if (again.Outcome != OpenOutcome.Opened || again.Entry!.Identity != entry.Identity)
+                if (again.Outcome != OpenOutcome.Opened || !SameEntry(again.Entry!, entry))
                 {
-                    string reached = again.Outcome == OpenOutcome.Opened ? "another file id" : again.Failure ?? "nothing";
+                    string reached = again.Outcome == OpenOutcome.Opened ? $"another file id or volume ('{again.Entry!.GuidPath ?? "no volume name"}')" : again.Failure ?? "nothing";
                     throw Refuse($"{what} resolves to '{ancestor}', but in this session that path opens something else ({reached}): a drive letter is defined differently here than in the mount manager; refusing.", command);
                 }
             }
@@ -667,6 +801,63 @@ public static partial class ClientOutputPath
             string? volumePath = volume.Success ? JoinWindows(entry.GuidPath!, tail) : null;
             string? relative = volume.Success ? JoinRelative(entry.GuidPath![volume.Length..].TrimEnd('\\'), tail) : null;
             return new WindowsCanonical(canonical, volumePath, volume.Success ? volume.Value : null, relative, remainder.Count == 0, remainder.Count == 0 && entry.IsDirectory);
+        }
+    }
+
+    /// <summary>
+    /// Each existing prefix of the typed path, resolved by handle, with the rest of the typed path joined on: a link part-way along
+    /// the path leads to a folder whose own ancestors are on neither the typed nor the final path (<c>D:\x\link1</c> leads to
+    /// <c>E:\repo\sub</c>, and <c>E:\repo\sub\link2</c> to <c>F:\plain</c>: the walk of <c>E:\repo\sub\link2\out</c> finds
+    /// <c>E:\repo</c>). Each such path is walked for a repository and kept for the protected-folder comparison, in DOS and in volume
+    /// GUID form. Runs after <see cref="CanonicalizeWindows"/> has accepted the path, so the prefixes that exist are the ones before
+    /// the first that is not found.
+    /// </summary>
+    private static void AddResolvedPrefixes(string command, string full, bool startAtSelf, IOutputPathPlatform platform, List<string> paths, List<string> volumePaths)
+    {
+        string root = Path.GetPathRoot(full)!;
+        string[] parts = full[root.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries);
+        string prefix = root;
+        for (int i = 0; i <= parts.Length; i++)
+        {
+            if (i > 0)
+            {
+                prefix = JoinWindows(prefix, parts[i - 1]);
+            }
+
+            OpenResult opened = platform.Open(prefix, OpenMode.Follow);
+            if (opened.Outcome == OpenOutcome.NotFound)
+            {
+                return;
+            }
+
+            if (opened.Outcome == OpenOutcome.Failed)
+            {
+                throw Unopenable(command, "'out'", prefix, opened.Failure);
+            }
+
+            string? dos;
+            string? guid;
+            string? failure;
+            using (opened.Entry)
+            {
+                dos = opened.Entry!.DosPath;
+                guid = opened.Entry.GuidPath;
+                failure = opened.Entry.NameFailure;
+            }
+
+            if (dos is null || !DosDriveFinal().IsMatch(dos))
+            {
+                throw Refuse($"cannot check 'out': '{prefix}' leads to '{dos ?? failure ?? "a location Windows cannot name"}', which is not a local drive-letter path; refusing rather than guessing where it leads.", command);
+            }
+
+            string resolved = dos[4..];
+            RefuseRewrittenCanonical(command, "'out'", resolved);
+            string tail = string.Join(Path.DirectorySeparatorChar, parts[i..]);
+            AddAndWalk(command, JoinWindows(resolved, tail), startAtSelf, platform, paths, StringComparison.OrdinalIgnoreCase);
+            if (guid is not null && VolumeGuidRoot().IsMatch(guid))
+            {
+                volumePaths.Add(JoinWindows(guid, tail));
+            }
         }
     }
 
@@ -744,9 +935,9 @@ public static partial class ClientOutputPath
     // Each ancestor (the folder itself for a folder, the parent for a file) is probed for .git, tri-state, and for a bare repository.
     private static void WalkForRepository(string command, string path, bool startAtSelf, IOutputPathPlatform platform)
     {
-        for (string? directory = startAtSelf ? path : Path.GetDirectoryName(path); directory is not null; directory = Path.GetDirectoryName(directory))
+        for (string? directory = startAtSelf ? path : ParentOf(path); directory is not null; directory = ParentOf(directory))
         {
-            string marker = Path.Combine(directory, ".git");
+            string marker = ChildOf(directory, ".git");
             EntryProbe probe = platform.Probe(marker);
             if (probe.Kind == EntryKind.Error)
             {
@@ -767,15 +958,23 @@ public static partial class ClientOutputPath
 
     private static bool IsBareRepository(string command, string directory, IOutputPathPlatform platform)
     {
-        EntryProbe head = Probed(command, Path.Combine(directory, "HEAD"), platform);
+        EntryProbe head = Probed(command, ChildOf(directory, "HEAD"), platform);
         if (head.Kind != EntryKind.File)
         {
             return false;
         }
 
-        return Probed(command, Path.Combine(directory, "objects"), platform).Kind == EntryKind.Directory
-            && Probed(command, Path.Combine(directory, "refs"), platform).Kind == EntryKind.Directory;
+        return Probed(command, ChildOf(directory, "objects"), platform).Kind == EntryKind.Directory
+            && Probed(command, ChildOf(directory, "refs"), platform).Kind == EntryKind.Directory;
     }
+
+    // A '/' path is taken apart the Unix way on every platform (CheckDirectoryUnix runs the Unix rules on Windows in the tests); on
+    // Unix this is what Path.GetDirectoryName and Path.Combine do for the normalized paths the walk is given.
+    private static string? ParentOf(string path)
+        => path.StartsWith('/') ? (path == "/" ? null : UnixParent(path)) : Path.GetDirectoryName(path);
+
+    private static string ChildOf(string directory, string name)
+        => directory.StartsWith('/') ? (directory.EndsWith('/') ? directory + name : directory + "/" + name) : Path.Combine(directory, name);
 
     private static EntryProbe Probed(string command, string path, IOutputPathPlatform platform)
     {
@@ -831,6 +1030,10 @@ public static partial class ClientOutputPath
             ? result.Entry!
             : throw Refuse($"'{path}' cannot be opened after it was created ({result.Failure ?? "not found"}); refusing.", command);
 
+    // Two opens reached the same file: the same serial and file id, and the same volume GUID path (null for both on a share).
+    private static bool SameEntry(OpenedEntry first, OpenedEntry second)
+        => first.Identity == second.Identity && string.Equals(first.GuidPath, second.GuidPath, StringComparison.OrdinalIgnoreCase);
+
     private static CommandException Changed(string command, string writePath, string now, string expected)
         => Refuse($"'{writePath}' resolves to '{now}' after it was created, not to the checked folder '{expected}' (it was changed after the check); refusing.", command);
 
@@ -880,7 +1083,7 @@ public static partial class ClientOutputPath
 
     // After the path is known to be fully qualified: the drive-letter rule itself, NTFS alternate data streams, 8.3 short names
     // (which defeat the string-prefix test against the protected folders), components Windows silently rewrites, and device names.
-    private static void RefuseWindowsSpecials(string requested, string command)
+    private static void RefuseWindowsSpecials(string requested, string command, bool shortNameRule)
     {
         if (!DrivePath().IsMatch(requested))
         {
@@ -894,7 +1097,7 @@ public static partial class ClientOutputPath
 
         foreach (string part in requested.Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar]).Skip(1))
         {
-            if (ShortName().IsMatch(part))
+            if (shortNameRule && ShortName().IsMatch(part))
             {
                 throw Refuse($"'out' contains the 8.3 short name '{part}'; spell the folder out in full.", command);
             }
@@ -964,7 +1167,8 @@ public static partial class ClientOutputPath
 /// <param name="Path">The resolved absolute path.</param>
 /// <param name="LeafExists">Whether the last component exists.</param>
 /// <param name="LeafIsDirectory">Whether the last component exists and is a directory.</param>
-internal readonly record struct UnixCanonical(string Path, bool LeafExists, bool LeafIsDirectory);
+/// <param name="LinkFolders">The resolved folder holding each symbolic link the walk passed through, in order, without repeats.</param>
+internal readonly record struct UnixCanonical(string Path, bool LeafExists, bool LeafIsDirectory, IReadOnlyList<string> LinkFolders);
 
 /// <summary>What a path names, as a tri-state existence probe sees it.</summary>
 internal enum EntryKind

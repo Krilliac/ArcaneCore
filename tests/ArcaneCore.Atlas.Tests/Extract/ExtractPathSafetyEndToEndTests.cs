@@ -232,22 +232,66 @@ public sealed class ExtractPathSafetyEndToEndTests
     {
         using var scratch = new TestDirectory();
         using var client = new TestDirectory();
-        SessionDrive drive = SessionDrive.Subst(scratch.Path);
-        try
+        await SessionDrive.Subst(scratch.Path).UseAsync(async letter =>
         {
-            CommandResult result = await Invoke("extract.maps", $@"{drive.Letter}:\out", client.Path);
+            CommandResult result = await Invoke("extract.maps", $@"{letter}:\out", client.Path);
 
             Assert.True(result.Ok, result.ErrorMessage);
             string maps = Path.Combine(scratch.Path, "out", "maps");
             Assert.Equal(maps, result.Data!["out"]!.GetValue<string>(), ignoreCase: true);
             Assert.Equal(new[] { "0004832.map", "0004833.map" }, Directory.GetFiles(maps).Select(Path.GetFileName).Order(StringComparer.Ordinal).ToArray());
+        });
+    }
+
+    /// <summary>
+    /// <c>data~1</c> is a real long name that looks like an 8.3 short name. Typed through a link it appears only in the folder the
+    /// check on <c>out</c> returns, which Windows named; the child check must not apply the typed-path rules to that folder again.
+    /// </summary>
+    [Fact]
+    public async Task MapsCommand_OutThroughALinkToAFolderWhoseLongNameHasATilde_IsAccepted_AndWritesThere()
+    {
+        using var scratch = new TestDirectory();
+        using var client = new TestDirectory();
+        string real = Path.Combine(scratch.Path, "data~1");
+        Directory.CreateDirectory(real);
+        string link = Path.Combine(scratch.Path, "j");
+        MakeDirectoryLink(link, real);
+        try
+        {
+            CommandResult result = await Invoke("extract.maps", Path.Combine(link, "out"), client.Path);
+
+            Assert.True(result.Ok, result.ErrorMessage);
+            string maps = Path.Combine(real, "out", "maps");
+            Assert.Equal(maps, result.Data!["out"]!.GetValue<string>(), ignoreCase: true);
+            Assert.Equal(new[] { "0004832.map", "0004833.map" }, Directory.GetFiles(maps).Select(Path.GetFileName).Order(StringComparer.Ordinal).ToArray());
         }
         finally
         {
-            drive.Dispose();
+            DeleteDirectoryLink(link);
         }
+    }
 
-        Assert.Null(drive.CleanupError);
+    [Fact]
+    public async Task MmapsCommand_DataThroughALinkToAFolderWhoseLongNameHasATilde_IsNotRefusedAsAShortName()
+    {
+        using var scratch = new TestDirectory();
+        string real = Path.Combine(scratch.Path, "data~1");
+        Directory.CreateDirectory(Path.Combine(real, "maps"));
+        string link = Path.Combine(scratch.Path, "j");
+        MakeDirectoryLink(link, real);
+        try
+        {
+            CommandResult result = await Invoke("extract.mmaps", link, clientRoot: null);
+
+            // The maps folder is empty, so what the extractor makes of it does not matter here: the guard let the run start, and the
+            // run created the checked mmaps folder in the real folder.
+            Assert.DoesNotContain("short name", result.ErrorMessage ?? string.Empty, StringComparison.Ordinal);
+            Assert.True(Directory.Exists(Path.Combine(real, "mmaps")), result.ErrorMessage);
+        }
+        finally
+        {
+            DeleteDirectoryLink(link);
+        }
     }
 
     /// <summary>A directory link: a junction on Windows (needs no privilege), a symbolic link elsewhere.</summary>

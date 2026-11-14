@@ -112,9 +112,58 @@ public sealed class ClientOutputPathUnixTests
 
     // Coarser than NFC: two different accented names of the same shape compare equal, which only over-refuses.
     [InlineData("/data/Cafè/x", "/data/Café", true)]
+
+    // Non-ASCII characters whose NFC form, case folding or upper case is ASCII, and default-ignorable code points, which a
+    // normalising or case-folding file system drops: each spelling opens the protected folder there.
+    [InlineData("/mnt/c/Gameſ/WoW/x", "/mnt/c/Games/WoW", true)]
+    [InlineData("/data/Keep/x", "/data/keep", true)]
+    [InlineData("/data/Dır", "/data/dir", true)]
+    [InlineData("/data/Straße/x", "/data/strasse", true)]
+    [InlineData("/data/ẞe", "/data/SSE", true)]
+    [InlineData("/data/ﬁle", "/data/file", true)]
+    [InlineData("/data/ﬆop", "/data/stop", true)]
+    [InlineData("/data/a;b/x", "/data/a;b", true)]
+    [InlineData("/data/a`b", "/data/a`b", true)]
+    [InlineData("/data/wo‍w/x", "/data/wow", true)]
+    [InlineData("/data/w\U000E0001ow", "/data/wow", true)]
+    [InlineData("/data/­wow", "/data/wow", true)]
+    [InlineData("/data/Ḱ/x", "/data/Ḱ", true)]
+    [InlineData("/data/İx", "/data/i̇x", true)]
+    [InlineData("/mnt/c/Games-x/WoW", "/mnt/c/Gameſ", false)]
     public void N10_TheProtectedFolderComparison_IgnoresCaseAndUnicodeNormalisation(string path, string folder, bool inside)
     {
         Assert.Equal(inside, ClientOutputPath.UnixInsideOrEqual(path, folder));
+    }
+
+    /// <summary>
+    /// /d/x/link1 leads to /e/repo/sub, and /e/repo/sub/link2 to /f/plain: neither the typed path nor the real one (/f/plain/out) is
+    /// inside /e/repo, but the folder holding link2 is.
+    /// </summary>
+    private static FakeOutputPathPlatform ChainedLinks(bool repository)
+    {
+        FakeOutputPathPlatform tree = Tree(
+            Dir("/d"), Dir("/d/x"), Link("/d/x/link1", "/e/repo/sub"),
+            Dir("/e"), Dir("/e/repo"), Dir("/e/repo/sub"), Link("/e/repo/sub/link2", "/f/plain"),
+            Dir("/f"), Dir("/f/plain"));
+        return new FakeOutputPathPlatform
+        {
+            LstatOverride = tree.LstatOverride,
+            ProbeOverride = path => new EntryProbe(repository && path == "/e/repo/.git" ? EntryKind.Directory : EntryKind.Missing, null),
+        };
+    }
+
+    [Fact]
+    public void N1_AChainOfLinks_ThroughAFolderInsideARepository_IsRefused()
+    {
+        CommandException e = Assert.Throws<CommandException>(() => ClientOutputPath.CheckDirectoryUnix(Command, "/d/x/link1/link2/out", [], ChainedLinks(repository: true)));
+
+        Assert.Contains("git working tree '/e/repo'", e.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void N1_TheSameChainOfLinks_WithoutARepository_IsAccepted_AndTheRealPathIsReturned()
+    {
+        Assert.Equal("/f/plain/out", ClientOutputPath.CheckDirectoryUnix(Command, "/d/x/link1/link2/out", [], ChainedLinks(repository: false)));
     }
 
     [UnixFact]

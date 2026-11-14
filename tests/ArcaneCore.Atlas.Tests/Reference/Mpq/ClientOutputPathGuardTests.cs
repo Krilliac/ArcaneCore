@@ -1,5 +1,7 @@
+using System.Text.RegularExpressions;
 using ArcaneCore.Atlas.Core;
 using ArcaneCore.Atlas.Core.Commands;
+using ArcaneCore.Atlas.Extract;
 using ArcaneCore.Atlas.Reference.Mpq;
 using Xunit;
 
@@ -122,6 +124,26 @@ public sealed class ClientOutputPathGuardTests : IDisposable
         Assert.Contains(ClientOutputPathTests.DeviceOrNetwork, Refused(Path.Combine(Plain(), "out"), platform).Message, StringComparison.Ordinal);
     }
 
+    [WindowsTheory]
+    [InlineData("remote")]
+    [InlineData("cdrom")]
+    public void D9_ALetterLeadingToANetworkOrCdDrive_IsRefused_ByTheDriveOfTheRealPath(string how)
+    {
+        string plain = Plain();
+        string realRoot = Path.GetPathRoot(plain)!;
+
+        // The typed letter is a subst drive (a fixed drive to GetDriveType); only the drive letter of the real path says otherwise.
+        var platform = new FakeOutputPathPlatform
+        {
+            DriveType = root => string.Equals(root, realRoot, StringComparison.OrdinalIgnoreCase)
+                ? (how == "remote" ? WindowsDriveType.Remote : WindowsDriveType.CdRom)
+                : null,
+        };
+
+        SessionDrive.Subst(plain).Use(letter =>
+            Assert.Contains(ClientOutputPathTests.DeviceOrNetwork, Refused($@"{letter}:\out", platform).Message, StringComparison.Ordinal));
+    }
+
     // ---- D3: link targets are judged where they really lead ----
 
     [Fact]
@@ -194,6 +216,37 @@ public sealed class ClientOutputPathGuardTests : IDisposable
     }
 
     [WindowsFact]
+    public void D4_1_ACanonicalPathThatReopensTheSameFileIdOnAnotherVolume_IsRefused()
+    {
+        string plain = Plain();
+        int opens = 0;
+        var platform = new FakeOutputPathPlatform
+        {
+            OpenOverride = (path, mode) =>
+            {
+                if (mode != OpenMode.Follow || !string.Equals(path, plain, StringComparison.OrdinalIgnoreCase) || Interlocked.Increment(ref opens) < 2)
+                {
+                    return null;
+                }
+
+                // The round trip reaches the same serial and file id (a 64-bit index padded with zeros, a cloned volume) on another volume.
+                return OnAnotherVolume(SystemOutputPathPlatform.Instance.Open(path, mode));
+            },
+        };
+
+        Assert.Contains("opens something else", Refused(Path.Combine(plain, "out"), platform).Message, StringComparison.Ordinal);
+    }
+
+    // The same open entry with its volume GUID path moved to another (made-up) volume; the real handle is closed.
+    private static OpenResult OnAnotherVolume(OpenResult real)
+    {
+        using OpenedEntry entry = real.Entry!;
+        string elsewhere = Regex.Replace(entry.GuidPath!, @"Volume\{[0-9A-Fa-f-]+\}", "Volume{00000000-0000-0000-0000-000000000000}", RegexOptions.CultureInvariant);
+        Assert.NotEqual(entry.GuidPath, elsewhere, StringComparer.OrdinalIgnoreCase);
+        return new OpenResult(OpenOutcome.Opened, new OpenedEntry(null, entry.IsDirectory, entry.Identity, elsewhere, entry.DosPath, null), null);
+    }
+
+    [WindowsFact]
     public void D4_AProtectedFolderThatCannotBeResolved_RefusesTheCommand()
     {
         string client = Plain("client");
@@ -234,7 +287,7 @@ public sealed class ClientOutputPathGuardTests : IDisposable
         string driveRoot = Path.GetPathRoot(_dir.Path)!;
         var platform = new FakeOutputPathPlatform { MountPaths = _ => [driveRoot, loop + Path.DirectorySeparatorChar] };
 
-        Assert.Contains("mount", Refused(Path.Combine(Plain(), "out"), platform).Message, StringComparison.Ordinal);
+        Assert.Contains("more than 32", Refused(Path.Combine(Plain(), "out"), platform).Message, StringComparison.Ordinal);
     }
 
     // ---- N1, N2, N3: the working-tree walk ----
@@ -256,6 +309,33 @@ public sealed class ClientOutputPathGuardTests : IDisposable
         finally
         {
             DirectoryLinks.Delete(link);
+        }
+    }
+
+    [Fact]
+    public void N1_AChainOfLinks_ThroughAFolderInsideARepository_IsRefused()
+    {
+        string tree = GuardFixtures.WorkingTree(_dir.Path, "repo", out _);
+        string sub = Path.Combine(tree, "sub");
+        Directory.CreateDirectory(sub);
+        string plain = Plain();
+        string link1 = Path.Combine(Plain("x"), "link1");
+        string link2 = Path.Combine(sub, "link2");
+        DirectoryLinks.Make(link1, sub);
+        DirectoryLinks.Make(link2, plain);
+        try
+        {
+            // Neither the typed path (x\link1\link2\out) nor the real one (plain\out) is inside the repository; the folder that
+            // holds link2, reached through link1, is.
+            string message = Refused(Path.Combine(link1, "link2", "out")).Message;
+            Assert.Contains("git working tree", message, StringComparison.Ordinal);
+            Assert.Contains(tree, message, StringComparison.Ordinal);
+            Assert.Empty(Directory.GetFileSystemEntries(plain));
+        }
+        finally
+        {
+            DirectoryLinks.Delete(link2);
+            DirectoryLinks.Delete(link1);
         }
     }
 
@@ -394,6 +474,57 @@ public sealed class ClientOutputPathGuardTests : IDisposable
 
         CommandException e = Assert.Throws<CommandException>(() => ClientOutputPath.HoldDirectory(Command, child, Path.Combine(_dir.Path, "elsewhere")).Dispose());
         Assert.Contains("changed after the check", e.Message, StringComparison.Ordinal);
+    }
+
+    [WindowsFact]
+    public void D7_HoldDirectory_AReopenThatReachesTheSameFileIdOnAnotherVolume_IsRefused()
+    {
+        string child = Path.Combine(Plain("out"), "maps");
+        string expected = ClientOutputPath.CheckDirectory(Command, child, []);
+        var platform = new FakeOutputPathPlatform
+        {
+            OpenOverride = (path, mode) => mode == OpenMode.Follow && string.Equals(path, child, StringComparison.OrdinalIgnoreCase)
+                ? OnAnotherVolume(SystemOutputPathPlatform.Instance.Open(path, mode))
+                : null,
+        };
+
+        CommandException e = Assert.Throws<CommandException>(() => ClientOutputPath.HoldDirectory(Command, child, expected, platform).Dispose());
+
+        Assert.Contains("changed after the check", e.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The hold shares write access on purpose: <see cref="ExtractOutput.WriteWhole"/> renames its staging file inside the held folder,
+    /// and a rename opens the folder for write. Without write sharing the first file of every run fails.
+    /// </summary>
+    [WindowsFact]
+    public void D7_HoldDirectory_TheExtractorsWrites_StillWorkInsideTheHeldFolder_AndThroughAHeldLink()
+    {
+        string storage = Plain("storage");
+        string outRoot = Plain("out");
+        string linked = Path.Combine(outRoot, "maps");
+        DirectoryLinks.Make(linked, storage);
+        try
+        {
+            foreach (string child in new[] { Path.Combine(outRoot, "vmaps"), linked })
+            {
+                string expected = ClientOutputPath.CheckDirectory(Command, child, []);
+                using (ClientOutputPath.HoldDirectory(Command, child, expected))
+                {
+                    string tile = Path.Combine(child, "tile.bin");
+                    ExtractOutput.WriteWhole(tile, [1, 2, 3]);
+                    ExtractOutput.WriteWhole(tile, [4, 5]);
+                    Assert.Equal(new byte[] { 4, 5 }, File.ReadAllBytes(tile));
+                    Assert.False(File.Exists(tile + ".part"));
+                }
+            }
+
+            Assert.Equal(new byte[] { 4, 5 }, File.ReadAllBytes(Path.Combine(storage, "tile.bin")));
+        }
+        finally
+        {
+            DirectoryLinks.Delete(linked);
+        }
     }
 }
 

@@ -57,13 +57,12 @@ public sealed class ClientOutputPathDriveMappingTests : IDisposable
     public void ASubstDriveIntoARepository_IsJudgedByWhereItReallyPoints()
     {
         string tree = Repository(out string sub);
-        SessionDrive drive = SessionDrive.Subst(sub);
-        try
+        SessionDrive.Subst(sub).Use(letter =>
         {
-            DriveTarget target = ClientOutputPath.ParseDosDeviceTarget(ClientOutputPath.QueryDosDevice(drive.Letter)!);
+            DriveTarget target = ClientOutputPath.ParseDosDeviceTarget(ClientOutputPath.QueryDosDevice(letter)!);
             Assert.Equal(DriveKind.Substituted, target.Kind);
             Assert.Equal(sub, target.Path, ignoreCase: true);
-            string asked = $@"{drive.Letter}:\data";
+            string asked = $@"{letter}:\data";
 
             CommandException directory = Assert.Throws<CommandException>(() => ClientOutputPath.CheckDirectory(Command, asked, []));
             Assert.Contains("git working tree", directory.Message, StringComparison.Ordinal);
@@ -71,13 +70,7 @@ public sealed class ClientOutputPathDriveMappingTests : IDisposable
             CommandException file = Assert.Throws<CommandException>(() => ClientOutputPath.Check(asked + @"\x.bin", overwrite: true, []));
             Assert.Contains("git working tree", file.Message, StringComparison.Ordinal);
             Assert.Empty(Directory.GetFileSystemEntries(sub));
-        }
-        finally
-        {
-            drive.Dispose();
-        }
-
-        Assert.Null(drive.CleanupError);
+        });
     }
 
     [WindowsFact]
@@ -85,20 +78,13 @@ public sealed class ClientOutputPathDriveMappingTests : IDisposable
     {
         string plain = Path.Combine(_dir.Path, "plain");
         Directory.CreateDirectory(plain);
-        SessionDrive drive = SessionDrive.Subst(_dir.Path);
-        try
+        SessionDrive.Subst(_dir.Path).Use(letter =>
         {
             // The check returns the folder it judged (D7), so the command writes there and not through the letter.
-            Assert.Equal(Path.Combine(plain, "out"), ClientOutputPath.CheckDirectory(Command, $@"{drive.Letter}:\plain\out", []), ignoreCase: true);
-            Assert.Equal(Path.Combine(plain, "x.bin"), ClientOutputPath.Check($@"{drive.Letter}:\plain\x.bin", overwrite: false, []), ignoreCase: true);
-            Assert.Equal(_dir.Path, ClientOutputPath.CheckDirectory(Command, $@"{drive.Letter}:\", []), ignoreCase: true);
-        }
-        finally
-        {
-            drive.Dispose();
-        }
-
-        Assert.Null(drive.CleanupError);
+            Assert.Equal(Path.Combine(plain, "out"), ClientOutputPath.CheckDirectory(Command, $@"{letter}:\plain\out", []), ignoreCase: true);
+            Assert.Equal(Path.Combine(plain, "x.bin"), ClientOutputPath.Check($@"{letter}:\plain\x.bin", overwrite: false, []), ignoreCase: true);
+            Assert.Equal(_dir.Path, ClientOutputPath.CheckDirectory(Command, $@"{letter}:\", []), ignoreCase: true);
+        });
     }
 
     [WindowsFact]
@@ -106,32 +92,24 @@ public sealed class ClientOutputPathDriveMappingTests : IDisposable
     {
         string client = Path.Combine(_dir.Path, "client");
         Directory.CreateDirectory(Path.Combine(client, "Data"));
-        SessionDrive drive = SessionDrive.Subst(_dir.Path);
-        try
+        SessionDrive.Subst(_dir.Path).Use(letter =>
         {
-            CommandException read = Assert.Throws<CommandException>(() => ClientOutputPath.CheckDirectory(Command, $@"{drive.Letter}:\client\Data\out", [client]));
+            CommandException read = Assert.Throws<CommandException>(() => ClientOutputPath.CheckDirectory(Command, $@"{letter}:\client\Data\out", [client]));
             Assert.Contains("read-only", read.Message, StringComparison.Ordinal);
-            CommandException reverse = Assert.Throws<CommandException>(() => ClientOutputPath.CheckDirectory(Command, Path.Combine(client, "Data", "out"), [$@"{drive.Letter}:\client"]));
+            CommandException reverse = Assert.Throws<CommandException>(() => ClientOutputPath.CheckDirectory(Command, Path.Combine(client, "Data", "out"), [$@"{letter}:\client"]));
             Assert.Contains("read-only", reverse.Message, StringComparison.Ordinal);
-        }
-        finally
-        {
-            drive.Dispose();
-        }
-
-        Assert.Null(drive.CleanupError);
+        });
     }
 
     [WindowsFact]
     public void D2_ARawTargetDriveIntoARepository_IsJudgedByWhereItLeads()
     {
         string tree = Repository(out string sub);
-        SessionDrive drive = SessionDrive.RawTarget(SessionDrive.NtPathOf(sub));
-        try
+        SessionDrive.RawTarget(SessionDrive.NtPathOf(sub)).Use(letter =>
         {
             // QueryDosDevice reads \Device\HarddiskVolumeN\...\repo\sub: the old classification called that Plain and judged X:\data as written.
-            Assert.Equal(DriveKind.Plain, ClientOutputPath.ParseDosDeviceTarget(ClientOutputPath.QueryDosDevice(drive.Letter)!).Kind);
-            string asked = $@"{drive.Letter}:\data";
+            Assert.Equal(DriveKind.Plain, ClientOutputPath.ParseDosDeviceTarget(ClientOutputPath.QueryDosDevice(letter)!).Kind);
+            string asked = $@"{letter}:\data";
 
             CommandException directory = Assert.Throws<CommandException>(() => ClientOutputPath.CheckDirectory(Command, asked, []));
             Assert.Contains("git working tree", directory.Message, StringComparison.Ordinal);
@@ -139,13 +117,7 @@ public sealed class ClientOutputPathDriveMappingTests : IDisposable
             CommandException file = Assert.Throws<CommandException>(() => ClientOutputPath.Check(asked + @"\x.bin", overwrite: true, []));
             Assert.Contains("git working tree", file.Message, StringComparison.Ordinal);
             Assert.Empty(Directory.GetFileSystemEntries(sub));
-        }
-        finally
-        {
-            drive.Dispose();
-        }
-
-        Assert.Null(drive.CleanupError);
+        });
     }
 
     [WindowsFact]
@@ -153,21 +125,14 @@ public sealed class ClientOutputPathDriveMappingTests : IDisposable
     {
         string client = Path.Combine(_dir.Path, "client");
         Directory.CreateDirectory(Path.Combine(client, "Data"));
-        SessionDrive drive = SessionDrive.RawTarget(ClientOutputPath.QueryDosDevice(_dir.Path[0])!);
-        try
+        SessionDrive.RawTarget(ClientOutputPath.QueryDosDevice(_dir.Path[0])!).Use(letter =>
         {
-            string viaLetter = drive.Letter + client[1..];
+            string viaLetter = letter + client[1..];
             CommandException read = Assert.Throws<CommandException>(() => ClientOutputPath.CheckDirectory(Command, Path.Combine(viaLetter, "Data", "out"), [client]));
             Assert.Contains("read-only", read.Message, StringComparison.Ordinal);
             CommandException reverse = Assert.Throws<CommandException>(() => ClientOutputPath.CheckDirectory(Command, Path.Combine(client, "Data", "out"), [viaLetter]));
             Assert.Contains("read-only", reverse.Message, StringComparison.Ordinal);
-        }
-        finally
-        {
-            drive.Dispose();
-        }
-
-        Assert.Null(drive.CleanupError);
+        });
     }
 
     [WindowsFact]
@@ -175,11 +140,10 @@ public sealed class ClientOutputPathDriveMappingTests : IDisposable
     {
         string tree = Repository(out string sub);
         string junction = Path.Combine(_dir.Path, "via-letter");
-        SessionDrive drive = SessionDrive.Subst(sub);
-        try
+        SessionDrive.Subst(sub).Use(letter =>
         {
             // The junction stores \??\X:\, which the old code took as the real place and never mapped again.
-            GuardFixtures.JunctionTo(junction, $@"{drive.Letter}:\");
+            GuardFixtures.JunctionTo(junction, $@"{letter}:\");
             try
             {
                 CommandException e = Assert.Throws<CommandException>(() => ClientOutputPath.CheckDirectory(Command, Path.Combine(junction, "data"), []));
@@ -190,12 +154,6 @@ public sealed class ClientOutputPathDriveMappingTests : IDisposable
             {
                 DirectoryLinks.Delete(junction);
             }
-        }
-        finally
-        {
-            drive.Dispose();
-        }
-
-        Assert.Null(drive.CleanupError);
+        });
     }
 }
