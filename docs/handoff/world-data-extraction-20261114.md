@@ -26,22 +26,38 @@ arcane-atlas run --data <work-dir> extract.mmaps
 The server's readers and file formats are unchanged. The original proposal's new `.bin` format, runtime compilation,
 persistent cache and TTL were **not** built, on purpose (section 8).
 
-The output folder must be an absolute path outside every git working tree and outside the client folder; the commands
-refuse anything else. Never write extracted data into the checkout: the hygiene test rejects it and the repository is
-public. The same check runs on the child folder the command writes (`maps`, `vmaps`, `mmaps`), so a link there that
-lands in a working tree or the client folder is refused. Model names from the client become file names only when they are
-plain file names; a placement with any other name is dropped and reported as a problem. Staged `.part` files are created
-fresh (an existing entry, including a link, is deleted first) and removed when a write fails. A link swapped in after the
-check (time of check versus time of use) is not covered. On Windows the folder must also be written as `X:\...`: a path
-that starts with a separator (`\\?\`, `\\.\`, UNC, `\??\` in any form) is refused as a device or network path, no
-component may end in a space or a dot (Windows drops it, so `repo \` would be a sibling of `repo`), a `subst` drive is
-judged by the folder it stands for, and a drive letter mapped to a share is refused.
+The output folder must be an absolute path outside every git working tree, bare repository and the client folder; the
+commands refuse anything else. Never write extracted data into the checkout: the hygiene test rejects it and the
+repository is public. The folder is judged by where it really leads, not by how it is written: on Windows the deepest
+existing part is opened by handle and Windows names its real location (junctions, symbolic links, `subst` and mapped
+drives, mount points), on Unix each link is walked with `lstat` and `/proc`, `/sys` and `/dev` are refused. The path
+judged is the path written to: `out` in an answer is the real `maps`, `vmaps` or `mmaps` folder, which is judged too
+(a link there may lead elsewhere). What the guard cannot read or name is refused, including the client folder when it
+cannot be opened (an unplugged drive: `cannot check the protected folder '<client folder>': ... refusing rather than
+guessing where it leads.`). On Windows each command holds its output folder open until the run ends (share read and
+write, not delete; write sharing stays because the extractors rename a staging file inside it), so a program that has
+the folder open in a way that forbids this makes the command refuse before it writes (`... cannot be opened after it was
+created (Windows error N: ...); refusing.`). A change after the check is caught when the folder is created again and, on
+Windows, prevented while the run writes; on Unix nothing is held, and `client.read` holds nothing. Model names from the client become file names only when they
+are plain file names; a placement with any other name is dropped and reported as a problem. Every file is written through a `.part`
+file that is created fresh (an existing entry, including a link, is deleted first) and renamed over the target, so an
+existing output file is never opened for writing; `client.read overwrite=true` does the same, and the `.part` file is
+removed when a write fails. On Windows the folder must also be written as `X:\...`: a path that starts with a
+separator (`\\?\`, `\\.\`, UNC, `\??\` in any form) is refused as a device or network path, no component may end in a
+space or a dot (Windows drops it, so `repo \` would be a sibling of `repo`) or be a reserved device name (`NUL`, `COM1`
+...), a typed component shaped like an 8.3 short name is refused (the `maps`, `vmaps` and `mmaps` folders are judged inside
+the real folder without that rule, so a real folder called `data~1` reached through a link passes), a `subst` drive is
+judged by the folder it stands for, and a drive that is not a fixed, removable or RAM disk, or is mapped to a share, is
+refused. Not covered: the cases listed under Output paths in [atlas](../areas/atlas.md), among them hard links (no writer
+writes through one), file-system filter redirection and, on Unix, protected folders named by a spelling the file system
+equates but the name fold does not (simple lower-casing, NFKC, a case table of its own, 8.3 short names on vfat, private-use
+mappings of reserved characters); the Unix rules have run on a real Linux file system only in CI (Ubuntu), not on this machine.
 
 ### 1a. Review fixes and real-data results (later the same day)
 
 The review findings on the branch were fixed in three lanes, merged as `2adb92f9`, `2fc04d43` and `630484c2`:
 
-- **`extract.maps`**: a Map.dbc row whose directory is empty or holds `\`, `/` or `:` is a failure of that map (tile
+- **`extract.maps`**: a tile whose file already exists is kept without being read unless `overwrite` is set. A Map.dbc row whose directory is empty or holds `\`, `/` or `:` is a failure of that map (tile
   `-1,-1`, no WDT), and the run goes on. A shown liquid square with a non-finite corner height refuses its tile, which is
   reported and not written. Hidden squares are never read, as in the reference.
 - **`extract.vmaps`**:
@@ -49,14 +65,20 @@ The review findings on the branch were fixed in three lanes, merged as `2adb92f9
     looping for ever, which vmangos' `BIH::subdivide` would).
   - A placement whose position, rotation, scale or bounds are not finite, or whose scale is not above zero, is dropped
     and reported once per kind and name, because the server's `ModelSpawn.Read` would refuse the whole tile.
-  - A map that ends with no placements has its old tree and tiles removed.
+  - A map that ends with no placements has its old tree and tiles removed, and a tiled map's old tile files are deleted
+    before its new ones are written. A Map.dbc directory that is not one folder name refuses that map (a problem line)
+    and the run goes on. Model names that differ only in case are one file on a case-insensitive file system, so only the
+    first in ordinal order is written, with one problem line per set.
   - M2 names resolve as vmangos resolves them: every root WMO's MODN doodad names first, then the ADTs in map order. A
     path that fails no longer blocks a later path with the same plain name, and two paths that both convert to one plain
     name are reported (the first wins).
 - **`extract.mmaps`**:
-  - With `overwrite` off, a map's tiles are kept only if the `NNN.mmap` about to be written is byte-identical to the
-    one on disk. Otherwise every tile of the map is rebuilt and one problem says so, because tiles store coordinates
-    relative to the origin of the run that built them.
+  - With `overwrite` off, a tile whose file is a current tile is kept. When the `NNN.mmap` about to be written differs
+    from the one on disk (or is missing while tile files exist), every tile file of that map is deleted first, whatever
+    `overwrite` says, and the map is rebuilt whole, with one problem saying how many were deleted, because tiles store
+    coordinates relative to the origin of the run that built them. A rebuilt tile that comes out empty or fails has its
+    earlier file deleted. `tile=X,Y` always rebuilds its tile, and is refused unless exactly one map is named, when the
+    map has no such tile, and when the map's tiles were built against other parameters.
   - A damaged `.map` header, a huge height offset or a damaged tree of a tile-less map is a problem of that file or
     map, not an abort.
   - A tile written with failed sub-tiles counts as `partial` (summed and per map, also inside `written`).
@@ -67,7 +89,7 @@ With `ARCANECORE_TEST_CLIENT_FILES_DIR` and `ARCANECORE_TEST_TERRAIN_DIR` set, a
 | Output | Compared with vmangos |
 |---|---|
 | `.map` | 2,429 of 2,429 byte-identical; the file set is the same |
-| vmap model files | 4,282 byte-identical; 506 more exist only in the reference; 50 problems, all zero-byte ADTs in the extracted client |
+| vmap model files | 4,282 byte-identical; 506 more exist only in the reference; 50 problems reported, of which the test prints the first 40, zero-byte ADTs in the extracted client (the command's answer lists up to 200 and gives `problemCount`) |
 | vmap trees and tiles | 1,293 files, 503,794 spawn records match |
 | mmaps 0004931 / 0004832 / 0004830 | 8,526 / 11,988 / 21,114 polygons against 8,481 / 11,917 / 20,799; walkable area per flag within 10%; a path between two fixed point pairs on 0/48/30 found on both meshes, lengths within 15% (200.5 against 183.2, 207.6 against 207.8) |
 

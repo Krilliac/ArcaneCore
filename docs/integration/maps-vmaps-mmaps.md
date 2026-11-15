@@ -161,9 +161,16 @@ arcane-atlas run --data <data-root> extract.mmaps
 
 `<data-root>` is an absolute path outside every git working tree and outside the client folder; the
 files go to `<data-root>/maps`. `maps=0,1` limits the run to some map ids, `overwrite=true` rewrites
-tiles that are already there (without it they are kept, so a stopped run continues) and `threads=N`
-sets how many tiles are converted at once. The answer is a JSON report: per map the tiles listed by
-its WDT, written, kept, absent and failed, with the reason for every refused file.
+tiles that are already there (without it a tile whose file exists is kept without being read, so a
+stopped run continues) and `threads=N` sets how many tiles are converted at once. The answer is a
+JSON report: per map the tiles listed by its WDT, written, kept, absent and failed, with the reason
+for every refused file (the first 200).
+
+All three commands (and `client.read`) judge the output folder by where it really leads, after links,
+`subst` and mapped drives and mount points are resolved, and write to that real folder: the `out` of
+the answer is the `maps`, `vmaps` or `mmaps` folder written to. They refuse when they cannot tell,
+for example when the client folder is on an unplugged drive. The rules, messages and what the check
+does not cover: [atlas](../areas/atlas.md).
 
 The files are meant to equal, byte for byte, what vmangos' `MapExtractor -e 1 -f 0` writes (float
 heights, the -500 height limit, `z1.4`). `MapExtractorRealDataTests` checks exactly that against a
@@ -171,7 +178,9 @@ vmangos extraction of the same client; it needs `ARCANECORE_TEST_TERRAIN_DIR` an
 `ARCANECORE_TEST_CLIENT_FILES_DIR`.
 
 `extract.vmaps` takes `out`, `maps` and `threads` and always replaces the tree, tile and model files
-of the maps it writes. Its model files are meant to equal vmangos' byte for byte (same kept groups,
+of the maps it writes (a tiled map's earlier tile files are deleted first; model names that differ only
+in case are written once, with a problem line). Its model files are meant to equal vmangos' byte for byte (same kept
+groups,
 same triangles, same tree builder); its tree and tile files hold the same placements but need not
 be the same bytes, because placement ids are handed out in another order and spawn bounds go through
 sines and cosines. It does not write `temp_gameobject_models` or the models only game objects use.
@@ -180,15 +189,18 @@ terrain root as well). The existing `VMapNativeOracleTests` can also be run with
 `ARCANECORE_TEST_TERRAIN_DIR` set to the new data root: it then compares ArcaneCore's reader with
 vmangos' own library on the new files.
 
-**Neither comparison has been run yet**: both commands were written and tested on synthetic data
-only (2026-11-14), on a machine without client data; in those tests the server's own `TerrainTile`
-and `VMapManager` read the files back. Run the real-data tests before relying on the output.
-Details and the full list of differences: [atlas](../areas/atlas.md).
+Both comparisons pass on the 5875 client: all 2,429 `.map` files are byte-identical, 4,282 vmap
+model files are byte-identical, and 1,293 trees and tiles hold the same 503,794 spawns; in the
+synthetic tests the server's own `TerrainTile` and `VMapManager` read the files back. Details and
+the full list of differences: [atlas](../areas/atlas.md).
 
 `extract.mmaps` reads `maps/` and `vmaps/` (whichever tool wrote them) and writes `mmaps/` in the
-same data root. `maps=0,1` limits the run, `tile=49,31` with one map builds a single tile,
-`overwrite=true` rebuilds tiles that are already there, `quick=true` skips the passes that remove
-terrain inside buildings, and `threads=N` sets how many tiles are built at once. It follows vmangos'
+same data root. `maps=0,1` limits the run, `tile=49,31` with exactly one map rebuilds that single tile
+(refused when the map's tiles on disk were built against other parameters), `overwrite=true` rebuilds
+tiles that are already there (without it a current tile is kept, so a stopped run continues; when a
+map's `NNN.mmap` would change, all of that map's tile files are deleted and the map is rebuilt whole),
+`quick=true` skips the passes that remove terrain inside buildings, and `threads=N` sets how many
+tiles are built at once. It follows vmangos'
 `MoveMapGenerator` in its inputs, parameters and filters and uses the vendored DotRecast for the
 Recast steps, so its tiles cover the same ground with other polygons. It writes no transport meshes
 and no off-mesh connections. On synthetic data the server's `NavMeshPathfinder` paths correctly on
