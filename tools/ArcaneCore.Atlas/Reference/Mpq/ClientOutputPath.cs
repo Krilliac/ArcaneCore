@@ -602,9 +602,10 @@ public static partial class ClientOutputPath
 
     // Linux vfat always, and exFAT unless mounted with keep_last_dots, drop the run of dots (U+002E only, not spaces) at the end of
     // the raw name in a lookup, so "WoW." opens "WoW", unless the name is only dots (then it is not looked up as empty).
-    // This is that rule, applied to the raw text before step 1 of Fold, so an ignorable code point after the dots does not keep
-    // them and a dot before an ignorable one is not dropped as if it were last. Each '/'-separated component is handled alone; a
-    // component made only of dots is kept as it is. Returns a new list; the input is not changed.
+    // This is that rule, applied to the raw text before step 1 of Fold because the file system sees the raw name: "<U+200B>." loses
+    // its dot here, while after step 1 it would look like a name made only of dots and be kept. A dot followed by an ignorable code
+    // point is not last here; WithoutTrailingDotsAndSpaces drops it after step 1 (an over-refusal). Each '/'-separated component
+    // is handled alone; a component made only of dots is kept as it is. Returns a new list; the input is not changed.
     private static List<Rune> WithoutRawTrailingDots(string text)
     {
         var all = new List<Rune>(text.Length);
