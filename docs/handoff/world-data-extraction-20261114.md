@@ -1,10 +1,11 @@
 # World data extraction: handoff, 14 November 2026
 
-Branch `ccr-b49dfda7-mg2u1e` (Krilliac/ArcaneCore), four commits on top of `c8be4c7f`. No pull request is open.
+Written for branch `ccr-b49dfda7-mg2u1e` (Krilliac/ArcaneCore), four commits on top of `c8be4c7f`. The work
+continued the same day on `claude/wde-path-safety` (pull request #1887).
 
-This is written for a session that has the maintainer's machine: the 1.12.1 client, a vmangos extraction and the
-reference checkouts. The work so far was done in a cloud container with none of those, so **nothing here has touched
-real client data**. Your job is to run it against real data, fix what that shows, and report.
+This was written for a session that has the maintainer's machine: the 1.12.1 client, a vmangos extraction and the
+reference checkouts. It was first written in a cloud container with none of those, before anything had touched real
+client data; the real-data results and the fixes that followed are in section 1a.
 
 ## 1. What this is
 
