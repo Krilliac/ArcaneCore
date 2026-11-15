@@ -162,8 +162,8 @@ public sealed class ClientOutputPathUnixTests
     // An iota between the ASCII character and the precomposed iota: the precomposed one is looked for past the iota run too.
     [InlineData("/data/a\u0345\u03AFx", "/data/a\u03B9\u03B9\u0301x", true)]
 
-    // Canonically equivalent pairs that folded equal before the iota rule too (both sides 'A?X' then): they guard only the
-    // IsIotaWithMark half of it.
+    // Canonically equivalent pairs that folded equal before the iota rule too (both sides 'A?X' then): they pass with the whole
+    // iota rule removed, and fail if either half alone (the skip set or IsIotaWithMark) is removed.
     [InlineData("/data/a\u038Ax", "/data/a\u0399\u0301x", true)]
     [InlineData("/data/a\u03AFx", "/data/a\u1FBE\u0301x", true)]
 
@@ -180,7 +180,8 @@ public sealed class ClientOutputPathUnixTests
     [InlineData("/data/abc/x", "/data/abd", false)]
     [InlineData("/data/a\u0345x", "/data/b\u0345x", false)]
 
-    // Linux vfat always, and exFAT by default, ignore trailing dots in a lookup: "WoW." opens "WoW". Trailing spaces are dropped too.
+    // Linux vfat always, and exFAT by default, ignore trailing dots in a lookup: "WoW." opens "WoW". Only Fold drops
+    // trailing spaces (vfat and exFAT do not), so rows with a trailing space are deliberate over-refusals.
     [InlineData("/mnt/usb/WoW./x", "/mnt/usb/WoW", true)]
     [InlineData("/mnt/usb/WoW.../x", "/mnt/usb/WoW", true)]
     [InlineData("/mnt/usb/WoW ./x", "/mnt/usb/WoW", true)]
@@ -188,6 +189,13 @@ public sealed class ClientOutputPathUnixTests
     [InlineData("/mnt/usb/WoW/x", "/mnt/usb/WoW. .", true)]
     [InlineData("/mnt/usb/WoWx/y", "/mnt/usb/WoW", false)]
     [InlineData("/mnt/usb/Wo.W/x", "/mnt/usb/WoW", false)]
+
+    // The raw trailing-dot run is dropped before ignorable code points, and a component of only dots is kept.
+    [InlineData("/mnt/usb/ ./x", "/mnt/usb/ ", true)]
+    [InlineData("/mnt/usb/. ./x", "/mnt/usb/. ", true)]
+    [InlineData("/mnt/usb/​./WoW/x", "/mnt/usb/​/WoW", true)]
+    [InlineData("/mnt/usb/.../x", "/mnt/usb/..", false)]
+    [InlineData("/mnt/usb/WoW.​/x", "/mnt/usb/WoW", true)]
     public void N10_TheProtectedFolderComparison_IgnoresCaseAndUnicodeNormalisation(string path, string folder, bool inside)
     {
         Assert.Equal(inside, ClientOutputPath.UnixInsideOrEqual(path, folder));

@@ -87,7 +87,7 @@ internal readonly record struct DriveTarget(DriveKind Kind, string? Path);
 /// Linux vfat, and unverified on NTFS through ntfs-3g or WSL <c>/mnt/c</c>, a short-name alias such as <c>WORLDO~1</c> of a
 /// protected folder is not detected; the Windows path refuses typed short names and resolves by handle), or a reserved character
 /// mapped to a private-use code point (WSL DrvFs, CIFS mapposix; unverified). The U+0345 and iota sequences are handled, checked as
-/// far as written at <see cref="Fold"/>, and so are trailing dots and spaces (vfat, exFAT). Comparing identity (device and inode)
+/// far as written at <see cref="Fold"/>, and so are trailing dots (vfat, exFAT; Fold also drops trailing spaces, an over-refusal). Comparing identity (device and inode)
 /// instead of spelling would close the rest.
 /// Stateless and thread-safe.
 /// </para>
@@ -484,7 +484,8 @@ public static partial class ClientOutputPath
     /// or normalising file system (WSL <c>/mnt/c</c>, casefold ext4, APFS, vfat, CIFS) opens more than one spelling of a name. Meant
     /// to make spellings that NFC normalisation and full Unicode case folding make equal compare equal, with the exceptions listed at
     /// <see cref="Fold"/> (and many spellings they would not make equal compare equal too, which over-refuses on a case-sensitive file
-    /// system, the safe side). Trailing dots and spaces of a component are ignored, as vfat and exFAT do. Not covered: simple
+    /// system, the safe side). A raw trailing run of dots on a component is dropped first (unless the name is only dots), as vfat and
+    /// exFAT do; Fold then also drops trailing spaces, which they do not, an over-refusal. Not covered: simple
     /// lower-casing (U+0130 as a plain <c>i</c>), compatibility forms (NFKC: fullwidth letters and the like), a case table of the file
     /// system's own, 8.3 short names (on Linux vfat a short-name alias such as <c>WORLDO~1</c> of a protected folder is not detected;
     /// unverified: NTFS through ntfs-3g or WSL <c>/mnt/c</c>), and reserved characters mapped to private-use code points (WSL DrvFs,
@@ -507,9 +508,12 @@ public static partial class ClientOutputPath
 
     // Case folding and Unicode normalisation without ICU: the build runs in invariant globalization mode, where string.Normalize
     // returns its input unchanged. Steps:
+    // 0. Each raw component loses its trailing run of dots, unless it is only dots, as vfat and exFAT do in a lookup
+    //    (WithoutRawTrailingDots).
     // 1. Default-ignorable code points are dropped, and the non-ASCII characters whose NFC form, full case folding or upper case is
     //    ASCII, or is ASCII next to a modifier letter (U+0149, U+1E9A), are replaced by that form, upper-cased (AsciiEquivalent).
-    //    Then each component loses its trailing dots and spaces, as vfat and exFAT do in a lookup (WithoutTrailingDotsAndSpaces).
+    //    Then each component loses its trailing dots and spaces (WithoutTrailingDotsAndSpaces); vfat and exFAT drop dots only, so
+    //    the spaces are Fold's own over-refusal.
     // 2. ASCII is upper-cased, and every maximal run of other characters and combining marks (with the ASCII character a mark
     //    combines with) becomes one '?'; '/' is never part of a run. U+0345 is not taken for a combining mark: it case-folds to the
     //    letter U+03B9. An ASCII character (X) joins the run when the rune after it, past any run of iotas (U+0345, U+03B9, U+0399,
@@ -533,7 +537,7 @@ public static partial class ClientOutputPath
     private static string Fold(string text)
     {
         var runes = new List<Rune>(text.Length);
-        foreach (Rune rune in text.EnumerateRunes())
+        foreach (Rune rune in WithoutRawTrailingDots(text))
         {
             if (IsDefaultIgnorable(rune.Value))
             {
@@ -596,8 +600,54 @@ public static partial class ClientOutputPath
         return folded.ToString();
     }
 
-    // Linux vfat always, and exFAT unless mounted with keep_last_dots, ignore the dots at the end of a name in a lookup, so "WoW."
-    // opens "WoW". Each '/'-separated component loses its run of trailing U+002E and U+0020 (spaces too, the conservative choice).
+    // Linux vfat always, and exFAT unless mounted with keep_last_dots, drop the run of dots (U+002E only, not spaces) at the end of
+    // the raw name in a lookup, so "WoW." opens "WoW", unless the name is only dots (then it is not looked up as empty).
+    // This is that rule, applied to the raw text before step 1 of Fold, so an ignorable code point after the dots does not keep
+    // them and a dot before an ignorable one is not dropped as if it were last. Each '/'-separated component is handled alone; a
+    // component made only of dots is kept as it is. Returns a new list; the input is not changed.
+    private static List<Rune> WithoutRawTrailingDots(string text)
+    {
+        var all = new List<Rune>(text.Length);
+        foreach (Rune rune in text.EnumerateRunes())
+        {
+            all.Add(rune);
+        }
+
+        var kept = new List<Rune>(all.Count);
+        int start = 0;
+        while (start <= all.Count)
+        {
+            int end = start;
+            while (end < all.Count && all[end].Value != '/')
+            {
+                end++;
+            }
+
+            int last = end - 1;
+            while (last >= start && all[last].Value == '.')
+            {
+                last--;
+            }
+
+            int stop = last < start ? end : last + 1;
+            for (int i = start; i < stop; i++)
+            {
+                kept.Add(all[i]);
+            }
+
+            if (end < all.Count)
+            {
+                kept.Add(all[end]);
+            }
+
+            start = end + 1;
+        }
+
+        return kept;
+    }
+
+    // Each '/'-separated component loses its run of trailing U+002E and U+0020. Dropping the spaces is Fold's own deliberate
+    // over-refusal: vfat and exFAT ignore trailing dots only.
     // A component made only of dots and spaces (".", "..", "...") is kept as it is, so it never becomes empty or changes meaning.
     // Runs after step 1 of Fold, so an ignorable after the dot does not keep it. Returns a new list; the input is not changed.
     private static List<Rune> WithoutTrailingDotsAndSpaces(List<Rune> runes)
