@@ -73,9 +73,9 @@ public abstract class PlayerbotRunWorldTestBase
     private protected static async Task AssertNoted(GroupTestWorld world, string text)
         => Assert.True(await world.OnWorldAsync(() => world.Coordinator.Events.Any(e => e.EndsWith(text, StringComparison.Ordinal))), $"not noted: {text}{Environment.NewLine}{await world.TraceAsync()}");
 
-    private protected static Task<GroupTestWorld> StartAsync(Action<PlayerbotOptions>? configure = null, bool withLifecycleTrash = false, uint[]? quests = null)
+    private protected static Task<GroupTestWorld> StartAsync(Action<PlayerbotOptions>? configure = null, bool withLifecycleTrash = false, uint[]? quests = null, uint entranceOgreHealth = 150)
         => GroupTestWorld.StartAsync(quests ?? [], configure, dungeon: true, Register,
-            withLifecycleTrash ? [.. Bosses(), LifecycleTrashSpawn()] : Bosses());
+            withLifecycleTrash ? [.. Bosses(), LifecycleTrashSpawn()] : Bosses(), entranceOgreHealth: entranceOgreHealth);
 
     /// <summary>On the world thread: the visible set and the map are mutated by the tick, so enumerating them from the test thread races it.</summary>
     private protected static Task<Creature> VisibleCreatureAsync(GroupTestWorld world, Guid botId, uint entry) => world.OnWorldAsync(() =>
