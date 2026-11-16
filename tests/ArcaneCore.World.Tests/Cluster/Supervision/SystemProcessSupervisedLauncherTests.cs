@@ -313,28 +313,19 @@ public sealed class SystemProcessSupervisedLauncherTests : IDisposable
         SupervisedProcessConfig config = FixtureConfig("child", "--cr-heartbeat");
         config.Console = SupervisedConsoleMode.Merged;
         options.Processes["child"] = config;
-        var console = new StringWriter();
-        var mux = new SupervisedOutputMultiplexer(console);
+        // The pumps append while the test polls: collect immutable lines in a thread-safe queue.
+        var console = new ConcurrentQueue<string>();
+        var mux = new SupervisedOutputMultiplexer(console.Enqueue);
         var supervisor = new ClusterHostSupervisor(options, launcher, mux, new FixedProbe(16_384));
         try
         {
             await supervisor.StartAllAsync();
 
             // "done" follows the CR line on the same pipe, and one pump handles a pipe in order: once it shows, the CR line has been handled.
-            await TestWait.UntilAsync(() =>
-            {
-                lock (console)
-                {
-                    return console.ToString().Contains("done", StringComparison.Ordinal);
-                }
-            }, "the child's last line");
+            await TestWait.UntilAsync(() => console.Any(line => line.Contains("done", StringComparison.Ordinal)), "the child's last line");
 
             Assert.Null(supervisor.GetSnapshot("child").LastBeatAgeMs);
-            string text;
-            lock (console)
-            {
-                text = console.ToString();
-            }
+            string text = string.Join(Environment.NewLine, console.ToArray());
 
             Assert.Contains("noise", text, StringComparison.Ordinal); // the CR line was ordinary output, not swallowed as protocol
         }

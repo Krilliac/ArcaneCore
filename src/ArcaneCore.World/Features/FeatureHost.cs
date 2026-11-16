@@ -326,14 +326,22 @@ public sealed class FeatureHost
     /// <summary>Null when the feature quiesced, else why not.</summary>
     private async Task<string?> QuiesceAsync(Entry entry)
     {
-        using var cancel = new CancellationTokenSource(_quiesceTimeout);
+        var cancel = new CancellationTokenSource();
+        Task inner = Task.CompletedTask;
+        bool cleanupTransferred = false;
         try
         {
-            await entry.Detachable!.QuiesceAsync(cancel.Token).WaitAsync(_quiesceTimeout).ConfigureAwait(false);
+            inner = entry.Detachable!.QuiesceAsync(cancel.Token);
+            await inner.WaitAsync(_quiesceTimeout).ConfigureAwait(false);
             return null;
         }
         catch (TimeoutException ex)
         {
+            // WaitAsync is the sole deadline. Cancellation is visible before rollback, but callbacks run off this path:
+            // a feature callback may block or throw, so neither synchronous Cancel nor awaiting CancelAsync is safe here.
+            Task callbacks = cancel.CancelAsync();
+            cleanupTransferred = true;
+            _ = Task.Run(() => FinishTimedOutQuiesceAsync(cancel, inner, callbacks, ex, entry.Name));
             FaultLedger.Shared.Record("feature.host", ex);
             AnomalyLedger.Shared.Report("feature", "quiesce-timeout", entry.Name, $"timeout={_quiesceTimeout.TotalSeconds:0.#}s", AnomalySeverity.Warning);
             return $"it did not quiesce within {_quiesceTimeout.TotalSeconds:0.#}s";
@@ -344,6 +352,44 @@ public sealed class FeatureHost
             AnomalyLedger.Shared.Report("feature", "quiesce-timeout", entry.Name, $"error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Error);
             _logger.LogError(ex, "Feature {Feature} failed to quiesce", entry.Name);
             return $"quiesce threw {ex.GetType().Name}: {ex.Message}";
+        }
+        finally
+        {
+            if (!cleanupTransferred) cancel.Dispose();
+        }
+    }
+
+    /// <summary>Owns the timed-out operation's source until both its work and cancellation callbacks finish; runs off the host's rollback path.</summary>
+    private async Task FinishTimedOutQuiesceAsync(CancellationTokenSource cancel, Task inner, Task callbacks, Exception reported, string name)
+    {
+        try
+        {
+            // Observe both independently: a stuck inner task must not hide a faulted cancellation callback, or vice versa.
+            await Task.WhenAll(ObserveQuiesceCompletionAsync(inner, cancel, reported, name, "work"),
+                ObserveQuiesceCompletionAsync(callbacks, cancel, reported, name, "cancellation callbacks")).ConfigureAwait(false);
+        }
+        finally
+        {
+            cancel.Dispose();
+        }
+    }
+
+    private async Task ObserveQuiesceCompletionAsync(Task task, CancellationTokenSource cancel, Exception reported, string name, string phase)
+    {
+        try
+        {
+            await task.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (task.IsCanceled && cancel.IsCancellationRequested)
+        {
+            // Cooperative cancellation after the host's timeout is not a second feature fault.
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            if (ReferenceEquals(ex, reported)) return; // the inner operation itself may have thrown the TimeoutException already reported above
+            FaultLedger.Shared.Record("feature.host", ex);
+            AnomalyLedger.Shared.Report("feature", "quiesce-late-fault", name, $"{phase}: {ex.GetType().Name}: {ex.Message}", AnomalySeverity.Error);
+            _logger.LogError(ex, "Feature {Feature} quiesce {Phase} failed after timeout", name, phase);
         }
     }
 
