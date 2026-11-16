@@ -75,7 +75,7 @@ public sealed class PlayerbotSiegeStalemateGuardsWorldTests(ITestOutputHelper ou
         int retreatRows = retreated && !walkedOn ? Interlocked.Increment(ref _stalemateRetreatRows) : Volatile.Read(ref _stalemateRetreatRows);
         if (!pushed) Assert.Fail("the raid never pushed through: " + await Story());
         if (!done) Assert.Fail("the push neither moved the step nor ended in a retreat: " + await Story());
-        Assert.Empty(problems);
+        if (problems.Count != 0) Assert.Fail(string.Join(Environment.NewLine, problems) + Environment.NewLine + await Story());
         // Never a denial: the leader walks on (it passed 60 yards from the start and the step moved), or the raid lost members and retreated, as designed.
         Assert.NotEqual(stepAtPush, raid.PushDeniedStep);
         if (!(walkedOn || retreated)) Assert.Fail(await Story());

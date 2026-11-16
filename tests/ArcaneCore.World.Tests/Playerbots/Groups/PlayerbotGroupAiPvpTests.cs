@@ -1,4 +1,5 @@
 using System.Numerics;
+using System.Reflection;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
@@ -343,6 +344,57 @@ public sealed class PlayerbotGroupAiPvpTests
             Assert.True(Vector3.Distance(rig.Group.Siege!.MoveTo, new Vector3(bot.X, bot.Y, bot.Z)) <= PlayerbotSiegeCommander.WaypointYards);
         }
     }), botLeads: true);
+
+    [Fact]
+    public Task APushingMemberBeyondTheLagLimit_StopsRetaliatingAndFollows_ButAtTheLimitStillAnswers() => Run(rig => rig.Host.OnWorldAsync(() =>
+    {
+        Player bot = rig.BotPlayer, leader = rig.LeaderPlayer;
+        float x = bot.X, y = bot.Y, z = bot.Z;
+        rig.EnemyPlayer.Relocate(x + 2f, y, z, MathF.PI, rig.Host.World.NowMs);
+        PlayerbotPvpTestKit.Flag(rig.EnemyPlayer);
+        PlayerbotPvpTestKit.Flag(bot);
+        Assert.True(bot.Map!.Combat.Attack(rig.EnemyPlayer, bot));
+        bot.Map!.Combat.DealDamage(rig.EnemyPlayer, bot, 1);
+        var siege = new PlayerbotSiege(1, bot.MapId, 990_000, [Vector3.Zero], Vector3.Zero, 0);
+        rig.Group.Siege = new PlayerbotSiegeRaid(siege, 1) { Order = PlayerbotSiegeOrder.Advance, Push = PlayerbotSiegePush.Quiet };
+
+        // At the boundary the member still answers its own attacker.
+        leader.Relocate(x + PlayerbotSiegeCommander.LagYards, y, z, 0, rig.Host.World.NowMs);
+        rig.Think();
+        Assert.Same(rig.EnemyPlayer, rig.Ai.TargetUnit);
+        Assert.Same(rig.EnemyPlayer, bot.Combat.Victim);
+
+        // Once behind, an actual AI think drops the old fight and reaches Follow instead of standing beyond healing range.
+        leader.Relocate(x + PlayerbotSiegeCommander.LagYards + 1f, y, z, 0, rig.Host.World.NowMs);
+        rig.Think();
+        Assert.Null(rig.Ai.TargetUnit);
+        Assert.Null(bot.Combat.Victim);
+        Assert.StartsWith("follow:", rig.Ai.Step);
+
+        // The same separation outside a forced push retains ordinary retaliation, independent of the follow mover already started.
+        rig.Group.Siege.Push = PlayerbotSiegePush.None;
+        bot.Relocate(x, y, z, 0, rig.Host.World.NowMs);
+        MethodInfo select = typeof(PlayerbotGroupAI).GetMethod("SelectTarget", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        Assert.Same(rig.EnemyPlayer, (Unit?)select.Invoke(rig.Ai, [bot, rig.Group, rig.Me, leader, false]));
+    }));
+
+    [Fact]
+    public Task APushingMemberWithoutALivingLeader_StillAnswersItsAttacker() => Run(rig => rig.Host.OnWorldAsync(() =>
+    {
+        Player bot = rig.BotPlayer, leader = rig.LeaderPlayer;
+        leader.Relocate(bot.X + PlayerbotSiegeCommander.LagYards + 1f, bot.Y, bot.Z, 0, rig.Host.World.NowMs);
+        PlayerbotPvpTestKit.Flag(rig.EnemyPlayer);
+        PlayerbotPvpTestKit.Flag(bot);
+        Assert.True(bot.Map!.Combat.Attack(rig.EnemyPlayer, bot));
+        bot.Map!.Combat.DealDamage(rig.EnemyPlayer, bot, 1);
+        var siege = new PlayerbotSiege(1, bot.MapId, 990_000, [Vector3.Zero], Vector3.Zero, 0);
+        rig.Group.Siege = new PlayerbotSiegeRaid(siege, 1) { Order = PlayerbotSiegeOrder.Advance, Push = PlayerbotSiegePush.Quiet };
+        MethodInfo select = typeof(PlayerbotGroupAI).GetMethod("SelectTarget", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        Assert.Same(rig.EnemyPlayer, (Unit?)select.Invoke(rig.Ai, [bot, rig.Group, rig.Me, null, false]));
+        leader.Health = 0;
+        Assert.False(leader.IsAlive);
+        Assert.Same(rig.EnemyPlayer, (Unit?)select.Invoke(rig.Ai, [bot, rig.Group, rig.Me, leader, false]));
+    }));
 
     [Fact]
     public Task MemberPicksNoNewTargetWhileTheSiegeRaidRetreats_NeitherTheLeadersVictimNorAMarkedOne() => Run(rig => rig.Host.OnWorldAsync(() =>

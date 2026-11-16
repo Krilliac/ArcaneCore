@@ -1032,7 +1032,7 @@ internal sealed class PlayerbotGroupAI
     /// <see cref="PlayerbotGroupCoordinator.Member.FocusIcon"/>, then the skull; vmangos PartyBotAI.cpp:366-377), then it assists the leader's
     /// victim; the leader also pulls the objective and what stands in the way while engaging. A siege raid that retreats fights nothing while it
     /// disengages (<see cref="PlayerbotSiegeOrder.Retreat"/>: null, so <see cref="Update"/> clears the target and reaches Lead or Follow) and, standing
-    /// at its retreat point (<see cref="PlayerbotSiegeOrder.Rally"/>), fights back only what attacks it. The raid that pushes through its fight (<see cref="PlayerbotSiegeRaid.PushingThrough"/>) follows no marks and picks no new targets: its leader fights nothing away from its waypoint (it walks, its attackers in tow) and fights back at it; every member answers any attacker of any raid member within <see cref="AssistYards"/>, its own attacker first, then the nearest, and with none follows the leader.
+    /// at its retreat point (<see cref="PlayerbotSiegeOrder.Rally"/>), fights back only what attacks it. The raid that pushes through its fight (<see cref="PlayerbotSiegeRaid.PushingThrough"/>) follows no marks and picks no new targets: its leader fights nothing away from its waypoint (it walks, its attackers in tow) and fights back at it; members farther than <see cref="PlayerbotSiegeCommander.LagYards"/> from their living leader on the same map catch up first; nearby members answer any attacker of any raid member within <see cref="AssistYards"/>, their own attacker first, then the nearest, and with none follow the leader.
     /// </summary>
     private Unit? SelectTarget(Player player, PlayerbotGroupCoordinator.BotGroup group, PlayerbotGroupCoordinator.Member me,
         Player? leader, bool isLeader)
@@ -1068,7 +1068,7 @@ internal sealed class PlayerbotGroupAI
         }
 
         // While the raid pushes through its fight there are no marks and no new targets. The leader walks: away from its waypoint it fights nothing (Update never reaches Lead while it has a target), with its attackers in
-        // tow; at the waypoint, waiting, it fights back. Every member answers any attacker of any raid member within AssistYards (loose), its own attacker first, then the nearest, and with none follows.
+        // tow; at the waypoint, waiting, it fights back. A member beyond LagYards of its living leader on this map catches up first; nearby members answer any attacker of any raid member within AssistYards (loose), their own attacker first, then the nearest, and with none follow.
         if (group.Siege is { PushingThrough: true } pushing)
         {
             if (isLeader && !pushing.AtWaypoint) return null;
@@ -1078,6 +1078,11 @@ internal sealed class PlayerbotGroupAI
             if (isLeader)
                 return loose.Where(l => Vector3.Distance(new Vector3(l.Unit.X, l.Unit.Y, l.Unit.Z), pushing.MoveTo) <= (l.OnSelf && !pushing.AnswerSpent ? PlayerbotSiegeCommander.SiegeAnswerLeashYards : PlayerbotSiegeCommander.WaypointYards))
                     .OrderBy(l => l.OnSelf ? 0 : 1).ThenBy(l => l.Distance).Select(l => l.Unit).FirstOrDefault();
+            // The coordinator's lag rule requires pushed members beyond LagYards to disengage and catch up.
+            // Follow needs a living leader on this map; otherwise the member still answers its attackers.
+            if (leader is { IsInWorld: true, IsAlive: true } && ReferenceEquals(leader.Map, map)
+                && Distance(player, leader) > PlayerbotSiegeCommander.LagYards)
+                return null;
             return loose.OrderBy(l => l.OnSelf ? 0 : 1).ThenBy(l => l.Distance).Select(l => l.Unit).FirstOrDefault();
         }
 

@@ -79,8 +79,9 @@ internal static class MmapMapFile
     }
 
     /// <summary>Writes a tile file under the generator's tile indices (the file is named server X = <paramref name="tileY"/>).</summary>
-    public static void Write(string mapsDirectory, uint mapId, int tileX, int tileY, byte[] file)
+    public static void Write(TestDirectory directory, uint mapId, int tileX, int tileY, byte[] file)
     {
+        string mapsDirectory = Path.Combine(directory.Path, "maps");
         Directory.CreateDirectory(mapsDirectory);
         File.WriteAllBytes(Path.Combine(mapsDirectory, $"{mapId:D3}{tileY:D2}{tileX:D2}.map"), file);
     }
@@ -113,39 +114,39 @@ public sealed class MmapTerrainRuleTests : IDisposable
     [Fact]
     public void Holes_RemoveTheirTriangles()
     {
-        MmapMapFile.Write(Maps, 0, TileX, TileY, MmapMapFile.Build());
+        MmapMapFile.Write(_directory, 0, TileX, TileY, MmapMapFile.Build());
         Assert.Equal(SquaresPerTile * TrianglesPerSquare, Load().SolidTris.Count / 3);
 
         // One hole bit is 2 x 2 squares; a full word is the 8 x 8 squares of a cell.
         var oneBit = new ushort[256];
         oneBit[0] = 0x0001;
-        MmapMapFile.Write(Maps, 0, TileX, TileY, MmapMapFile.Build(oneBit));
+        MmapMapFile.Write(_directory, 0, TileX, TileY, MmapMapFile.Build(oneBit));
         Assert.Equal((SquaresPerTile - 4) * TrianglesPerSquare, Load().SolidTris.Count / 3);
 
         var cell = new ushort[256];
         cell[17] = 0xFFFF;
         cell[255] = 0xFFFF;
-        MmapMapFile.Write(Maps, 0, TileX, TileY, MmapMapFile.Build(cell));
+        MmapMapFile.Write(_directory, 0, TileX, TileY, MmapMapFile.Build(cell));
         Assert.Equal((SquaresPerTile - 128) * TrianglesPerSquare, Load().SolidTris.Count / 3);
     }
 
     [Fact]
     public void Neighbours_ContributeTheStripFacingTheTile_WhenTheyStoreHeights()
     {
-        MmapMapFile.Write(Maps, 0, TileX, TileY, MmapMapFile.Build());
+        MmapMapFile.Write(_directory, 0, TileX, TileY, MmapMapFile.Build());
         int centre = SquaresPerTile * TrianglesPerSquare;
         Assert.Equal(centre, Load().SolidTris.Count / 3);
 
         // Each neighbour with heights adds the one row or column of 128 squares that touches the tile.
-        MmapMapFile.Write(Maps, 0, TileX + 1, TileY, MmapMapFile.Build());
+        MmapMapFile.Write(_directory, 0, TileX + 1, TileY, MmapMapFile.Build());
         Assert.Equal(centre + (128 * TrianglesPerSquare), Load().SolidTris.Count / 3);
-        MmapMapFile.Write(Maps, 0, TileX - 1, TileY, MmapMapFile.Build());
-        MmapMapFile.Write(Maps, 0, TileX, TileY + 1, MmapMapFile.Build());
-        MmapMapFile.Write(Maps, 0, TileX, TileY - 1, MmapMapFile.Build());
+        MmapMapFile.Write(_directory, 0, TileX - 1, TileY, MmapMapFile.Build());
+        MmapMapFile.Write(_directory, 0, TileX, TileY + 1, MmapMapFile.Build());
+        MmapMapFile.Write(_directory, 0, TileX, TileY - 1, MmapMapFile.Build());
         Assert.Equal(centre + (4 * 128 * TrianglesPerSquare), Load().SolidTris.Count / 3);
 
         // A neighbour that stores no heights adds nothing.
-        MmapMapFile.Write(Maps, 0, TileX - 1, TileY, MmapMapFile.Build(noHeights: true));
+        MmapMapFile.Write(_directory, 0, TileX - 1, TileY, MmapMapFile.Build(noHeights: true));
         Assert.Equal(centre + (3 * 128 * TrianglesPerSquare), Load().SolidTris.Count / 3);
 
         // Without the tile itself there is no mesh, whatever its neighbours hold.
@@ -156,7 +157,7 @@ public sealed class MmapTerrainRuleTests : IDisposable
     [Fact]
     public void DeepWater_RemovesTheTerrainAndTheLiquid()
     {
-        MmapMapFile.Write(Maps, 0, TileX, TileY, MmapMapFile.Build(liquid: (0x10, 50f)));
+        MmapMapFile.Write(_directory, 0, TileX, TileY, MmapMapFile.Build(liquid: (0x10, 50f)));
 
         MmapMeshData mesh = Load();
 
@@ -167,21 +168,21 @@ public sealed class MmapTerrainRuleTests : IDisposable
     [Fact]
     public void Water_IsKeptAboveTheGround_AndDroppedBelowIt()
     {
-        MmapMapFile.Write(Maps, 0, TileX, TileY, MmapMapFile.Build(liquid: (0x08, MmapMapFile.Height + 10f)));
+        MmapMapFile.Write(_directory, 0, TileX, TileY, MmapMapFile.Build(liquid: (0x08, MmapMapFile.Height + 10f)));
         MmapMeshData above = Load();
         Assert.Equal(SquaresPerTile * TrianglesPerSquare, above.SolidTris.Count / 3);
         Assert.Equal(SquaresPerTile * 2, above.LiquidTris.Count / 3);
         Assert.All(above.LiquidType, type => Assert.Equal(MmapArea.Water, type));
 
         // Liquid wholly under the terrain is not part of the mesh; the terrain stays.
-        MmapMapFile.Write(Maps, 0, TileX, TileY, MmapMapFile.Build(liquid: (0x08, MmapMapFile.Height - 5f)));
+        MmapMapFile.Write(_directory, 0, TileX, TileY, MmapMapFile.Build(liquid: (0x08, MmapMapFile.Height - 5f)));
         MmapMeshData below = Load();
         Assert.Equal(SquaresPerTile * TrianglesPerSquare, below.SolidTris.Count / 3);
         Assert.Empty(below.LiquidTris);
 
-        MmapMapFile.Write(Maps, 0, TileX, TileY, MmapMapFile.Build(liquid: (0x04, MmapMapFile.Height + 10f)));
+        MmapMapFile.Write(_directory, 0, TileX, TileY, MmapMapFile.Build(liquid: (0x04, MmapMapFile.Height + 10f)));
         Assert.All(Load().LiquidType, type => Assert.Equal(MmapArea.Slime, type));
-        MmapMapFile.Write(Maps, 0, TileX, TileY, MmapMapFile.Build(liquid: (0x01, MmapMapFile.Height + 10f)));
+        MmapMapFile.Write(_directory, 0, TileX, TileY, MmapMapFile.Build(liquid: (0x01, MmapMapFile.Height + 10f)));
         Assert.All(Load().LiquidType, type => Assert.Equal(MmapArea.Magma, type));
     }
 
@@ -196,12 +197,12 @@ public sealed class MmapTerrainRuleTests : IDisposable
         int[] cuts = [0, 20, 39, 41, 44, 47, 49, 50, 53, 55, 56, 100, 40 + 16 + 5000, whole.Length - 512 - 10, whole.Length - 512 + 1, whole.Length - 1];
         foreach (int cut in cuts)
         {
-            MmapMapFile.Write(Maps, 0, TileX, TileY, whole[..cut]);
+            MmapMapFile.Write(_directory, 0, TileX, TileY, whole[..cut]);
             InvalidDataException e = Assert.Throws<InvalidDataException>(() => Load());
             Assert.Contains("000" + TileY.ToString("D2") + TileX.ToString("D2") + ".map", e.Message, StringComparison.Ordinal);
         }
 
-        MmapMapFile.Write(Maps, 0, TileX, TileY, whole);
+        MmapMapFile.Write(_directory, 0, TileX, TileY, whole);
         Assert.NotEmpty(Load().SolidTris);
     }
 
@@ -214,7 +215,7 @@ public sealed class MmapTerrainRuleTests : IDisposable
     {
         byte[] file = MmapMapFile.Build();
         BinaryPrimitives.WriteUInt32LittleEndian(file.AsSpan(16), offset);
-        MmapMapFile.Write(Maps, 0, TileX, TileY, file);
+        MmapMapFile.Write(_directory, 0, TileX, TileY, file);
 
         Assert.Throws<InvalidDataException>(() => Load());
     }
@@ -224,12 +225,12 @@ public sealed class MmapTerrainRuleTests : IDisposable
     {
         byte[] liquid = MmapMapFile.Build(liquid: (0x08, 20f));
         BinaryPrimitives.WriteUInt32LittleEndian(liquid.AsSpan(24), 0xFFFFFFF8u);
-        MmapMapFile.Write(Maps, 0, TileX, TileY, liquid);
+        MmapMapFile.Write(_directory, 0, TileX, TileY, liquid);
         Assert.Throws<InvalidDataException>(() => Load());
 
         byte[] holes = MmapMapFile.Build(new ushort[256]);
         BinaryPrimitives.WriteUInt32LittleEndian(holes.AsSpan(32), 0xFFFFFFF8u);
-        MmapMapFile.Write(Maps, 0, TileX, TileY, holes);
+        MmapMapFile.Write(_directory, 0, TileX, TileY, holes);
         Assert.Throws<InvalidDataException>(() => Load());
     }
 }
