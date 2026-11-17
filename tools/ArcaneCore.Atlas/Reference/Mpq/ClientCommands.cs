@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text.Json.Nodes;
 using ArcaneCore.Atlas.Core;
 using ArcaneCore.Atlas.Core.Commands;
+using ArcaneCore.Atlas.Extract;
 using ArcaneCore.Atlas.Reference.Mpq;
 
 namespace ArcaneCore.Atlas.Reference.Mpq;
@@ -44,7 +45,7 @@ internal static class ClientCommands
             [
                 new CommandArg("path", ArgType.String, "In-archive path of the file, either slash, any case.", Required: true),
                 new CommandArg("out", ArgType.String, "Absolute path to write. Refused inside a git working tree or the client folder.", Required: true),
-                new CommandArg("overwrite", ArgType.Boolean, "Replace the file when it already exists.", Default: JsonValue.Create(false)),
+                new CommandArg("overwrite", ArgType.Boolean, "Replace the file when it already exists. It is replaced through a staged file: an existing <out>.part is deleted first, the bytes are written to a new <out>.part, which is then renamed over <out>, so the existing file is never opened for writing. A directory or junction at <out>.part makes the call fail before anything is written.", Default: JsonValue.Create(false)),
             ],
             ReadAsync,
             CommandSurfaces.Headless | CommandSurfaces.Instance));
@@ -207,8 +208,16 @@ internal static class ClientCommands
 
                 cancellationToken.ThrowIfCancellationRequested();
                 Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-                using (var stream = new FileStream(destination, overwrite ? FileMode.Create : FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                if (overwrite)
                 {
+                    // Never open an existing destination for writing: if it is a hard link (which the check cannot see), every other
+                    // name of that file, one inside a repository or the client folder say, would get these bytes too. The staged write
+                    // (destination + ".part", then a rename over the destination) replaces the directory entry instead.
+                    ExtractOutput.WriteWhole(destination, bytes);
+                }
+                else
+                {
+                    using var stream = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None);
                     stream.Write(bytes);
                 }
 

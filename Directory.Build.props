@@ -24,13 +24,17 @@
          <paramref> naming a parameter that is gone (CS1572, CS1734) and the like are then build errors under TreatWarningsAsErrors.
          The .xml files stay in obj (CopyDocumentationFileToOutputDirectory=false), so neither bin, publish output nor a deploy copied
          from either carries them, and nothing reads them. (PublishDocumentationFile=false alone kept out only each project's own file:
-         the referenced projects' files, beside their dlls in bin, were copied into every referencing bin and publish folder.) Three codes
+         the referenced projects' files, beside their dlls in bin, were copied into every referencing bin and publish folder.)
+         PublishDocumentationFiles=false keeps publish from looking for them at all: publish adds each project's doc file at its bin
+         path (FinalDocFile), which is never written here; the Dockerfile's SDK image (10.0.403, Linux) fails that copy with MSB3030,
+         while a Windows 10.0.401 publish skipped it. Three codes
          stay off because they are noise, not rot: CS1591 (public member without a comment), CS1573 (some parameters documented, others
          not) and CS0419 (a cref to an overloaded method written without a signature; the compiler picks one overload). The vendored
          tests/ThirdParty projects turn generation off in their own csproj, as they do for warnings-as-errors and code style.
          tests/ArcaneCore.World.Tests/Docs/DocCommentGateTests.cs fails when anything turns the gate off or silences a doc code. -->
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <CopyDocumentationFileToOutputDirectory>false</CopyDocumentationFileToOutputDirectory>
+    <PublishDocumentationFiles>false</PublishDocumentationFiles>
     <NoWarn>$(NoWarn);CS1591;CS1573;CS0419</NoWarn>
     <!-- Supply chain: every project restores against a committed, target-framework-specific packages.net10.lock.json or
          packages.net11.lock.json (exact versions and content hashes of the full transitive graph). CI (ci.yml, dotnet.yml),

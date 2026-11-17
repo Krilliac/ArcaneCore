@@ -2,6 +2,8 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.WorldState.Zones;
+using ArcaneCore.Kernel.Characters;
+using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.BotSocial;
 using ArcaneCore.World.Playerbots.Combat;
@@ -91,12 +93,38 @@ public sealed class PlayerbotWarModeWorldTests
         Guid bot = await world.AddBotAsync("Hubot");
         await world.AddBotAsync("Hufoe", race: RivalryKit.Undead);
         await HelpTestKit.StandAsync(world, "Hubot", ("Hufoe", 5f));
-        world.Options.Social.WarMode.Enabled = true;
-        await RivalryKit.SeedAsync(world, "Hubot", "Hufoe", killerIsBot: true, kills: 1);
         PlayerbotBrain brain = HelpTestKit.BrainOf(world, bot);
-        await world.Host.OnWorldAsync(() => FlagForGood(RivalryKit.Online(world, "Hufoe")));
+        // Enable, seed, establish known non-exempt placement, and acquire in one world turn so no setup scan can win the engagement.
+        (bool started, string? diagnostic) = await world.Host.OnWorldAsync(() =>
+        {
+            Player self = RivalryKit.Online(world, "Hubot"), target = RivalryKit.Online(world, "Hufoe");
+            world.Options.Social.WarMode.Enabled = true;
+            PlayerbotSocialMemory memory = RivalryKit.Memory(world);
+            memory.Note(bot, (int)self.Guid.Low, target.Guid.Value, true, PlayerbotSocialEvent.KilledBy, otherFaction: self.Team != target.Team);
+            PvpAreaState.SetWarModeExempt(self, false);
+            PvpAreaState.SetWarModeExempt(target, false);
+            FlagForGood(target);
+            if (brain.TryHunt(self, 500)) return (true, (string?)null);
 
-        await HelpTestKit.UntilAsync(() => world.Host.OnWorldAsync(() => brain.TryHunt(RivalryKit.Online(world, "Hubot"), 500) || brain.EngagedPlayer is not null).Result, "the bot to take its grudge on");
+            // Read the denied acquisition state in this same world turn, and allocate the failure story only when it is needed.
+            PlayerbotSocialRecorder recorder = HelpTestKit.RecorderOf(world);
+            bool mapped = recorder.TryBot(self.Guid, out Guid mappedBot, out int characterId);
+            bool known = memory.TryGet(bot, target.Guid.Value, out PlayerbotRelation relation);
+            var sickness = self.Session is WorldSession session ? PlayerbotSickness.Holder(session, self) : null;
+            string state = $"the bot did not take its seeded grudge on: goal={brain.Goal} freeGoal={PlayerbotHelpRules.IsFreeGoal(brain.Goal)} "
+                + $"engaged={brain.EngagedPlayer?.Name ?? "-"} reason={brain.EngagedReason} defend={brain.Defend?.ToString() ?? "-"} realGroup={brain.InGroupWithRealPlayer(self)} "
+                + $"selfAlive={self.IsAlive} selfInWorld={self.IsInWorld} combat={self.Combat.IsInCombat} duel={self.Duel is not null} "
+                + $"sickness={sickness is { IsPermanent: false, Duration: > 0 }} sicknessPermanent={sickness?.IsPermanent} sicknessDuration={sickness?.Duration} "
+                + $"recorderEnabled={recorder.Enabled} mapped={mapped} expectedBot={bot} mappedBot={mappedBot} characterId={characterId} "
+                + $"relation={known} warAffinity={(known ? relation.WarAffinity.ToString() : "-")} warFlags={(known ? relation.WarFlags.ToString() : "-")} rival={known && memory.IsRival(relation)} "
+                + $"visible={self.VisibleObjects.Contains(target.Guid)} distance={PlayerbotGeometry.Distance(self, target):F3} huntRadius={world.Options.Social.WarMode.HuntRadiusYards} "
+                + $"targetAlive={target.IsAlive} targetInWorld={target.IsInWorld} targetFlagged={PlayerbotHelpRules.IsPvpFlagged(target)} teams={self.Team}/{target.Team} maps={self.MapId}/{target.MapId} "
+                + $"selfProtected={PvpAreaState.IsWarModeProtected(self)} targetProtected={PvpAreaState.IsWarModeProtected(target)} "
+                + $"warEnabled={world.Options.Social.WarMode.Enabled} initiateEnabled={world.Options.Pvp.Initiate.Enabled} "
+                + $"mayEngageGrudge={PlayerbotHostility.MayEngage(self, target, PlayerbotEngageReason.Grudge, null, world.Options.Social.WarMode.SharedSwitch())}";
+            return (false, state);
+        });
+        Assert.True(started, diagnostic);
         Player foe = await world.Host.OnWorldAsync(() => RivalryKit.Online(world, "Hufoe"));
         Assert.Same(foe, await world.Host.OnWorldAsync(() => brain.EngagedPlayer));
         Assert.Equal(PlayerbotEngageReason.Grudge, await world.Host.OnWorldAsync(() => brain.EngagedReason));

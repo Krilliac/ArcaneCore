@@ -149,7 +149,9 @@ public sealed class PlayerbotRunQaSignalWorldTests : PlayerbotRunWorldTestBase
     [Fact]
     public async Task WithTheSlotsFullOfQuestGroups_ADueDungeonRun_StillStarts()
     {
-        await using GroupTestWorld world = await StartAsync(o => { o.MaxBots = 12; o.Groups.MaxGroups = 2; }, quests: [EntranceEliteQuest]);
+        // Keep the quest groups occupied during this bounded slot-reservation test: the ordinary 150-health target
+        // can otherwise die before the due dungeon run starts, freeing a slot for a reason this test excludes.
+        await using GroupTestWorld world = await StartAsync(o => { o.MaxBots = 12; o.Groups.MaxGroups = 2; }, quests: [EntranceEliteQuest], entranceOgreHealth: 1_000_000);
         world.Coordinator.RunRoll = () => 1d; // no run until the quest bots hold the slots
         var pairs = new List<(Guid Id, string Name)>();
         foreach (string name in new[] { "Slota", "Slotb", "Slotc", "Slotd" }) pairs.Add(await world.AddBotAsync(name, Human, Mage, 13, [Fireball], EntranceArea));

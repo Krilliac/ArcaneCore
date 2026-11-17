@@ -89,6 +89,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private static readonly Func<ActiveBot, Guid> BotIdOf = static bot => bot.Record.BotId;
     private static readonly ManagedActionBudget EmptyActionBudget = new(0);
     private readonly SemaphoreSlim _operations = new(1, 1);
+    private readonly Lock _servicesGate = new();
     private readonly ConcurrentDictionary<Guid, ActiveBot> _active = new();
     private PlayerbotStatus[] _snapshot = [];
     private readonly object _snapshotGate = new();
@@ -488,6 +489,12 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
     public void AttachFrom(WorldRuntime world, FeatureHandover? handover, FeatureSubscriptions subscriptions)
     {
+        lock (_servicesGate) AttachFromHeld(world, handover, subscriptions);
+    }
+
+    // Synchronous startup/world-thread attachment, serialized with service capture; never await while holding _servicesGate.
+    private void AttachFromHeld(WorldRuntime world, FeatureHandover? handover, FeatureSubscriptions subscriptions)
+    {
         ArgumentNullException.ThrowIfNull(world);
         ArgumentNullException.ThrowIfNull(subscriptions);
         _ = PlayerbotAnomalyHistory.Shared; // the bot anomaly history hears the anomaly ledger from now on (the core no longer touches it)
@@ -499,8 +506,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         if (_options.Policy.Enabled && _policy is null) StartPolicy(world);
         if (_chat is null)
         {
-            // A chat service whose stop was interrupted part way leaves its provider behind (StopServicesAsync takes all three chat fields before
-            // it awaits anything, so this is only a fallback): the stale objects are taken out of the fields here, on the world thread, and disposed
+            // A chat service whose stop was interrupted part way leaves its provider behind (service capture takes the whole bundle together
+            // before disposal awaits anything, so this is only a fallback): the stale objects are taken out of the fields here, on the world thread, and disposed
             // on the thread pool, because InProcessBotChatClient.Dispose waits for a running model load and for the engine's workers (tens of seconds).
             // A stop still running then finds the fields empty or holding the new chain, never the stale one it would dispose a second time.
             DisposeStaleChat(Interlocked.Exchange(ref _chatInProcess, null), Interlocked.Exchange(ref _chatClient, null));
@@ -608,7 +615,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     public async Task QuiesceAsync(CancellationToken cancellationToken)
     {
         _detaching = true;
-        if (_world is { } world && !world.IsStopped)
+        WorldRuntime? world = _world;
+        if (world is { IsStopped: false })
         {
             // Read on the world thread, after which no update of ours starts another checkpoint (it sees the flag).
             Task checkpoint = world.IsWorldThread ? _checkpoint
@@ -618,8 +626,19 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
         // The operation in flight finishes; every later one refuses (playerbots-detaching).
         await _operations.WaitAsync(cancellationToken).ConfigureAwait(false);
-        _operations.Release();
-        await StopServicesAsync().ConfigureAwait(false);
+        StoppedServices stopped;
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (StopCaptureHoldForTests is { } hold) await hold().ConfigureAwait(false);
+            stopped = await CaptureServicesForStopAsync(world, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _operations.Release();
+        }
+
+        await DisposeStoppedServicesAsync(stopped).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -756,25 +775,73 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// <summary>Stop the policy engine, the navigation executor and the chat services (a detach; the next attach starts them again).</summary>
     private async Task StopServicesAsync()
     {
-        // The three chat fields are taken together, before any await: a quiesce the host gave up on rolls back with AttachFrom on the world
-        // thread while this still runs, and an attach that finds _chat empty builds a fresh chain. Taking the provider fields only after the
-        // chat's DisposeAsync (which waits up to 5 s for its workers) let this method dispose that new chain's provider and client under the live
-        // chat, so every later in-process request answered "disposed". Taken first, what is disposed here is exactly the chain this stop began with.
-        // The policy engine and the navigation executor are taken as before: an attach in between can end up with none of those until the
-        // next attach; the bot code treats a missing chat, policy or navigation worker as off.
-        Chat.PlayerbotChat? chat = Interlocked.Exchange(ref _chat, null);
-        Chat.Inference.InProcessBotChatClient? inProcess = Interlocked.Exchange(ref _chatInProcess, null);
-        Chat.HttpBotChatClient? client = Interlocked.Exchange(ref _chatClient, null);
-        if (Interlocked.Exchange(ref _policy, null) is { } policy) await policy.DisposeAsync().ConfigureAwait(false);
-        if (Interlocked.Exchange(ref _navigationExecutor, null) is { } navigationExecutor) await navigationExecutor.DisposeAsync().ConfigureAwait(false);
-        // Stands in for the chat's DisposeAsync waiting on its workers: the window in which a rollback attach can run.
-        if (StopHoldForTests is { } hold) await hold().ConfigureAwait(false);
-        if (chat is not null) await chat.DisposeAsync().ConfigureAwait(false);
-        inProcess?.Dispose();
-        client?.Dispose();
+        StoppedServices stopped = await CaptureServicesForStopAsync(_world, CancellationToken.None).ConfigureAwait(false);
+        await DisposeStoppedServicesAsync(stopped).ConfigureAwait(false);
     }
 
-    /// <summary>Test seam: awaited by <c>StopServicesAsync</c> after it took the chat fields and before it disposes them (null in production).</summary>
+    // The returned snapshot exclusively owns all five removed services. A later attach can publish a new bundle while only this
+    // snapshot is disposed off-thread. Admission normally runs on the world thread; the gate also protects startup/stopped-world use.
+    private Task<StoppedServices> CaptureServicesForStopAsync(WorldRuntime? world, CancellationToken cancellationToken)
+    {
+        StoppedServices Capture()
+        {
+            StoppedServices stopped = CaptureStoppedServices(cancellationToken);
+            StopCapturedForTests?.Invoke();
+            return stopped;
+        }
+
+        return world is { IsStopped: false } && !world.IsWorldThread
+            // Once the callback has captured the services, its result must be delivered even if cancellation arrives:
+            // InvokeAsync's transport token could otherwise discard the only owner of the removed snapshot.
+            ? world.InvokeAsync(Capture)
+            : Task.FromResult(Capture());
+    }
+
+    private StoppedServices CaptureStoppedServices(CancellationToken cancellationToken)
+    {
+        lock (_servicesGate)
+        {
+            // An operation canceled while queued behind rollback must not capture the restored service bundle.
+            cancellationToken.ThrowIfCancellationRequested();
+            return new StoppedServices(Interlocked.Exchange(ref _policy, null), Interlocked.Exchange(ref _navigationExecutor, null),
+                Interlocked.Exchange(ref _chat, null), Interlocked.Exchange(ref _chatInProcess, null), Interlocked.Exchange(ref _chatClient, null));
+        }
+    }
+
+    private async Task DisposeStoppedServicesAsync(StoppedServices stopped, bool includeStopHold = true)
+    {
+        List<Exception>? failures = null;
+        async ValueTask DrainAsync(Func<ValueTask> cleanup)
+        {
+            try { await cleanup().ConfigureAwait(false); }
+            catch (Exception ex) when (ex is not OutOfMemoryException) { (failures ??= []).Add(ex); }
+        }
+
+        // Every ordinary failure is retained, but cannot strand the rest of the exclusively owned snapshot.
+        if (stopped.Policy is { } policy) await DrainAsync(policy.DisposeAsync).ConfigureAwait(false);
+        if (stopped.Navigation is { } navigation) await DrainAsync(navigation.DisposeAsync).ConfigureAwait(false);
+        // Stands in for the chat's DisposeAsync waiting on its workers: the window in which a rollback attach can run.
+        if (includeStopHold && StopHoldForTests is { } hold) await DrainAsync(() => new ValueTask(hold())).ConfigureAwait(false);
+        if (stopped.Chat is { } chat) await DrainAsync(chat.DisposeAsync).ConfigureAwait(false);
+        if (stopped.InProcess is { } inProcess)
+            await DrainAsync(() => { inProcess.Dispose(); return ValueTask.CompletedTask; }).ConfigureAwait(false);
+        if (stopped.Client is { } client)
+            await DrainAsync(() => { client.Dispose(); return ValueTask.CompletedTask; }).ConfigureAwait(false);
+        if (failures is { Count: 1 }) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failures[0]).Throw();
+        if (failures is { Count: > 1 }) throw new AggregateException("Managed playerbot service stop failed", failures);
+    }
+
+    /// <summary>Owns the captured service bundle after its fields have been cleared; consumed only by the asynchronous stop.</summary>
+    private readonly record struct StoppedServices(Policy.PlayerbotPolicyEngine? Policy, PlayerbotNavigationExecutor? Navigation,
+        Chat.PlayerbotChat? Chat, Chat.Inference.InProcessBotChatClient? InProcess, Chat.HttpBotChatClient? Client);
+
+    /// <summary>Test seam: awaited only by quiesce after its first cancellation check and before world-thread service capture (null in production).</summary>
+    internal Func<Task>? StopCaptureHoldForTests { get; set; }
+
+    /// <summary>Test seam: runs synchronously after capture and before result delivery; must not throw (null in production).</summary>
+    internal Action? StopCapturedForTests { get; set; }
+
+    /// <summary>Test seam: awaited by <c>StopServicesAsync</c> after it took the service fields and before it disposes the chat (null in production).</summary>
     internal Func<Task>? StopHoldForTests { get; set; }
 
     /// <summary>
@@ -2278,13 +2345,11 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             }
         }
         finally { _operations.Release(); }
-        if (_policy is { } policy) { _policy = null; await policy.DisposeAsync().ConfigureAwait(false); }
-        if (_navigationExecutor is { } navigationExecutor) { _navigationExecutor = null; await navigationExecutor.DisposeAsync().ConfigureAwait(false); }
-        if (_chat is { } chat) { _chat = null; await chat.DisposeAsync().ConfigureAwait(false); }
-        _chatInProcess?.Dispose();
-        _chatInProcess = null;
-        _chatClient?.Dispose();
-        _chatClient = null;
+        // Terminal shutdown already drained the operations above. Capture synchronously under the same service gate:
+        // it must not wait on a world post when that world is stopping (or never started). The detach-only test hold stays off.
+        StoppedServices stopped = CaptureStoppedServices(CancellationToken.None);
+        try { await DisposeStoppedServicesAsync(stopped, includeStopHold: false).ConfigureAwait(false); }
+        catch (Exception ex) when (ex is not OutOfMemoryException) { failures.Add(ex); }
         if (failures.Count > 0) throw new AggregateException("Managed playerbot shutdown failed", failures);
     }
 

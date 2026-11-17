@@ -30,6 +30,12 @@
           "DotRecast.Core": "[1.0.0, )"
         }
       },
+      "dotrecast.recast": {
+        "type": "Project",
+        "dependencies": {
+          "DotRecast.Core": "[1.0.0, )"
+        }
+      },
       "Microsoft.Diagnostics.NETCore.Client": {
         "type": "CentralTransitive",
         "requested": "[0.2.750501, )",

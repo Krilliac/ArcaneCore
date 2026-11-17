@@ -10,18 +10,6 @@ using Xunit;
 
 namespace ArcaneCore.Atlas.Tests.Live;
 
-/// <summary>A fact that needs Windows named pipes with access lists; skipped, visibly, elsewhere.</summary>
-public sealed class WindowsFactAttribute : FactAttribute
-{
-    public WindowsFactAttribute()
-    {
-        if (!OperatingSystem.IsWindows())
-        {
-            Skip = "needs Windows named pipes (access lists, \\\\.\\pipe\\ enumeration).";
-        }
-    }
-}
-
 /// <summary>A fact for platforms without \.pipe enumeration; skipped, visibly, on Windows.</summary>
 public sealed class NonWindowsFactAttribute : FactAttribute
 {

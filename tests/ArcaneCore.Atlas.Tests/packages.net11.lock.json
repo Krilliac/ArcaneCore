@@ -172,7 +172,8 @@
         "type": "Project",
         "dependencies": {
           "ArcaneCore.Game": "[1.0.0, )",
-          "DotRecast.Detour": "[1.0.0, )"
+          "DotRecast.Detour": "[1.0.0, )",
+          "DotRecast.Recast": "[1.0.0, )"
         }
       },
       "arcanecore.data": {
@@ -226,6 +227,12 @@
         "type": "Project"
       },
       "dotrecast.detour": {
+        "type": "Project",
+        "dependencies": {
+          "DotRecast.Core": "[1.0.0, )"
+        }
+      },
+      "dotrecast.recast": {
         "type": "Project",
         "dependencies": {
           "DotRecast.Core": "[1.0.0, )"
