@@ -267,13 +267,15 @@ public sealed class ServerCommandsTests : IDisposable
 
         using var inFlightStarted = new ManualResetEventSlim(false);
         using var releaseInFlight = new ManualResetEventSlim(false);
-        Task<ParsedFile<string>> inFlight = Task.Run(() => cache.GetOrLoad("d", () =>
+        // Its own thread, not a pool work item: with the pool busy (parallel test classes, a loaded machine) a queued Task.Run could
+        // miss the start wait below. The waits are upper bounds; the load is released explicitly once Clear has run.
+        Task<ParsedFile<string>> inFlight = Task.Factory.StartNew(() => cache.GetOrLoad("d", () =>
         {
             inFlightStarted.Set();
-            releaseInFlight.Wait(TimeSpan.FromSeconds(5));
+            releaseInFlight.Wait(TimeSpan.FromSeconds(30));
             return (ParsedFile<string>.Ok("D", "d"), 15);
-        }));
-        Assert.True(inFlightStarted.Wait(TimeSpan.FromSeconds(5)));
+        }), CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+        Assert.True(inFlightStarted.Wait(TimeSpan.FromSeconds(30)), "the in-flight load did not start");
         cache.Clear();
         Assert.Equal(0, cache.Stats.Cost);
         releaseInFlight.Set();
