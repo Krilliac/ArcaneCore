@@ -123,8 +123,8 @@ if ($running.Count -gt 0) { $md.Add(''); $md.Add("Running: $(($running | ForEach
 if (@($state.unmapped).Count -gt 0) { $md.Add(''); $md.Add("No test project reaches: $(@($state.unmapped) -join ', ') (not mutated).") }
 $md | Set-Content -LiteralPath (Join-Path $RunDir 'SUMMARY.md') -Encoding utf8
 
-$survivors | Sort-Object File, Line, Column | Export-Csv -LiteralPath (Join-Path $RunDir 'survivors.csv') -NoTypeInformation -Encoding utf8
+$survivors | Sort-Object File, Line, Column | Export-Csv -LiteralPath (Join-Path $RunDir 'survivors.csv') -Encoding utf8
 $byDir.Values | Sort-Object Name | Select-Object @{n = 'directory'; e = { $_.Name } }, Killed, Survived, NoCoverage, Timeout, CompileError, @{n = 'score'; e = { Get-Score $_ } } |
-    Export-Csv -LiteralPath (Join-Path $RunDir 'directories.csv') -NoTypeInformation -Encoding utf8
+    Export-Csv -LiteralPath (Join-Path $RunDir 'directories.csv') -Encoding utf8
 if (-not $Quiet) { $md }
 exit 0
