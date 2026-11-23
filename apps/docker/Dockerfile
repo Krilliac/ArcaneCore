@@ -12,7 +12,7 @@
 # of the compile; only the small runtime stages below are per-platform. The apphost the publish also writes is never used (the
 # entrypoints are `dotnet X.dll`).
 # CONFIGURATION: Release by default; pass --build-arg CONFIGURATION=Debug for a Debug image (docs/guide/docker.md, "Debug or Release").
-FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0.403 AS build
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:11.0.100 AS build
 ARG CONFIGURATION=Release
 WORKDIR /src
 # .editorconfig: the in-image build enforces the same code-style rules as CI (EnforceCodeStyleInBuild, warnings are errors).
@@ -40,7 +40,7 @@ RUN dotnet publish src/ArcaneCore.World/ArcaneCore.World.csproj -c $CONFIGURATIO
  && dotnet publish tools/ArcaneCore.AccountTool/ArcaneCore.AccountTool.csproj -c $CONFIGURATION --no-restore -o /out/account
 
 # Shared runtime skeleton (AzerothCore "skeleton"/"runtime"): non-root user, data and log directories.
-FROM mcr.microsoft.com/dotnet/runtime:10.0.14 AS runtime
+FROM mcr.microsoft.com/dotnet/runtime:11.0.0 AS runtime
 ARG USER_ID=1000
 ARG GROUP_ID=1000
 # No DOTNET_gcServer here: an environment setting overrides runtimeconfig.json, and the World ships Server GC on purpose
